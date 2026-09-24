@@ -220,6 +220,12 @@ __marimo__/
 /agentic_rag_scope_statement.md
 
 # Local project data and internal planning documents
-/data/
-/Adaptive_Enterprise_Knowledge_Assistant_Zero_to_One_Build_Plan.md
-/enterprise_document_corpus_requirements.md
+/BUILDING_PLAN.md
+/Multi_Agent_Web_Testing_Project_Scope_Statement_FINAL_V2.md
+
+# Local run artifacts and SQLite state
+/artifacts/
+*.db
+*.db-shm
+*.db-wal
+/.pytest-temp/

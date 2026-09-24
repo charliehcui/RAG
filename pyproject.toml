@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=80,<81"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "multi-agent-web-testing"
+version = "0.1.0"
+description = "A focused multi-agent web testing demonstration."
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "agent-framework-core==1.19.0",
+    "playwright==1.63.0",
+    "pydantic-settings==2.15.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy==1.18.2",
+    "pytest==8.4.2",
+    "pytest-asyncio==1.2.0",
+    "ruff==0.13.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q --basetemp=.pytest-temp"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "browser: local Chromium smoke tests",
+    "integration: tests using a temporary SQLite database",
+]
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+packages = ["web_testing_system"]
