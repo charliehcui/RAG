@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import uuid4
@@ -34,12 +35,16 @@ class BrowserManager:
         self.playwright: Playwright | None = None
         self.browser: Browser | None = None
         self.sessions: dict[str, BrowserSession] = {}
+        self._start_lock = asyncio.Lock()
 
     async def start(self) -> None:
         if self.browser is not None:
             return
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(headless=True)
+        async with self._start_lock:
+            if self.browser is not None:
+                return
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(headless=True)
 
     async def create_session(
         self, *, tester_id: str, identity_id: str

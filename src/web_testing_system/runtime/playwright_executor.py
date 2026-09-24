@@ -268,3 +268,21 @@ class PlaywrightExecutor:
             error=result.error,
             result=event_result,
         )
+        if result.error_type is not None and result.error_type.startswith("RESOURCE_"):
+            self.store.append_event(
+                event_id=f"event-{uuid4().hex}",
+                run_id=self.run_id,
+                task_id=self.task_id,
+                tester_id=self.tester_id,
+                browser_session_id=browser_session_id,
+                event_type="RESOURCE_CONFLICT",
+                url=page.url,
+                tool="PlaywrightExecutor",
+                action=action.action_type.value,
+                result={
+                    "resource_id": action.resource_id,
+                    "error_type": result.error_type,
+                    "error": result.error,
+                },
+                latency_ms=0,
+            )

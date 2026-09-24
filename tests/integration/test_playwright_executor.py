@@ -192,8 +192,14 @@ async def test_executor_supports_known_actions_and_persists_event_history(
         for event in phase2_store.list_events("run-1")
         if event["event_type"] == "BROWSER_ACTION"
     ]
+    resource_conflicts = [
+        event
+        for event in phase2_store.list_events("run-1")
+        if event["event_type"] == "RESOURCE_CONFLICT"
+    ]
     assert len(history) == len(actions) + 5
     assert len(events) == len(history)
+    assert len(resource_conflicts) == 2
     assert sum(item["success"] for item in history) == len(actions)
     assert "Alice" not in str(history)
     assert "secret" not in str(history)

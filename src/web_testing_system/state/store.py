@@ -134,6 +134,7 @@ class StateStore:
                     created_by TEXT NOT NULL,
                     parent_finding TEXT,
                     step_budget INTEGER NOT NULL CHECK (step_budget >= 0),
+                    data_requirements_json TEXT NOT NULL,
                     started_at TEXT,
                     finished_at TEXT
                 );
@@ -251,6 +252,13 @@ class StateStore:
                 CREATE INDEX IF NOT EXISTS idx_action_history_task ON action_history(run_id, task_id, started_at);
                 """
             )
+            task_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(tasks)")
+            }
+            if "data_requirements_json" not in task_columns:
+                connection.execute(
+                    "ALTER TABLE tasks ADD COLUMN data_requirements_json TEXT NOT NULL DEFAULT '{}'"
+                )
 
     def create_run(self, *, run_id: str, application: str, application_version: str, test_goal: str, scope: Mapping[str, Any], status: str, global_budget: Mapping[str, Any], remaining_budget: Mapping[str, Any]) -> dict[str, Any]:
         started_at = utc_now()
@@ -295,14 +303,35 @@ class StateStore:
         with self._connect() as connection:
             return decode_row(connection.execute("SELECT * FROM testers WHERE tester_id = ?", (tester_id,)).fetchone())
 
-    def create_task(self, *, task_id: str, run_id: str, goal: str, priority: str, dependencies: Sequence[str], created_by: str, step_budget: int, parent_finding: str | None = None, status: str = "PENDING") -> dict[str, Any]:
+    def list_testers(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM testers WHERE run_id = ? ORDER BY tester_id", (run_id,)
+            ).fetchall()
+        return [decoded for row in rows if (decoded := decode_row(row)) is not None]
+
+    def update_tester_status(self, *, tester_id: str, expected_status: str, new_status: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE testers SET status = ? WHERE tester_id = ? AND status = ?",
+                (new_status, tester_id, expected_status),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflictError(
+                    f"tester {tester_id!r} was not in expected status {expected_status!r}"
+                )
+        result = self.get_tester(tester_id)
+        assert result is not None
+        return result
+
+    def create_task(self, *, task_id: str, run_id: str, goal: str, priority: str, dependencies: Sequence[str], created_by: str, step_budget: int, parent_finding: str | None = None, status: str = "PENDING", data_requirements: Mapping[str, Any] | None = None) -> dict[str, Any]:
         self._validate_task_status(status)
         if priority not in TASK_PRIORITIES:
             raise ValueError(f"unsupported task priority: {priority}")
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO tasks (task_id, run_id, goal, priority, status, dependencies_json, created_by, parent_finding, step_budget) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (task_id, run_id, goal, priority, status, encode_json(dependencies), created_by, parent_finding, step_budget),
+                "INSERT INTO tasks (task_id, run_id, goal, priority, status, dependencies_json, created_by, parent_finding, step_budget, data_requirements_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (task_id, run_id, goal, priority, status, encode_json(dependencies), created_by, parent_finding, step_budget, encode_json(data_requirements or {})),
             )
         result = self.get_task(task_id)
         assert result is not None
@@ -311,6 +340,14 @@ class StateStore:
     def get_task(self, task_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             return decode_row(connection.execute("SELECT * FROM tasks WHERE task_id = ?", (task_id,)).fetchone())
+
+    def list_tasks(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM tasks WHERE run_id = ? ORDER BY priority, task_id",
+                (run_id,),
+            ).fetchall()
+        return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
     def list_open_tasks(self, run_id: str) -> list[dict[str, Any]]:
         open_statuses = ("PENDING", "RUNNING", "BLOCKED", "WAITING_FOR_DATA")
@@ -325,11 +362,47 @@ class StateStore:
         started_at = utc_now()
         with self._connect() as connection:
             cursor = connection.execute(
-                "UPDATE tasks SET assigned_tester = ?, status = 'RUNNING', started_at = ? WHERE task_id = ? AND status = 'PENDING' AND assigned_tester IS NULL",
-                (tester_id, started_at, task_id),
+                "UPDATE tasks SET assigned_tester = ?, status = 'RUNNING', started_at = ? WHERE task_id = ? AND status = 'PENDING' AND (assigned_tester IS NULL OR assigned_tester = ?) AND NOT EXISTS (SELECT 1 FROM tasks AS active WHERE active.assigned_tester = ? AND active.status = 'RUNNING')",
+                (tester_id, started_at, task_id, tester_id, tester_id),
             )
             if cursor.rowcount != 1:
                 raise StateConflictError(f"task {task_id!r} is not available for claim")
+        result = self.get_task(task_id)
+        assert result is not None
+        return result
+
+    def update_task_plan(self, *, task_id: str, expected_status: str, goal: str, priority: str, dependencies: Sequence[str], parent_finding: str | None, data_requirements: Mapping[str, Any]) -> dict[str, Any]:
+        self._validate_task_status(expected_status)
+        if priority not in TASK_PRIORITIES:
+            raise ValueError(f"unsupported task priority: {priority}")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE tasks SET goal = ?, priority = ?, dependencies_json = ?, parent_finding = ?, data_requirements_json = ? WHERE task_id = ? AND status = ?",
+                (goal, priority, encode_json(dependencies), parent_finding, encode_json(data_requirements), task_id, expected_status),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflictError(
+                    f"task {task_id!r} was not in expected status {expected_status!r}"
+                )
+        result = self.get_task(task_id)
+        assert result is not None
+        return result
+
+    def reassign_task(self, *, task_id: str, expected_tester: str, new_tester: str) -> dict[str, Any]:
+        with self._connect() as connection:
+            tester = connection.execute(
+                "SELECT run_id FROM testers WHERE tester_id = ?", (new_tester,)
+            ).fetchone()
+            if tester is None:
+                raise KeyError(f"unknown tester: {new_tester}")
+            cursor = connection.execute(
+                "UPDATE tasks SET assigned_tester = ?, status = 'PENDING' WHERE task_id = ? AND assigned_tester = ? AND run_id = ? AND status IN ('BLOCKED', 'WAITING_FOR_DATA')",
+                (new_tester, task_id, expected_tester, tester["run_id"]),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflictError(
+                    f"task {task_id!r} is not assigned to {expected_tester!r}"
+                )
         result = self.get_task(task_id)
         assert result is not None
         return result
@@ -389,6 +462,14 @@ class StateStore:
             rows = connection.execute("SELECT * FROM explored_paths WHERE run_id = ? ORDER BY path_id", (run_id,)).fetchall()
         return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
+    def get_path(self, *, run_id: str, feature: str, page: str, state: str, action: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM explored_paths WHERE run_id = ? AND feature = ? AND page = ? AND state = ? AND action = ?",
+                (run_id, feature, page, state, action),
+            ).fetchone()
+        return decode_row(row)
+
     def create_finding(self, *, finding_id: str, run_id: str, task_id: str, title: str, status: str, expected_result: str, actual_result: str, first_seen_by: str, severity_hint: str | None = None, needs_confirmation: bool = False, duplicate_of: str | None = None, affected_role: str | None = None, affected_page: str | None = None) -> dict[str, Any]:
         self._validate_finding_status(status)
         with self._connect() as connection:
@@ -433,6 +514,13 @@ class StateStore:
     def get_budget(self, budget_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             return decode_row(connection.execute("SELECT * FROM budgets WHERE budget_id = ?", (budget_id,)).fetchone())
+
+    def list_budgets(self, run_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM budgets WHERE run_id = ? ORDER BY budget_id", (run_id,)
+            ).fetchall()
+        return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
     def update_budget(self, *, budget_id: str, llm_calls: int = 0, jev_calls: int = 0, computer_use_calls: int = 0, input_tokens: int = 0, output_tokens: int = 0, browser_steps: int = 0, runtime_seconds: float = 0, estimated_cost: float = 0) -> dict[str, Any]:
         values = (llm_calls, jev_calls, computer_use_calls, input_tokens, output_tokens, browser_steps, runtime_seconds, estimated_cost)

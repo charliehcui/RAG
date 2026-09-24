@@ -85,6 +85,117 @@ class TesterAgentTools:
         """Read coverage already recorded for the current run."""
         return self.store.list_paths(self.assignment.run_id)
 
+    def read_shared_facts(self) -> dict[str, Any]:
+        """Read structured collaboration facts without another Tester's conversation."""
+        progress = [
+            event
+            for event in self.store.list_events(self.assignment.run_id)
+            if event["event_type"] == "TASK_PROGRESS"
+        ]
+        return {
+            "current_task": self.store.get_task(self.assignment.task_id),
+            "coverage": self.store.list_paths(self.assignment.run_id),
+            "recent_findings": self.store.list_recent_findings(
+                self.assignment.run_id
+            ),
+            "tester_progress": progress,
+        }
+
+    def check_path_before_exploring(
+        self,
+        feature: str,
+        page: str,
+        state: str,
+        action: str,
+        new_reason: str | None = None,
+    ) -> dict[str, Any]:
+        """Check exact shared Coverage before starting a potentially duplicate path."""
+        existing = self.store.get_path(
+            run_id=self.assignment.run_id,
+            feature=feature,
+            page=page,
+            state=state,
+            action=action,
+        )
+        should_explore = existing is None or bool(new_reason and new_reason.strip())
+        if not should_explore:
+            assert existing is not None
+            self.store.append_event(
+                event_id=f"event-{uuid4().hex}",
+                run_id=self.assignment.run_id,
+                task_id=self.assignment.task_id,
+                tester_id=self.assignment.tester_id,
+                browser_session_id=self.runtime.browser_session_id,
+                event_type="DUPLICATE_EXPLORATION",
+                tool="TesterAgent",
+                action="skip_covered_path",
+                result={
+                    "feature": feature,
+                    "page": page,
+                    "state": state,
+                    "action": action,
+                    "existing_path_id": existing["path_id"],
+                },
+                latency_ms=0,
+            )
+        return {
+            "should_explore": should_explore,
+            "existing_coverage": existing,
+            "reason": "NEW_REASON" if should_explore and existing is not None else "NOT_COVERED" if existing is None else "ALREADY_COVERED",
+        }
+
+    def record_finding(
+        self,
+        title: str,
+        status: str,
+        expected_result: str,
+        actual_result: str,
+        severity_hint: str | None = None,
+        affected_page: str | None = None,
+    ) -> dict[str, Any]:
+        """Record an early Finding without declaring a confirmed bug."""
+        if status not in {"OBSERVATION", "ANOMALY", "SUSPECTED_ISSUE"}:
+            raise ValueError("Tester may only create an early Finding status")
+        if severity_hint is not None and severity_hint not in {
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "CRITICAL",
+        }:
+            raise ValueError("unsupported severity hint")
+        finding = self.store.create_finding(
+            finding_id=f"finding-{uuid4().hex}",
+            run_id=self.assignment.run_id,
+            task_id=self.assignment.task_id,
+            title=title,
+            status=status,
+            expected_result=expected_result,
+            actual_result=actual_result,
+            first_seen_by=self.assignment.tester_id,
+            severity_hint=severity_hint,
+            needs_confirmation=True,
+            affected_role=self.assignment.role,
+            affected_page=affected_page,
+        )
+        self.store.append_event(
+            event_id=f"event-{uuid4().hex}",
+            run_id=self.assignment.run_id,
+            task_id=self.assignment.task_id,
+            tester_id=self.assignment.tester_id,
+            browser_session_id=self.runtime.browser_session_id,
+            event_type="FINDING_CREATED",
+            url=affected_page,
+            tool="TesterAgent",
+            action="record_finding",
+            result={
+                "finding_id": finding["finding_id"],
+                "status": finding["status"],
+                "severity_hint": finding["severity_hint"],
+            },
+            latency_ms=0,
+        )
+        return finding
+
     def record_observation(
         self,
         title: str,
@@ -124,6 +235,7 @@ def create_tester_agent(
     instructions = (
         "You are the only Tester Agent type. Work only on the assigned Task, scope, identity, namespace, and step budget. "
         "Use execute_known_action for known actions. Use explore_unknown_path instead of inventing unknown actions. "
+        "Check shared Coverage before starting a path and collaborate only through structured Shared State facts. "
         "Never change global scope, bypass permissions, create another Agent, or declare a confirmed bug. "
         "Record uncertain behavior only with record_observation. Request replan when the local path cannot continue."
     )
@@ -136,6 +248,9 @@ def create_tester_agent(
             tools.execute_known_action,
             tools.explore_unknown_path,
             tools.read_coverage,
+            tools.read_shared_facts,
+            tools.check_path_before_exploring,
+            tools.record_finding,
             tools.record_observation,
             tools.update_task_progress,
             tools.request_replan,

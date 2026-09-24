@@ -131,27 +131,19 @@ class PermissionChecker:
                 "RESOURCE_OPERATION_DENIED",
                 "operation is not allowed for this resource",
             )
-        if resource["owner_task"] != self.task_id:
-            return PermissionCheck(
-                False,
-                PermissionDecision.DENY,
-                "RESOURCE_OWNER_MISMATCH",
-                "resource belongs to another task",
-            )
-        if (
-            resource["sharing_mode"] == "ISOLATED"
-            and resource["owner"] != self.tester_id
+        if resource["sharing_mode"] == "ISOLATED" and (
+            resource["owner_task"] != self.task_id
+            or resource["owner"] != self.tester_id
         ):
             return PermissionCheck(
                 False,
                 PermissionDecision.DENY,
                 "RESOURCE_OWNER_MISMATCH",
-                "isolated resource belongs to another tester",
+                "isolated resource belongs to another task or tester",
             )
-        if (
-            resource["sharing_mode"] == "SHARED"
-            and self.tester_id not in resource["participants"]
-        ):
+        if resource["sharing_mode"] == "SHARED" and self.tester_id not in resource[
+            "participants"
+        ]:
             return PermissionCheck(
                 False,
                 PermissionDecision.DENY,
