@@ -225,10 +225,30 @@ class StateStore:
                     cost REAL NOT NULL CHECK (cost >= 0)
                 );
 
+                CREATE TABLE IF NOT EXISTS action_history (
+                    history_id TEXT PRIMARY KEY,
+                    event_id TEXT NOT NULL UNIQUE REFERENCES events(event_id),
+                    run_id TEXT NOT NULL REFERENCES runs(run_id),
+                    task_id TEXT NOT NULL REFERENCES tasks(task_id),
+                    tester_id TEXT NOT NULL REFERENCES testers(tester_id),
+                    browser_session_id TEXT NOT NULL,
+                    url TEXT,
+                    action TEXT NOT NULL,
+                    target TEXT,
+                    tool TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT NOT NULL,
+                    latency_ms REAL NOT NULL CHECK (latency_ms >= 0),
+                    success INTEGER NOT NULL,
+                    error TEXT,
+                    result_json TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_tasks_run_status ON tasks(run_id, status, priority);
                 CREATE INDEX IF NOT EXISTS idx_findings_run_status ON findings(run_id, status);
                 CREATE INDEX IF NOT EXISTS idx_events_run_timestamp ON events(run_id, timestamp);
                 CREATE INDEX IF NOT EXISTS idx_paths_run_feature ON explored_paths(run_id, feature);
+                CREATE INDEX IF NOT EXISTS idx_action_history_task ON action_history(run_id, task_id, started_at);
                 """
             )
 
@@ -445,6 +465,30 @@ class StateStore:
     def list_events(self, run_id: str) -> list[dict[str, Any]]:
         with self._connect() as connection:
             rows = connection.execute("SELECT * FROM events WHERE run_id = ? ORDER BY timestamp, event_id", (run_id,)).fetchall()
+        return [decoded for row in rows if (decoded := decode_row(row)) is not None]
+
+    def get_latest_checkpoint(self, *, run_id: str, task_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM events WHERE run_id = ? AND task_id = ? AND event_type = 'SAFE_CHECKPOINT' ORDER BY timestamp DESC, event_id DESC LIMIT 1",
+                (run_id, task_id),
+            ).fetchone()
+        return decode_row(row)
+
+    def append_action_history(self, *, history_id: str, event_id: str, run_id: str, task_id: str, tester_id: str, browser_session_id: str, url: str | None, action: str, target: str | None, tool: str, started_at: str, ended_at: str, latency_ms: float, success: bool, error: str | None, result: Mapping[str, Any]) -> dict[str, Any]:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO action_history (history_id, event_id, run_id, task_id, tester_id, browser_session_id, url, action, target, tool, started_at, ended_at, latency_ms, success, error, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (history_id, event_id, run_id, task_id, tester_id, browser_session_id, url, action, target, tool, started_at, ended_at, latency_ms, int(success), error, encode_json(result)),
+            )
+        with self._connect() as connection:
+            history = decode_row(connection.execute("SELECT * FROM action_history WHERE history_id = ?", (history_id,)).fetchone())
+        assert history is not None
+        return history
+
+    def list_action_history(self, *, run_id: str, task_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            rows = connection.execute("SELECT * FROM action_history WHERE run_id = ? AND task_id = ? ORDER BY started_at, history_id", (run_id, task_id)).fetchall()
         return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
     @staticmethod
