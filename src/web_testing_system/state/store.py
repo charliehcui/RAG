@@ -37,6 +37,8 @@ FINDING_STATUSES = {
     "CLOSED",
 }
 TASK_PRIORITIES = {"P0", "P1", "P2", "P3"}
+SEVERITY_HINTS = {"LOW", "MEDIUM", "HIGH", "CRITICAL"}
+VERIFICATION_RESULTS = {"PASS", "FAIL", "NEEDS_CONFIRMATION"}
 
 
 class StateConflictError(RuntimeError):
@@ -180,6 +182,13 @@ class StateStore:
                     duplicate_of TEXT REFERENCES findings(finding_id),
                     affected_role TEXT,
                     affected_page TEXT,
+                    action TEXT,
+                    error_text TEXT,
+                    screening_reason TEXT,
+                    reproduction_steps_json TEXT NOT NULL,
+                    reproduction_rate REAL NOT NULL DEFAULT 0,
+                    verification_result TEXT CHECK (verification_result IN ('PASS', 'FAIL', 'NEEDS_CONFIRMATION')),
+                    verification_details_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
 
@@ -189,6 +198,7 @@ class StateStore:
                     task_id TEXT NOT NULL REFERENCES tasks(task_id),
                     finding_id TEXT REFERENCES findings(finding_id),
                     evidence_type TEXT NOT NULL,
+                    attempt_id TEXT,
                     relative_file_path TEXT NOT NULL,
                     url TEXT,
                     timestamp TEXT NOT NULL,
@@ -242,6 +252,7 @@ class StateStore:
                     latency_ms REAL NOT NULL CHECK (latency_ms >= 0),
                     success INTEGER NOT NULL,
                     error TEXT,
+                    action_data_json TEXT NOT NULL,
                     result_json TEXT NOT NULL
                 );
 
@@ -258,6 +269,36 @@ class StateStore:
             if "data_requirements_json" not in task_columns:
                 connection.execute(
                     "ALTER TABLE tasks ADD COLUMN data_requirements_json TEXT NOT NULL DEFAULT '{}'"
+                )
+            finding_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(findings)")
+            }
+            finding_column_definitions = {
+                "action": "TEXT",
+                "error_text": "TEXT",
+                "screening_reason": "TEXT",
+                "reproduction_steps_json": "TEXT NOT NULL DEFAULT '[]'",
+                "reproduction_rate": "REAL NOT NULL DEFAULT 0",
+                "verification_result": "TEXT",
+                "verification_details_json": "TEXT NOT NULL DEFAULT '{}'",
+            }
+            for column, definition in finding_column_definitions.items():
+                if column not in finding_columns:
+                    connection.execute(
+                        f"ALTER TABLE findings ADD COLUMN {column} {definition}"
+                    )
+            evidence_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(evidence)")
+            }
+            if "attempt_id" not in evidence_columns:
+                connection.execute("ALTER TABLE evidence ADD COLUMN attempt_id TEXT")
+            history_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(action_history)")
+            }
+            if "action_data_json" not in history_columns:
+                connection.execute(
+                    "ALTER TABLE action_history ADD COLUMN action_data_json TEXT NOT NULL DEFAULT '{}'"
                 )
 
     def create_run(self, *, run_id: str, application: str, application_version: str, test_goal: str, scope: Mapping[str, Any], status: str, global_budget: Mapping[str, Any], remaining_budget: Mapping[str, Any]) -> dict[str, Any]:
@@ -470,12 +511,14 @@ class StateStore:
             ).fetchone()
         return decode_row(row)
 
-    def create_finding(self, *, finding_id: str, run_id: str, task_id: str, title: str, status: str, expected_result: str, actual_result: str, first_seen_by: str, severity_hint: str | None = None, needs_confirmation: bool = False, duplicate_of: str | None = None, affected_role: str | None = None, affected_page: str | None = None) -> dict[str, Any]:
+    def create_finding(self, *, finding_id: str, run_id: str, task_id: str, title: str, status: str, expected_result: str, actual_result: str, first_seen_by: str, severity_hint: str | None = None, needs_confirmation: bool = False, duplicate_of: str | None = None, affected_role: str | None = None, affected_page: str | None = None, action: str | None = None, error_text: str | None = None, screening_reason: str | None = None, reproduction_steps: Sequence[Mapping[str, Any]] = ()) -> dict[str, Any]:
         self._validate_finding_status(status)
+        if severity_hint is not None and severity_hint not in SEVERITY_HINTS:
+            raise ValueError(f"unsupported severity hint: {severity_hint}")
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO findings (finding_id, run_id, task_id, title, status, expected_result, actual_result, first_seen_by, severity_hint, needs_confirmation, duplicate_of, affected_role, affected_page, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (finding_id, run_id, task_id, title, status, expected_result, actual_result, first_seen_by, severity_hint, int(needs_confirmation), duplicate_of, affected_role, affected_page, utc_now()),
+                "INSERT INTO findings (finding_id, run_id, task_id, title, status, expected_result, actual_result, first_seen_by, severity_hint, needs_confirmation, duplicate_of, affected_role, affected_page, action, error_text, screening_reason, reproduction_steps_json, verification_details_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (finding_id, run_id, task_id, title, status, expected_result, actual_result, first_seen_by, severity_hint, int(needs_confirmation), duplicate_of, affected_role, affected_page, action, error_text, screening_reason, encode_json(reproduction_steps), encode_json({}), utc_now()),
             )
         result = self.get_finding(finding_id)
         assert result is not None
@@ -492,17 +535,78 @@ class StateStore:
             rows = connection.execute("SELECT * FROM findings WHERE run_id = ? ORDER BY created_at DESC LIMIT ?", (run_id, limit)).fetchall()
         return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
-    def add_evidence(self, *, evidence_id: str, run_id: str, task_id: str, finding_id: str | None, evidence_type: str, relative_file_path: str, url: str | None, browser_session_id: str | None) -> dict[str, Any]:
+    def update_finding_status(self, *, finding_id: str, status: str, screening_reason: str | None = None, needs_confirmation: bool | None = None, duplicate_of: str | None = None) -> dict[str, Any]:
+        self._validate_finding_status(status)
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE findings SET status = ?, screening_reason = COALESCE(?, screening_reason), needs_confirmation = COALESCE(?, needs_confirmation), duplicate_of = COALESCE(?, duplicate_of) WHERE finding_id = ?",
+                (status, screening_reason, int(needs_confirmation) if needs_confirmation is not None else None, duplicate_of, finding_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown finding: {finding_id}")
+        result = self.get_finding(finding_id)
+        assert result is not None
+        return result
+
+    def record_reproduction_attempt(self, *, finding_id: str, status: str, success: bool, stable_steps: Sequence[Mapping[str, Any]] | None = None) -> dict[str, Any]:
+        self._validate_finding_status(status)
+        with self._connect() as connection:
+            finding = connection.execute(
+                "SELECT reproduction_count, reproduction_success_count FROM findings WHERE finding_id = ?",
+                (finding_id,),
+            ).fetchone()
+            if finding is None:
+                raise KeyError(f"unknown finding: {finding_id}")
+            reproduction_count = int(finding["reproduction_count"]) + 1
+            success_count = int(finding["reproduction_success_count"]) + int(success)
+            reproduction_rate = success_count / reproduction_count
+            cursor = connection.execute(
+                "UPDATE findings SET status = ?, reproduction_count = ?, reproduction_success_count = ?, reproduction_rate = ?, reproduction_steps_json = COALESCE(?, reproduction_steps_json) WHERE finding_id = ?",
+                (status, reproduction_count, success_count, reproduction_rate, encode_json(stable_steps) if stable_steps is not None else None, finding_id),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflictError(f"finding {finding_id!r} changed during reproduction")
+        result = self.get_finding(finding_id)
+        assert result is not None
+        return result
+
+    def update_finding_verification(self, *, finding_id: str, status: str, verification_result: str, details: Mapping[str, Any]) -> dict[str, Any]:
+        self._validate_finding_status(status)
+        if verification_result not in VERIFICATION_RESULTS:
+            raise ValueError(f"unsupported verification result: {verification_result}")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE findings SET status = ?, verification_result = ?, verification_details_json = ?, needs_confirmation = ? WHERE finding_id = ?",
+                (status, verification_result, encode_json(details), int(status == "NEEDS_CONFIRMATION"), finding_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown finding: {finding_id}")
+        result = self.get_finding(finding_id)
+        assert result is not None
+        return result
+
+    def add_evidence(self, *, evidence_id: str, run_id: str, task_id: str, finding_id: str | None, evidence_type: str, relative_file_path: str, url: str | None, browser_session_id: str | None, attempt_id: str | None = None) -> dict[str, Any]:
         timestamp = utc_now()
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO evidence (evidence_id, run_id, task_id, finding_id, evidence_type, relative_file_path, url, timestamp, browser_session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (evidence_id, run_id, task_id, finding_id, evidence_type, relative_file_path, url, timestamp, browser_session_id),
+                "INSERT INTO evidence (evidence_id, run_id, task_id, finding_id, evidence_type, attempt_id, relative_file_path, url, timestamp, browser_session_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (evidence_id, run_id, task_id, finding_id, evidence_type, attempt_id, relative_file_path, url, timestamp, browser_session_id),
             )
         with self._connect() as connection:
             result = decode_row(connection.execute("SELECT * FROM evidence WHERE evidence_id = ?", (evidence_id,)).fetchone())
         assert result is not None
         return result
+
+    def list_evidence(self, *, run_id: str, finding_id: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM evidence WHERE run_id = ?"
+        parameters: tuple[Any, ...] = (run_id,)
+        if finding_id is not None:
+            query += " AND finding_id = ?"
+            parameters = (run_id, finding_id)
+        query += " ORDER BY timestamp, evidence_id"
+        with self._connect() as connection:
+            rows = connection.execute(query, parameters).fetchall()
+        return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
     def create_budget(self, *, budget_id: str, run_id: str, task_id: str | None = None) -> dict[str, Any]:
         with self._connect() as connection:
@@ -563,11 +667,11 @@ class StateStore:
             ).fetchone()
         return decode_row(row)
 
-    def append_action_history(self, *, history_id: str, event_id: str, run_id: str, task_id: str, tester_id: str, browser_session_id: str, url: str | None, action: str, target: str | None, tool: str, started_at: str, ended_at: str, latency_ms: float, success: bool, error: str | None, result: Mapping[str, Any]) -> dict[str, Any]:
+    def append_action_history(self, *, history_id: str, event_id: str, run_id: str, task_id: str, tester_id: str, browser_session_id: str, url: str | None, action: str, target: str | None, tool: str, started_at: str, ended_at: str, latency_ms: float, success: bool, error: str | None, result: Mapping[str, Any], action_data: Mapping[str, Any] | None = None) -> dict[str, Any]:
         with self._connect() as connection:
             connection.execute(
-                "INSERT INTO action_history (history_id, event_id, run_id, task_id, tester_id, browser_session_id, url, action, target, tool, started_at, ended_at, latency_ms, success, error, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (history_id, event_id, run_id, task_id, tester_id, browser_session_id, url, action, target, tool, started_at, ended_at, latency_ms, int(success), error, encode_json(result)),
+                "INSERT INTO action_history (history_id, event_id, run_id, task_id, tester_id, browser_session_id, url, action, target, tool, started_at, ended_at, latency_ms, success, error, action_data_json, result_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (history_id, event_id, run_id, task_id, tester_id, browser_session_id, url, action, target, tool, started_at, ended_at, latency_ms, int(success), error, encode_json(action_data or {}), encode_json(result)),
             )
         with self._connect() as connection:
             history = decode_row(connection.execute("SELECT * FROM action_history WHERE history_id = ?", (history_id,)).fetchone())

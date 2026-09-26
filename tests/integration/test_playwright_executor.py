@@ -200,6 +200,7 @@ async def test_executor_supports_known_actions_and_persists_event_history(
     assert len(history) == len(actions) + 5
     assert len(events) == len(history)
     assert len(resource_conflicts) == 2
+    assert phase2_store.list_evidence(run_id="run-1") == []
     assert sum(item["success"] for item in history) == len(actions)
     assert "Alice" not in str(history)
     assert "secret" not in str(history)

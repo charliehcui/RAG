@@ -9,6 +9,10 @@ from uuid import uuid4
 from web_testing_system.runtime.browser import BrowserManager, LoginHandler
 from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
 from web_testing_system.runtime.candidates import CandidateBuilder, PageStateReader
+from web_testing_system.runtime.computer_use import (
+    ComputerUseController,
+    ComputerUseResult,
+)
 from web_testing_system.runtime.laya_selector import LayaSelector
 from web_testing_system.runtime.models import (
     ActionResult,
@@ -38,6 +42,7 @@ class WebTestingRuntime:
         budget_id: str,
         laya_confidence_threshold: float = 0.6,
         max_timeout_retries: int = 1,
+        computer_use_controller: ComputerUseController | None = None,
     ) -> None:
         self.store = store
         self.browser_manager = browser_manager
@@ -53,6 +58,7 @@ class WebTestingRuntime:
         self.budget_id = budget_id
         self.laya_confidence_threshold = laya_confidence_threshold
         self.max_timeout_retries = max_timeout_retries
+        self.computer_use_controller = computer_use_controller
         self.browser_session_id: str | None = None
 
     async def start_session(self) -> str:
@@ -223,6 +229,14 @@ class WebTestingRuntime:
             candidate=candidate,
             action_result=action_result,
         )
+
+    async def use_computer_fallback(self, *, finding_id: str, goal: str, component_type: str, playwright_failure_reason: str, allowed_visual_actions: tuple[str, ...]) -> ComputerUseResult:
+        if self.computer_use_controller is None:
+            return ComputerUseResult("REFUSED", "COMPUTER_USE_NOT_CONFIGURED", None, None, None, ())
+        if self.browser_session_id is None:
+            raise RuntimeError("browser session has not started")
+        session = self.browser_manager.get_session(self.browser_session_id)
+        return await self.computer_use_controller.run(page=session.page, browser_session_id=session.session_id, finding_id=finding_id, goal=goal, component_type=component_type, playwright_failure_reason=playwright_failure_reason, allowed_visual_actions=allowed_visual_actions)
 
     def save_checkpoint(self, *, url: str, last_action: str) -> dict[str, object]:
         if self.browser_session_id is None:

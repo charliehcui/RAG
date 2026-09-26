@@ -44,6 +44,7 @@ class TesterAgentTools:
         action_type: str,
         target: str | None = None,
         value: str | None = None,
+        value_reference: str | None = None,
         url: str | None = None,
         expected: str | None = None,
         assertion: str = "contains",
@@ -66,6 +67,7 @@ class TesterAgentTools:
             action_type=parsed_action,
             target=target,
             value=value,
+            value_reference=value_reference,
             url=url,
             expected=expected,
             assertion=assertion,
@@ -152,6 +154,9 @@ class TesterAgentTools:
         actual_result: str,
         severity_hint: str | None = None,
         affected_page: str | None = None,
+        action: str | None = None,
+        error_text: str | None = None,
+        reproduction_steps: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Record an early Finding without declaring a confirmed bug."""
         if status not in {"OBSERVATION", "ANOMALY", "SUSPECTED_ISSUE"}:
@@ -176,6 +181,9 @@ class TesterAgentTools:
             needs_confirmation=True,
             affected_role=self.assignment.role,
             affected_page=affected_page,
+            action=action,
+            error_text=error_text,
+            reproduction_steps=reproduction_steps or [],
         )
         self.store.append_event(
             event_id=f"event-{uuid4().hex}",
@@ -191,6 +199,7 @@ class TesterAgentTools:
                 "finding_id": finding["finding_id"],
                 "status": finding["status"],
                 "severity_hint": finding["severity_hint"],
+                "action": finding["action"],
             },
             latency_ms=0,
         )
@@ -202,6 +211,8 @@ class TesterAgentTools:
         expected_result: str,
         actual_result: str,
         affected_page: str | None = None,
+        action: str | None = None,
+        error_text: str | None = None,
     ) -> dict[str, Any]:
         """Record an observation without declaring a confirmed bug."""
         return self.store.create_finding(
@@ -216,6 +227,8 @@ class TesterAgentTools:
             needs_confirmation=True,
             affected_role=self.assignment.role,
             affected_page=affected_page,
+            action=action,
+            error_text=error_text,
         )
 
     async def update_task_progress(
@@ -227,6 +240,11 @@ class TesterAgentTools:
     async def request_replan(self, reason: str) -> dict[str, object]:
         """Request Main Agent replanning without changing global scope."""
         return await self.runtime.request_replan(reason)
+
+    async def use_computer_fallback(self, finding_id: str, goal: str, component_type: str, playwright_failure_reason: str, allowed_visual_actions: list[str]) -> dict[str, Any]:
+        """Request one controlled visual action after a recorded Playwright limitation."""
+        result = await self.runtime.use_computer_fallback(finding_id=finding_id, goal=goal, component_type=component_type, playwright_failure_reason=playwright_failure_reason, allowed_visual_actions=tuple(allowed_visual_actions))
+        return {"status": result.status, "reason": result.reason, "action": result.action, "before_state_id": result.before_state.state_id if result.before_state else None, "after_state_id": result.after_state.state_id if result.after_state else None, "evidence_ids": list(result.evidence_ids)}
 
 
 def create_tester_agent(
@@ -254,6 +272,7 @@ def create_tester_agent(
             tools.record_observation,
             tools.update_task_progress,
             tools.request_replan,
+            tools.use_computer_fallback,
         ],
         additional_properties={"assignment": asdict(assignment)},
     )

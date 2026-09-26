@@ -83,6 +83,7 @@ class WebAction:
     action_type: ActionType
     target: str | None = None
     value: str | None = None
+    value_reference: str | None = None
     url: str | None = None
     expected: str | None = None
     assertion: str = "contains"

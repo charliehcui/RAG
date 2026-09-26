@@ -267,6 +267,20 @@ class PlaywrightExecutor:
             success=result.success,
             error=result.error,
             result=event_result,
+            action_data={
+                "action_type": action.action_type.value,
+                "target": action.target,
+                "value_reference": action.value_reference,
+                "url": action.url,
+                "expected": action.expected,
+                "assertion": action.assertion,
+                "key": action.key,
+                "wait_ms": action.wait_ms,
+                "resource_id": action.resource_id,
+                "requires_resource": action.requires_resource,
+                "confirmed": action.confirmed,
+                "timeout_ms": action.timeout_ms,
+            },
         )
         if result.error_type is not None and result.error_type.startswith("RESOURCE_"):
             self.store.append_event(

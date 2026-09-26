@@ -6,6 +6,12 @@ from web_testing_system.runtime.budget import (
     BudgetGuard,
     BudgetLimits,
 )
+from web_testing_system.runtime.computer_use import (
+    ComputerUseController,
+    ComputerUseDecision,
+    ComputerUseRequest,
+    ComputerUseResult,
+)
 from web_testing_system.runtime.models import (
     ActionCandidate,
     ActionResult,
@@ -27,6 +33,10 @@ __all__ = [
     "BudgetGuard",
     "BudgetLimits",
     "BusinessAction",
+    "ComputerUseController",
+    "ComputerUseDecision",
+    "ComputerUseRequest",
+    "ComputerUseResult",
     "PageState",
     "PermissionDecision",
     "WebAction",

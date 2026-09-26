@@ -37,12 +37,15 @@ def test_settings_support_configurable_providers_without_model_defaults(monkeypa
     monkeypatch.setenv("MAIN_AGENT_MODEL", "configured-main-model")
     monkeypatch.setenv("TESTER_AGENT_PROVIDER", "groq")
     monkeypatch.setenv("TESTER_AGENT_MODEL", "configured-tester-model")
+    monkeypatch.setenv("COMPUTER_USE_MODEL", "configured-computer-use-model")
 
     settings = Settings(_env_file=None)
 
     assert settings.main_agent_provider == "gemini"
     assert settings.main_agent_model == "configured-main-model"
     assert settings.tester_agent_provider == "groq"
+    assert settings.computer_use_provider == "gemini"
+    assert settings.computer_use_model == "configured-computer-use-model"
     assert settings.tester_agent_model == "configured-tester-model"
     assert settings.full_evaluation is False
     assert fake_gemini_key not in repr(settings)
@@ -50,13 +53,14 @@ def test_settings_support_configurable_providers_without_model_defaults(monkeypa
 
 
 def test_model_names_are_optional_and_not_hardcoded(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("GEMINI_API_KEY", "GROQ_API_KEY", "MAIN_AGENT_MODEL", "TESTER_AGENT_MODEL"):
+    for name in ("GEMINI_API_KEY", "GROQ_API_KEY", "MAIN_AGENT_MODEL", "TESTER_AGENT_MODEL", "COMPUTER_USE_MODEL"):
         monkeypatch.delenv(name, raising=False)
 
     settings = Settings(_env_file=None)
 
     assert settings.main_agent_model is None
     assert settings.tester_agent_model is None
+    assert settings.computer_use_model is None
 
 
 def test_run_config_validates_required_input_and_expected_behavior() -> None:

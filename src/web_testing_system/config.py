@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     main_agent_model: str | None = None
     tester_agent_provider: Literal["gemini", "groq"] = "gemini"
     tester_agent_model: str | None = None
+    computer_use_provider: Literal["gemini"] = "gemini"
+    computer_use_model: str | None = None
     full_evaluation: bool = False
     artifacts_dir: Path = Path("artifacts/runs")
     state_db_path: Path = Path("artifacts/state/shared_state.db")
