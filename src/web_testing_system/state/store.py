@@ -316,6 +316,20 @@ class StateStore:
         with self._connect() as connection:
             return decode_row(connection.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone())
 
+    def finish_run(self, *, run_id: str, status: str, stop_reason: str | None = None) -> dict[str, Any]:
+        if status not in {"COMPLETED", "FAILED", "STOPPED", "CANCELLED"}:
+            raise ValueError("Run must finish with a final status")
+        with self._connect() as connection:
+            cursor = connection.execute(
+                "UPDATE runs SET status = ?, finished_at = ?, stop_reason = ? WHERE run_id = ? AND finished_at IS NULL",
+                (status, utc_now(), stop_reason, run_id),
+            )
+            if cursor.rowcount != 1:
+                raise StateConflictError(f"run {run_id!r} is missing or already finished")
+        result = self.get_run(run_id)
+        assert result is not None
+        return result
+
     def create_identity(self, *, identity_id: str, run_id: str, role: str, secret_reference: str | None, permissions: Sequence[str]) -> dict[str, Any]:
         with self._connect() as connection:
             connection.execute(

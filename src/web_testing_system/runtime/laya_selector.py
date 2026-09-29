@@ -21,10 +21,10 @@ class LayaSelector:
         self.client = client
 
     @classmethod
-    def local(cls) -> LayaSelector:
+    def local(cls, model: str = "english") -> LayaSelector:
         from laya import Router  # type: ignore[import-untyped]
 
-        return cls(Router())
+        return cls(Router(default=model, max_loaded=1))
 
     async def select(
         self,

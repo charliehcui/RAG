@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import uuid4
 
+from google import genai
+from google.genai import types
 from playwright.async_api import Page
 
 from web_testing_system.config import Settings
@@ -47,6 +49,93 @@ class ComputerUseDecision:
 
 class ComputerUseClient(Protocol):
     async def execute(self, request: ComputerUseRequest) -> ComputerUseDecision: ...
+
+
+class GeminiComputerUseClient:
+    """Request one Gemini browser action and convert it to the runtime boundary."""
+
+    def __init__(self, settings: Settings, client: Any | None = None) -> None:
+        if settings.computer_use_provider != "gemini":
+            raise ValueError("Computer Use provider must be Gemini")
+        if settings.gemini_api_key is None or not settings.gemini_api_key.get_secret_value():
+            raise ValueError("GEMINI_API_KEY is required")
+        if settings.computer_use_model is None or not settings.computer_use_model.strip():
+            raise ValueError("COMPUTER_USE_MODEL is required")
+        self.model = settings.computer_use_model
+        self.client = client or genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+
+    async def execute(self, request: ComputerUseRequest) -> ComputerUseDecision:
+        excluded_actions = self._excluded_actions(request.allowed_visual_actions)
+        prompt = (
+            f"Current URL: {request.url}\nGoal: {request.goal}\n"
+            f"Return exactly one low-risk browser action from: {', '.join(request.allowed_visual_actions)}. "
+            "Do not navigate, type, submit data, or choose any other action."
+        )
+        response = await self.client.aio.models.generate_content(
+            model=self.model,
+            contents=[types.Content(role="user", parts=[types.Part(text=prompt), types.Part.from_bytes(data=request.screenshot, mime_type="image/png")])],
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER, excluded_predefined_functions=excluded_actions, enable_prompt_injection_detection=True))]
+            ),
+        )
+        function_call = self._first_function_call(response)
+        if function_call is None:
+            return ComputerUseDecision(status="REFUSED", error="NO_COMPUTER_USE_ACTION")
+        arguments = dict(function_call.args or {})
+        safety_error = self._safety_error(arguments)
+        if safety_error is not None:
+            return ComputerUseDecision(status="REFUSED", error=safety_error)
+        width, height = self._png_size(request.screenshot)
+        if function_call.name in {"click", "click_at"} and "click" in request.allowed_visual_actions:
+            return ComputerUseDecision(status="ACTION", action="click", x=self._scale(arguments.get("x"), width), y=self._scale(arguments.get("y"), height))
+        if function_call.name in {"drag", "drag_and_drop"} and "drag" in request.allowed_visual_actions:
+            return ComputerUseDecision(
+                status="ACTION",
+                action="drag",
+                x=self._scale(arguments.get("start_x", arguments.get("x")), width),
+                y=self._scale(arguments.get("start_y", arguments.get("y")), height),
+                to_x=self._scale(arguments.get("end_x", arguments.get("destination_x")), width),
+                to_y=self._scale(arguments.get("end_y", arguments.get("destination_y")), height),
+            )
+        return ComputerUseDecision(status="REFUSED", error="MODEL_RETURNED_DISALLOWED_ACTION")
+
+    @staticmethod
+    def _first_function_call(response: Any) -> Any | None:
+        for candidate in response.candidates or []:
+            if candidate.content is None:
+                continue
+            for part in candidate.content.parts or []:
+                if part.function_call is not None:
+                    return part.function_call
+        return None
+
+    @staticmethod
+    def _safety_error(arguments: dict[str, Any]) -> str | None:
+        safety = arguments.get("safety_decision")
+        if not isinstance(safety, dict):
+            return None
+        decision = str(safety.get("decision", "")).casefold()
+        if decision in {"require_confirmation", "blocked", "deny", "denied"}:
+            return f"COMPUTER_USE_SAFETY_{decision.upper()}"
+        return None
+
+    @staticmethod
+    def _png_size(screenshot: bytes) -> tuple[int, int]:
+        if len(screenshot) < 24 or screenshot[:8] != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("Computer Use screenshot must be a PNG")
+        return int.from_bytes(screenshot[16:20], "big"), int.from_bytes(screenshot[20:24], "big")
+
+    @staticmethod
+    def _scale(value: Any, size: int) -> float | None:
+        if not isinstance(value, int | float):
+            return None
+        return float(value) / 1_000 * size
+
+    @staticmethod
+    def _excluded_actions(allowed_actions: tuple[str, ...]) -> list[str]:
+        actions = {"click", "double_click", "triple_click", "middle_click", "right_click", "move", "type", "navigate", "go_back", "go_forward", "wait", "press_key", "key_down", "key_up", "hotkey", "take_screenshot", "scroll", "drag_and_drop"}
+        retained = {"click" if action == "click" else "drag_and_drop" for action in allowed_actions}
+        return sorted(actions - retained)
 
 
 @dataclass(frozen=True)

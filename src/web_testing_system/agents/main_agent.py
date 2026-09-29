@@ -480,3 +480,20 @@ class MainAgentRunner:
             result={"reason": reason, "replan_count": self.replan_count},
         )
         return response
+
+    async def summarize_report(self, report: Mapping[str, Any]) -> AgentResponse:
+        """Ask the existing Main Agent to summarize fixed report facts without recalculating them."""
+        response = await self.agent.run(
+            "Summarize the supplied deterministic Final Report. Explain only recorded facts. "
+            "Do not recalculate numbers, invent causes, add findings, or propose source patches.\n"
+            f"Final Report: {json.dumps(report, ensure_ascii=False)}",
+            session=self.session,
+        )
+        assert isinstance(response, AgentResponse)
+        self.tools._append_plan_event(
+            event_type="FINAL_REPORT_SUMMARY",
+            action="summarize_report",
+            task_id=None,
+            result={"summary": response.text},
+        )
+        return response

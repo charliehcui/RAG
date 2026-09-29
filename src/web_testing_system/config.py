@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     main_agent_model: str | None = None
     tester_agent_provider: Literal["gemini", "groq"] = "gemini"
     tester_agent_model: str | None = None
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    laya_model: Literal["english", "multilingual", "typed-decisions"] = "english"
     computer_use_provider: Literal["gemini"] = "gemini"
     computer_use_model: str | None = None
     full_evaluation: bool = False
