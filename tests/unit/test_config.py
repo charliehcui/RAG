@@ -35,6 +35,7 @@ def test_settings_support_configurable_providers_without_model_defaults(monkeypa
     monkeypatch.setenv("GROQ_API_KEY", fake_groq_key)
     monkeypatch.setenv("MAIN_AGENT_PROVIDER", "gemini")
     monkeypatch.setenv("MAIN_AGENT_MODEL", "configured-main-model")
+    monkeypatch.setenv("MAIN_AGENT_FALLBACK_MODEL", "configured-main-fallback-model")
     monkeypatch.setenv("TESTER_AGENT_PROVIDER", "groq")
     monkeypatch.setenv("TESTER_AGENT_MODEL", "configured-tester-model")
     monkeypatch.setenv("COMPUTER_USE_MODEL", "configured-computer-use-model")
@@ -43,6 +44,7 @@ def test_settings_support_configurable_providers_without_model_defaults(monkeypa
 
     assert settings.main_agent_provider == "gemini"
     assert settings.main_agent_model == "configured-main-model"
+    assert settings.main_agent_fallback_model == "configured-main-fallback-model"
     assert settings.tester_agent_provider == "groq"
     assert settings.computer_use_provider == "gemini"
     assert settings.computer_use_model == "configured-computer-use-model"
@@ -53,12 +55,13 @@ def test_settings_support_configurable_providers_without_model_defaults(monkeypa
 
 
 def test_model_names_are_optional_and_not_hardcoded(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("GEMINI_API_KEY", "GROQ_API_KEY", "MAIN_AGENT_MODEL", "TESTER_AGENT_MODEL", "COMPUTER_USE_MODEL"):
+    for name in ("GEMINI_API_KEY", "GROQ_API_KEY", "MAIN_AGENT_MODEL", "MAIN_AGENT_FALLBACK_MODEL", "TESTER_AGENT_MODEL", "COMPUTER_USE_MODEL"):
         monkeypatch.delenv(name, raising=False)
 
     settings = Settings(_env_file=None)
 
     assert settings.main_agent_model is None
+    assert settings.main_agent_fallback_model is None
     assert settings.tester_agent_model is None
     assert settings.computer_use_model is None
 

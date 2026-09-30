@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
@@ -59,7 +59,7 @@ class MainAgentTools:
         task_id: str,
         goal: str,
         feature: str,
-        priority: str,
+        priority: Literal["P0", "P1", "P2", "P3"],
         dependencies: list[str],
         step_budget: int,
         data_requirements: dict[str, Any],
@@ -157,7 +157,7 @@ class MainAgentTools:
         task_id: str,
         goal: str,
         feature: str,
-        priority: str,
+        priority: Literal["P0", "P1", "P2", "P3"],
         dependencies: list[str],
         data_requirements: dict[str, Any],
         scope_targets: list[str],
@@ -213,7 +213,7 @@ class MainAgentTools:
             )
         return {"ok": True, "task": updated}
 
-    def change_task_priority(self, task_id: str, priority: str, reason: str) -> dict[str, Any]:
+    def change_task_priority(self, task_id: str, priority: Literal["P0", "P1", "P2", "P3"], reason: str) -> dict[str, Any]:
         """Change the priority of one open Task and record why."""
         current = self._get_run_task(task_id)
         updated = self.store.update_task_plan(
@@ -449,7 +449,8 @@ class MainAgentRunner:
         """Ask the MAF Main Agent to create its Todo plan and Shared State Tasks."""
         prompt = (
             "Create the initial test plan. Add Todo items for the plan, then create valid Shared State Tasks. "
-            "Include Project, Task, Member, and Permission coverage when they are in focus. Distinguish parallel Tasks from dependent Tasks.\n"
+            "Include Project, Task, Member, and Permission coverage when they are in focus. Distinguish parallel Tasks from dependent Tasks. "
+            "Task priority must be exactly P0, P1, P2, or P3.\n"
             f"Run Config: {json.dumps(run_config.model_dump(mode='json'), ensure_ascii=False)}"
         )
         response = await self.agent.run(prompt, session=self.session)

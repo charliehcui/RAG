@@ -52,7 +52,8 @@ Real provider clients are created from `Settings`; API keys and model names are 
 
 ```ini
 MAIN_AGENT_PROVIDER=gemini
-MAIN_AGENT_MODEL=gemini-3.5-flash
+MAIN_AGENT_MODEL=gemini-3.7-flash
+MAIN_AGENT_FALLBACK_MODEL=gemini-3.5-flash-lite
 TESTER_AGENT_PROVIDER=groq
 TESTER_AGENT_MODEL=openai/gpt-oss-20b
 GROQ_BASE_URL=https://api.groq.com/openai/v1

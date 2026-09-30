@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr | None = None
     main_agent_provider: Literal["gemini"] = "gemini"
     main_agent_model: str | None = None
+    main_agent_fallback_model: str | None = None
     tester_agent_provider: Literal["gemini", "groq"] = "gemini"
     tester_agent_model: str | None = None
     groq_base_url: str = "https://api.groq.com/openai/v1"
