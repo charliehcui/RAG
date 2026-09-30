@@ -120,7 +120,7 @@ class CandidateBuilder:
         for element in page_state.interactive_elements:
             if not element.enabled:
                 continue
-            action_type = self._action_for_element(element)
+            action_type = ActionType.CLICK
             candidate_url = (
                 urljoin(page_state.url, element.href) if element.href else None
             )
@@ -239,12 +239,6 @@ class CandidateBuilder:
         if not permission.allowed:
             return CandidateValidation(False, permission.code)
         return CandidateValidation(True, "VALID", action)
-
-    @staticmethod
-    def _action_for_element(element: InteractiveElement) -> ActionType:
-        if element.kind == "input" or element.kind == "textarea":
-            return ActionType.CLICK
-        return ActionType.CLICK
 
     @staticmethod
     def _candidate_id(state_id: str, action: str, target: str) -> str:

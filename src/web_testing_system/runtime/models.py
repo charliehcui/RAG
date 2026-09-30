@@ -46,7 +46,7 @@ class PageState:
     accessibility: str
     interactive_elements: tuple[InteractiveElement, ...]
 
-    def necessary_summary(self) -> dict[str, Any]:
+    def selection_summary(self) -> dict[str, Any]:
         return {
             "state_id": self.state_id,
             "url": self.url,
@@ -117,11 +117,14 @@ class ActionResult:
 
 
 @dataclass(frozen=True)
-class LayaSelection:
+class JevSelection:
     selected_candidate_id: str | None
     confidence: float
     latency_ms: float
     cost: float
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str | None = None
     error: str | None = None
 
 

@@ -32,17 +32,17 @@ def create_metrics_store(path: Path) -> StateStore:
     store.update_finding_verification(finding_id="finding-false", status="CONFIRMED_BUG", verification_result="FAIL", details={"result": "not in ground truth"})
     store.create_finding(finding_id="finding-duplicate", run_id="run-metrics", task_id="task-1", title="duplicate", status="DUPLICATE", expected_result="expected", actual_result="actual", first_seen_by="tester-1", duplicate_of="finding-b1")
 
-    store.record_path(run_id="run-metrics", feature="Task", page="/tasks", state="list", action="refresh", result="success", last_tester="tester-1")
-    store.record_path(run_id="run-metrics", feature="Task", page="/tasks", state="list", action="refresh", result="success", last_tester="tester-1")
-    store.record_path(run_id="run-metrics", feature="Task", page="/tasks", state="details", action="open", result="success", last_tester="tester-1")
+    store.record_path(run_id="run-metrics", feature="Task", page="/tasks", page_state_id="list", action="refresh", result="success", last_tester="tester-1")
+    store.record_path(run_id="run-metrics", feature="Task", page="/tasks", page_state_id="list", action="refresh", result="success", last_tester="tester-1")
+    store.record_path(run_id="run-metrics", feature="Task", page="/tasks", page_state_id="details", action="open", result="success", last_tester="tester-1")
 
     events = (
         ("action-1", "BROWSER_ACTION", {"success": True}, 4.0),
         ("action-2", "BROWSER_ACTION", {"success": True}, 6.0),
         ("action-3", "BROWSER_ACTION", {"success": False, "error_type": "INVALID_ACTION"}, 5.0),
-        ("laya-1", "LAYA_CALL", {"selected": "candidate-1"}, 10.0),
-        ("laya-2", "JEV_CALL", {"selected": "candidate-2"}, 20.0),
-        ("llm-1", "TESTER_LLM_CALL", {"success": True}, 30.0),
+        ("jev-1", "JEV_CALL", {"selected": "candidate-1"}, 10.0),
+        ("jev-2", "JEV_CALL", {"selected": "candidate-2"}, 20.0),
+        ("llm-1", "LLM_CALL", {"success": True}, 30.0),
         ("computer-1", "COMPUTER_USE_RESULT", {"status": "RETURN_TO_PLAYWRIGHT"}, 40.0),
         ("computer-2", "COMPUTER_USE_RESULT", {"status": "FAILED"}, 50.0),
     )
@@ -67,7 +67,7 @@ def test_metrics_are_calculated_from_state_and_post_run_ground_truth(tmp_path: P
     assert metrics["exploration_duplication"] == pytest.approx(1 / 3)
     assert metrics["task_completion_rate"] == pytest.approx(2 / 3)
     assert metrics["browser_action_success_rate"] == pytest.approx(2 / 3)
-    assert metrics["average_jev_laya_latency_ms"] == 15.0
+    assert metrics["average_jev_latency_ms"] == 15.0
     assert metrics["average_llm_latency_ms"] == 30.0
     assert float(metrics["total_test_time_seconds"]) >= 0
     assert metrics["estimated_total_cost"] == 0.6
@@ -88,8 +88,7 @@ def test_metrics_return_na_when_a_rate_has_no_denominator(tmp_path: Path) -> Non
 
     metrics = MetricsCalculator(store).calculate("empty-run", ground_truth=GroundTruthComparison(enabled_bug_ids=frozenset(), finding_to_bug={}))
 
-    for name in ("confirmed_bug_recall", "false_positive_rate", "reproduction_success_rate", "duplicate_finding_rate", "exploration_duplication", "task_completion_rate", "browser_action_success_rate", "average_jev_laya_latency_ms", "average_llm_latency_ms", "cost_per_confirmed_bug", "computer_use_recovery_rate", "overall_completion", "test_stability", "developer_usable_report_rate"):
+    for name in ("confirmed_bug_recall", "false_positive_rate", "reproduction_success_rate", "duplicate_finding_rate", "exploration_duplication", "task_completion_rate", "browser_action_success_rate", "average_jev_latency_ms", "average_llm_latency_ms", "cost_per_confirmed_bug", "computer_use_recovery_rate", "overall_completion", "test_stability", "developer_usable_report_rate"):
         assert metrics[name] == "N/A"
     assert metrics["estimated_total_cost"] == 0
     assert metrics["invalid_action_count"] == 0
-

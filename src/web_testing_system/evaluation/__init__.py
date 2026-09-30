@@ -5,13 +5,13 @@ from web_testing_system.evaluation.metrics import (
     MetricsCalculator,
 )
 from web_testing_system.evaluation.runner import (
+    AcceptanceChecklist,
     EvaluationControls,
     EvaluationExecution,
     EvaluationMode,
     EvaluationPlan,
     EvaluationRunner,
     EvaluationRunRecord,
-    FinalAcceptanceChecker,
     FinalAcceptanceResult,
     FullEvaluationGate,
     FullEvaluationGateResult,
@@ -27,7 +27,7 @@ __all__ = [
     "EvaluationPlan",
     "EvaluationRunRecord",
     "EvaluationRunner",
-    "FinalAcceptanceChecker",
+    "AcceptanceChecklist",
     "FinalAcceptanceResult",
     "FullEvaluationGate",
     "FullEvaluationGateResult",

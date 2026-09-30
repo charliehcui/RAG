@@ -55,7 +55,7 @@ def budget() -> BudgetGuard:
             max_llm_calls=1,
             max_input_tokens=100,
             max_output_tokens=100,
-            max_laya_calls=1,
+            max_jev_calls=1,
             max_computer_use_calls=0,
             max_task_steps=5,
             max_task_replans=1,

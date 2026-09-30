@@ -1,4 +1,4 @@
-"""Safe orchestration of browser actions, Laya selection, and local recovery."""
+"""Safe orchestration of browser actions, Jev selection, and local recovery."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from web_testing_system.runtime.computer_use import (
     ComputerUseController,
     ComputerUseResult,
 )
-from web_testing_system.runtime.laya_selector import LayaSelector
+from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.runtime.models import (
     ActionResult,
     ActionType,
@@ -33,14 +33,14 @@ class WebTestingRuntime:
         executor: PlaywrightExecutor,
         page_state_reader: PageStateReader,
         candidate_builder: CandidateBuilder,
-        laya_selector: LayaSelector,
+        jev_selector: JevSelector,
         budget: BudgetGuard,
         run_id: str,
         task_id: str,
         tester_id: str,
         identity_id: str,
         budget_id: str,
-        laya_confidence_threshold: float = 0.6,
+        jev_confidence_threshold: float = 0.6,
         max_timeout_retries: int = 1,
         computer_use_controller: ComputerUseController | None = None,
     ) -> None:
@@ -49,14 +49,14 @@ class WebTestingRuntime:
         self.executor = executor
         self.page_state_reader = page_state_reader
         self.candidate_builder = candidate_builder
-        self.laya_selector = laya_selector
+        self.jev_selector = jev_selector
         self.budget = budget
         self.run_id = run_id
         self.task_id = task_id
         self.tester_id = tester_id
         self.identity_id = identity_id
         self.budget_id = budget_id
-        self.laya_confidence_threshold = laya_confidence_threshold
+        self.jev_confidence_threshold = jev_confidence_threshold
         self.max_timeout_retries = max_timeout_retries
         self.computer_use_controller = computer_use_controller
         self.browser_session_id: str | None = None
@@ -128,19 +128,24 @@ class WebTestingRuntime:
                 source="TESTER_LLM", reason="NO_LEGAL_CANDIDATES", needs_tester_llm=True
             )
         try:
-            self.budget.ensure_can_start("laya")
+            self.budget.ensure_can_start("jev")
         except BudgetExceededError as error:
             await self.stop_task(error.reason)
             return DecisionResult(source="STOP", reason=error.reason)
-        selection = await self.laya_selector.select(
+        selection = await self.jev_selector.select(
             current_goal=current_goal, page_state=page_state, candidates=candidates
         )
-        self.budget.record_laya_call(
-            runtime_seconds=selection.latency_ms / 1_000, cost=selection.cost
+        self.budget.record_jev_call(
+            runtime_seconds=selection.latency_ms / 1_000,
+            cost=selection.cost,
+            input_tokens=selection.input_tokens,
+            output_tokens=selection.output_tokens,
         )
         self.store.update_budget(
             budget_id=self.budget_id,
             jev_calls=1,
+            input_tokens=selection.input_tokens,
+            output_tokens=selection.output_tokens,
             runtime_seconds=selection.latency_ms / 1_000,
             estimated_cost=selection.cost,
         )
@@ -150,14 +155,17 @@ class WebTestingRuntime:
             task_id=self.task_id,
             tester_id=self.tester_id,
             browser_session_id=session.session_id,
-            event_type="LAYA_CALL",
+            event_type="JEV_CALL",
             url=page_state.url,
-            tool="Laya",
+            tool="Jev",
             action="select_candidate",
             result={
                 "selected_candidate_id": selection.selected_candidate_id,
                 "confidence": selection.confidence,
                 "error": selection.error,
+                "model": selection.model,
+                "input_tokens": selection.input_tokens,
+                "output_tokens": selection.output_tokens,
             },
             latency_ms=selection.latency_ms,
             cost=selection.cost,
@@ -168,15 +176,15 @@ class WebTestingRuntime:
             return DecisionResult(
                 source="TESTER_LLM", reason=selection.error, needs_tester_llm=True
             )
-        if selection.confidence < self.laya_confidence_threshold:
-            return DecisionResult(
-                source="TESTER_LLM", reason="LOW_LAYA_CONFIDENCE", needs_tester_llm=True
-            )
         if candidate is None:
             return DecisionResult(
                 source="TESTER_LLM",
                 reason="ILLEGAL_CANDIDATE_ID",
                 needs_tester_llm=True,
+            )
+        if selection.confidence < self.jev_confidence_threshold:
+            return DecisionResult(
+                source="TESTER_LLM", reason="LOW_JEV_CONFIDENCE", needs_tester_llm=True
             )
         current_page_state = await self.page_state_reader.read(session.page)
         validation = self.candidate_builder.validate(
@@ -190,9 +198,9 @@ class WebTestingRuntime:
                 needs_tester_llm=True,
             )
         if candidate.action == "request_replan":
-            await self.request_replan("LAYA_REQUESTED_REPLAN")
+            await self.request_replan("JEV_REQUESTED_REPLAN")
             return DecisionResult(
-                source="LAYA", reason="REQUEST_REPLAN", candidate=candidate
+                source="JEV", reason="REQUEST_REPLAN", candidate=candidate
             )
         if candidate.action == "stop_current_path":
             self.store.append_event(
@@ -205,11 +213,11 @@ class WebTestingRuntime:
                 url=current_page_state.url,
                 tool="WebTestingRuntime",
                 action="stop_current_path",
-                result={"reason": "LAYA_SELECTED_STOP"},
+                result={"reason": "JEV_SELECTED_STOP"},
                 latency_ms=0,
             )
             return DecisionResult(
-                source="LAYA", reason="STOP_CURRENT_PATH", candidate=candidate
+                source="JEV", reason="STOP_CURRENT_PATH", candidate=candidate
             )
         assert validation.action is not None
         action_result = await self.execute_known_action(validation.action)
@@ -218,13 +226,13 @@ class WebTestingRuntime:
                 run_id=self.run_id,
                 feature=current_goal,
                 page=page_state.url,
-                state=page_state.state_id,
+                page_state_id=page_state.state_id,
                 action=candidate.action,
                 result="SUCCESS",
                 last_tester=self.tester_id,
             )
         return DecisionResult(
-            source="LAYA_TO_PLAYWRIGHT",
+            source="JEV_TO_PLAYWRIGHT",
             reason="CANDIDATE_EXECUTED",
             candidate=candidate,
             action_result=action_result,

@@ -68,7 +68,7 @@ def test_structured_coordination_scope_resource_and_plan_controls(
         run_id="run-1",
         feature="Permission",
         page="/projects",
-        state="project-list",
+        page_state_id="project-list",
         action="open",
         result="SUCCESS",
         last_tester="tester-1",
@@ -292,3 +292,12 @@ def test_structured_coordination_scope_resource_and_plan_controls(
     assert main_tools.stop_task("task-stop", "duplicate work")["task"]["status"] == "STOPPED"
     event_types = {event["event_type"] for event in phase2_store.list_events("run-1")}
     assert {"DUPLICATE_EXPLORATION", "PRIORITY_CHANGE", "TASK_REASSIGNED", "PLAN_CHANGE"} <= event_types
+    observation = tester_tools.record_observation(
+        title="Unexpected response",
+        expected_result="Success",
+        actual_result="Error",
+    )
+    assert any(
+        event["event_type"] == "FINDING_CREATED" and event["result"]["finding_id"] == observation["finding_id"]
+        for event in phase2_store.list_events("run-1")
+    )

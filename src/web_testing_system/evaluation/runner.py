@@ -19,7 +19,7 @@ MetricValue = int | float | str
 
 class EvaluationMode(StrEnum):
     TESTER_COUNT = "single_tester_vs_multi_tester"
-    DECISION_ENGINE = "laya_jev_vs_llm_every_decision"
+    DECISION_ENGINE = "jev_vs_llm_every_decision"
     COORDINATION = "shared_state_vs_independent_testers"
     REPRODUCTION = "auto_reproduction_on_vs_off"
     ACTION_POLICY = "playwright_first_vs_model_every_step"
@@ -104,7 +104,7 @@ class FinalAcceptanceResult:
     full_evaluation: str
 
 
-class FinalAcceptanceChecker:
+class AcceptanceChecklist:
     REQUIRED_CAPABILITIES = (
         "main_agent",
         "tester_agent",
@@ -112,7 +112,7 @@ class FinalAcceptanceChecker:
         "dynamic_replanning",
         "sqlite_shared_state",
         "playwright",
-        "laya_boundary",
+        "jev_boundary",
         "finding",
         "evidence",
         "reproduction",
@@ -157,10 +157,10 @@ class FullEvaluationGate:
 
 
 def build_evaluation_plan(mode: EvaluationMode, controls: EvaluationControls) -> EvaluationPlan:
-    base = EvaluationVariant(variant_id="baseline", tester_count=2, decision_policy="LAYA_JEV", shared_state=True, auto_reproduction=True, action_policy="PLAYWRIGHT_FIRST", computer_use_fallback=True, controls=controls)
+    base = EvaluationVariant(variant_id="baseline", tester_count=2, decision_policy="JEV", shared_state=True, auto_reproduction=True, action_policy="PLAYWRIGHT_FIRST", computer_use_fallback=True, controls=controls)
     values: dict[EvaluationMode, tuple[str, str, Any, str, Any]] = {
         EvaluationMode.TESTER_COUNT: ("single-tester", "tester_count", 1, "multi-tester", 2),
-        EvaluationMode.DECISION_ENGINE: ("laya-jev", "decision_policy", "LAYA_JEV", "llm-every-decision", "LLM_EVERY_DECISION"),
+        EvaluationMode.DECISION_ENGINE: ("jev", "decision_policy", "JEV", "llm-every-decision", "LLM_EVERY_DECISION"),
         EvaluationMode.COORDINATION: ("shared-state", "shared_state", True, "independent-testers", False),
         EvaluationMode.REPRODUCTION: ("auto-reproduction-on", "auto_reproduction", True, "auto-reproduction-off", False),
         EvaluationMode.ACTION_POLICY: ("playwright-first", "action_policy", "PLAYWRIGHT_FIRST", "model-every-step", "MODEL_EVERY_STEP"),
@@ -177,7 +177,7 @@ def build_evaluation_plan(mode: EvaluationMode, controls: EvaluationControls) ->
 def build_execution_route(config: EvaluationVariant, *, full_evaluation_enabled: bool) -> ExecutionRoute:
     if not 1 <= config.tester_count <= 4:
         raise ValueError("tester_count must be between 1 and 4")
-    if config.decision_policy not in {"LAYA_JEV", "LLM_EVERY_DECISION"}:
+    if config.decision_policy not in {"JEV", "LLM_EVERY_DECISION"}:
         raise ValueError(f"unsupported decision policy: {config.decision_policy}")
     if config.action_policy not in {"PLAYWRIGHT_FIRST", "MODEL_EVERY_STEP"}:
         raise ValueError(f"unsupported action policy: {config.action_policy}")
@@ -185,7 +185,7 @@ def build_execution_route(config: EvaluationVariant, *, full_evaluation_enabled:
         raise PermissionError("MODEL_EVERY_STEP_REQUIRES_FULL_EVALUATION")
     return ExecutionRoute(
         tester_count=config.tester_count,
-        candidate_selection="LAYA_JEV" if config.decision_policy == "LAYA_JEV" else "TESTER_LLM_EVERY_DECISION",
+        candidate_selection="JEV" if config.decision_policy == "JEV" else "TESTER_LLM_EVERY_DECISION",
         coordination="SHARED_STATE" if config.shared_state else "INDEPENDENT_TESTER_STATE",
         finding_after_anomaly="REPRODUCTION" if config.auto_reproduction else "SUSPECTED_ISSUE",
         known_action="PLAYWRIGHT" if config.action_policy == "PLAYWRIGHT_FIRST" else "TESTER_LLM_EVERY_STEP",

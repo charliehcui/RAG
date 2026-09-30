@@ -12,7 +12,6 @@ from web_testing_system.security import REDACTED
 from web_testing_system.state import (
     StateConflictError,
     StateStore,
-    StateTools,
     build_data_namespace,
 )
 from web_testing_system.state.store import FINDING_STATUSES, TASK_STATUSES
@@ -98,10 +97,9 @@ def test_atomic_task_claim_and_conditional_status_update(state_temp_path: Path) 
 @pytest.mark.integration
 def test_state_entities_and_controlled_tools_round_trip(state_temp_path: Path) -> None:
     store = prepared_store(state_temp_path)
-    tools = StateTools(store)
     store.create_task(task_id="task-1", run_id="run-1", goal="Create account", priority="P1", dependencies=[], created_by="main", step_budget=20)
 
-    resource_result = tools.register_resource(
+    resource_result = store.create_resource(
         resource_id="resource-1",
         run_id="run-1",
         resource_type="project",
@@ -112,8 +110,8 @@ def test_state_entities_and_controlled_tools_round_trip(state_temp_path: Path) -
         sharing_mode="ISOLATED",
         cleanup_status="PENDING",
     )
-    first_path = tools.record_coverage(run_id="run-1", feature="accounts", page="/accounts", state="empty", action="open", result="loaded", last_tester="tester-1")
-    second_path = tools.record_coverage(run_id="run-1", feature="accounts", page="/accounts", state="empty", action="open", result="loaded again", last_tester="tester-1")
+    first_path = store.record_path(run_id="run-1", feature="accounts", page="/accounts", page_state_id="empty", action="open", result="loaded", last_tester="tester-1")
+    second_path = store.record_path(run_id="run-1", feature="accounts", page="/accounts", page_state_id="empty", action="open", result="loaded again", last_tester="tester-1")
     finding = store.create_finding(
         finding_id="finding-1",
         run_id="run-1",
@@ -138,8 +136,8 @@ def test_state_entities_and_controlled_tools_round_trip(state_temp_path: Path) -
         browser_session_id="browser-1",
     )
     store.create_budget(budget_id="budget-1", run_id="run-1", task_id="task-1")
-    budget_result = tools.update_budget(budget_id="budget-1", llm_calls=1, input_tokens=120, output_tokens=30, browser_steps=2, runtime_seconds=1.5, estimated_cost=0.01)
-    event_result = tools.append_event(
+    budget_result = store.update_budget(budget_id="budget-1", llm_calls=1, input_tokens=120, output_tokens=30, browser_steps=2, runtime_seconds=1.5, estimated_cost=0.01)
+    event_result = store.append_event(
         event_id="event-1",
         run_id="run-1",
         task_id="task-1",
@@ -155,21 +153,23 @@ def test_state_entities_and_controlled_tools_round_trip(state_temp_path: Path) -
         cost=0,
     )
 
-    assert resource_result["resource"]["owner"] == "tester-1"
-    assert resource_result["resource"]["sharing_mode"] == "ISOLATED"
-    assert first_path["coverage"]["visited_count"] == 1
-    assert second_path["coverage"]["visited_count"] == 2
+    assert resource_result["owner"] == "tester-1"
+    assert resource_result["sharing_mode"] == "ISOLATED"
+    assert first_path["visited_count"] == 1
+    assert second_path["visited_count"] == 2
     assert finding["status"] == "ANOMALY"
     assert evidence["relative_file_path"] == "evidence/account-missing.png"
-    assert budget_result["budget"]["llm_calls"] == 1
-    assert budget_result["budget"]["input_tokens"] == 120
-    assert budget_result["budget"]["browser_steps"] == 2
-    assert budget_result["budget"]["runtime_seconds"] == 1.5
-    assert budget_result["budget"]["estimated_cost"] == 0.01
-    assert event_result["event"]["url"] == "https://example.test/accounts"
-    assert event_result["event"]["action"] == "open accounts"
-    assert event_result["event"]["tool"] == "Playwright"
-    assert event_result["event"]["result"]["api_key"] == REDACTED
+    assert budget_result["llm_calls"] == 1
+    assert budget_result["input_tokens"] == 120
+    assert budget_result["browser_steps"] == 2
+    assert budget_result["runtime_seconds"] == 1.5
+    assert budget_result["estimated_cost"] == 0.01
+    run = store.get_run("run-1")
+    assert run is not None and run["remaining_budget"]["browser_steps"] == 98
+    assert event_result["url"] == "https://example.test/accounts"
+    assert event_result["action"] == "open accounts"
+    assert event_result["tool"] == "Playwright"
+    assert event_result["result"]["api_key"] == REDACTED
     assert store.list_open_tasks("run-1")[0]["task_id"] == "task-1"
     assert store.list_recent_findings("run-1")[0]["finding_id"] == "finding-1"
     assert store.list_events("run-1")[0]["event_id"] == "event-1"

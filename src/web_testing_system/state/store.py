@@ -53,6 +53,10 @@ def encode_json(value: Any) -> str:
     return json.dumps(redact_sensitive_data(value), ensure_ascii=False, separators=(",", ":"))
 
 
+def build_data_namespace(run_id: str, tester_id: str, task_id: str) -> str:
+    return f"run-{run_id}-tester-{tester_id}-task-{task_id}"
+
+
 def decode_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
     if row is None:
         return None
@@ -302,11 +306,14 @@ class StateStore:
                 )
 
     def create_run(self, *, run_id: str, application: str, application_version: str, test_goal: str, scope: Mapping[str, Any], status: str, global_budget: Mapping[str, Any], remaining_budget: Mapping[str, Any]) -> dict[str, Any]:
+        for budget_values in (global_budget, remaining_budget):
+            if any(not isinstance(value, (int, float)) or isinstance(value, bool) or value < 0 for value in budget_values.values()):
+                raise ValueError("budget values must be nonnegative numbers")
         started_at = utc_now()
         with self._connect() as connection:
             connection.execute(
                 "INSERT INTO runs (run_id, application, application_version, test_goal, scope_json, status, started_at, global_budget_json, remaining_budget_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (run_id, application, application_version, test_goal, encode_json(scope), status, started_at, encode_json(global_budget), encode_json(remaining_budget)),
+                (run_id, application, application_version, test_goal, encode_json(scope), status, started_at, json.dumps(global_budget), json.dumps(remaining_budget)),
             )
         result = self.get_run(run_id)
         assert result is not None
@@ -493,7 +500,7 @@ class StateStore:
         with self._connect() as connection:
             return decode_row(connection.execute("SELECT * FROM resources WHERE resource_id = ?", (resource_id,)).fetchone())
 
-    def record_path(self, *, run_id: str, feature: str, page: str, state: str, action: str, result: str, last_tester: str) -> dict[str, Any]:
+    def record_path(self, *, run_id: str, feature: str, page: str, page_state_id: str, action: str, result: str, last_tester: str) -> dict[str, Any]:
         with self._connect() as connection:
             connection.execute(
                 """
@@ -502,11 +509,11 @@ class StateStore:
                 ON CONFLICT (run_id, feature, page, state, action)
                 DO UPDATE SET result = excluded.result, visited_count = explored_paths.visited_count + 1, last_tester = excluded.last_tester
                 """,
-                (run_id, feature, page, state, action, result, last_tester),
+                (run_id, feature, page, page_state_id, action, result, last_tester),
             )
             row = connection.execute(
                 "SELECT * FROM explored_paths WHERE run_id = ? AND feature = ? AND page = ? AND state = ? AND action = ?",
-                (run_id, feature, page, state, action),
+                (run_id, feature, page, page_state_id, action),
             ).fetchone()
         decoded = decode_row(row)
         assert decoded is not None
@@ -517,11 +524,11 @@ class StateStore:
             rows = connection.execute("SELECT * FROM explored_paths WHERE run_id = ? ORDER BY path_id", (run_id,)).fetchall()
         return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
-    def get_path(self, *, run_id: str, feature: str, page: str, state: str, action: str) -> dict[str, Any] | None:
+    def get_path(self, *, run_id: str, feature: str, page: str, page_state_id: str, action: str) -> dict[str, Any] | None:
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT * FROM explored_paths WHERE run_id = ? AND feature = ? AND page = ? AND state = ? AND action = ?",
-                (run_id, feature, page, state, action),
+                (run_id, feature, page, page_state_id, action),
             ).fetchone()
         return decode_row(row)
 
@@ -651,6 +658,34 @@ class StateStore:
             )
             if cursor.rowcount != 1:
                 raise KeyError(f"unknown budget: {budget_id}")
+            run_row = connection.execute(
+                "SELECT runs.run_id, runs.global_budget_json FROM runs JOIN budgets ON runs.run_id = budgets.run_id WHERE budgets.budget_id = ?",
+                (budget_id,),
+            ).fetchone()
+            assert run_row is not None
+            totals = connection.execute(
+                "SELECT COALESCE(SUM(llm_calls), 0) AS llm_calls, COALESCE(SUM(jev_calls), 0) AS jev_calls, COALESCE(SUM(computer_use_calls), 0) AS computer_use_calls, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(browser_steps), 0) AS browser_steps, COALESCE(SUM(runtime_seconds), 0) AS runtime_seconds FROM budgets WHERE run_id = ?",
+                (run_row["run_id"],),
+            ).fetchone()
+            assert totals is not None
+            global_budget = json.loads(run_row["global_budget_json"])
+            budget_fields = {
+                "max_llm_calls": "llm_calls",
+                "max_jev_calls": "jev_calls",
+                "max_computer_use_calls": "computer_use_calls",
+                "max_input_tokens": "input_tokens",
+                "max_output_tokens": "output_tokens",
+                "max_runtime_seconds": "runtime_seconds",
+                "browser_steps": "browser_steps",
+            }
+            remaining_budget = dict(global_budget)
+            for limit_name, usage_name in budget_fields.items():
+                if limit_name in global_budget:
+                    remaining_budget[limit_name] = max(0, global_budget[limit_name] - totals[usage_name])
+            connection.execute(
+                "UPDATE runs SET remaining_budget_json = ? WHERE run_id = ?",
+                (json.dumps(remaining_budget), run_row["run_id"]),
+            )
         result = self.get_budget(budget_id)
         assert result is not None
         return result

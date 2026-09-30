@@ -35,7 +35,7 @@ from web_testing_system.config import (
 from web_testing_system.runtime.browser import BrowserManager
 from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
 from web_testing_system.runtime.candidates import CandidateBuilder, PageStateReader
-from web_testing_system.runtime.laya_selector import LayaSelector
+from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.runtime.permissions import ExecutionPolicy, PermissionChecker
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
@@ -215,11 +215,11 @@ class IdleTesterClient(FunctionInvocationLayer, BaseChatClient):
         return ChatResponse(messages=[Message(role="assistant", contents=["Done."])])
 
 
-class UnusedLayaClient:
+class UnusedJevClient:
     def predict(
         self, state: Mapping[str, Any], questions: Mapping[str, Any]
     ) -> Mapping[str, Any]:
-        raise AssertionError("Laya is not used by this scheduling test")
+        raise AssertionError("Jev is not used by this scheduling test")
 
 
 def make_run_config() -> RunConfig:
@@ -262,7 +262,7 @@ def make_budget(max_contexts: int = 2) -> BudgetGuard:
             max_llm_calls=10,
             max_input_tokens=1_000,
             max_output_tokens=1_000,
-            max_laya_calls=5,
+            max_jev_calls=5,
             max_computer_use_calls=0,
             max_task_steps=20,
             max_task_replans=2,
@@ -319,7 +319,7 @@ def create_tester_runner(
         ),
         page_state_reader=PageStateReader(),
         candidate_builder=CandidateBuilder(checker),
-        laya_selector=LayaSelector(UnusedLayaClient()),
+        jev_selector=JevSelector(UnusedJevClient()),
         budget=task_budget,
         run_id="run-phase3",
         task_id=task_id,

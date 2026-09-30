@@ -12,7 +12,6 @@ dependencies = [
     "agent-framework-gemini==1.0.0b260910",
     "agent-framework-openai==1.14.4",
     "google-genai==2.25.0",
-    "laya==0.3.20",
     "playwright==1.63.0",
     "pydantic-settings==2.15.0",
 ]

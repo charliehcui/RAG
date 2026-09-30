@@ -13,7 +13,7 @@ from web_testing_system.runtime.budget import (
     BudgetLimits,
 )
 from web_testing_system.runtime.candidates import CandidateBuilder, PageStateReader
-from web_testing_system.runtime.laya_selector import LayaSelector
+from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.runtime.models import ActionResult, ActionType, WebAction
 from web_testing_system.runtime.permissions import ExecutionPolicy, PermissionChecker
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
@@ -23,7 +23,7 @@ from web_testing_system.state import StateStore
 HTML = "<main><button id='open'>Open Project</button><p id='status'>ready</p></main>"
 
 
-class FakeLayaClient:
+class FakeJevClient:
     def __init__(self) -> None:
         self.mode = "success"
         self.call_count = 0
@@ -47,10 +47,12 @@ class FakeLayaClient:
             "answers": {
                 "next_candidate": {
                     "choice": selected_id,
+                    "confidence": confidence,
                     "probabilities": {selected_id: confidence},
                 }
             },
-            "cost": 0.001,
+            "model": "typesafe/jev-1.13-test",
+            "usage": {"input_tokens": 12, "output_tokens": 1, "cost": 0.001},
         }
 
 
@@ -61,7 +63,7 @@ def make_budget(max_steps: int = 20, max_contexts: int = 1) -> BudgetGuard:
             max_llm_calls=2,
             max_input_tokens=1_000,
             max_output_tokens=1_000,
-            max_laya_calls=10,
+            max_jev_calls=10,
             max_computer_use_calls=0,
             max_task_steps=max_steps,
             max_task_replans=2,
@@ -72,7 +74,7 @@ def make_budget(max_steps: int = 20, max_contexts: int = 1) -> BudgetGuard:
 
 
 def build_runtime(
-    store: StateStore, budget: BudgetGuard, laya_client: FakeLayaClient
+    store: StateStore, budget: BudgetGuard, jev_client: FakeJevClient
 ) -> WebTestingRuntime:
     checker = PermissionChecker(
         store=store,
@@ -94,7 +96,7 @@ def build_runtime(
         ),
         page_state_reader=PageStateReader(),
         candidate_builder=CandidateBuilder(checker),
-        laya_selector=LayaSelector(laya_client),
+        jev_selector=JevSelector(jev_client),
         budget=budget,
         run_id="run-1",
         task_id="task-1",
@@ -113,12 +115,12 @@ async def install_page(page: Page) -> None:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_layered_decision_laya_fallback_checkpoint_and_crash_recovery(
+async def test_layered_decision_jev_fallback_checkpoint_and_crash_recovery(
     phase2_store: StateStore,
 ) -> None:
     budget = make_budget()
-    laya_client = FakeLayaClient()
-    runtime = build_runtime(phase2_store, budget, laya_client)
+    jev_client = FakeJevClient()
+    runtime = build_runtime(phase2_store, budget, jev_client)
     session_id = await runtime.start_session()
     session = runtime.browser_manager.get_session(session_id)
     await install_page(session.page)
@@ -129,18 +131,26 @@ async def test_layered_decision_laya_fallback_checkpoint_and_crash_recovery(
         success = await runtime.explore_unknown_path("Open Project")
 
         assert navigation.success is True
-        assert success.source == "LAYA_TO_PLAYWRIGHT"
+        assert success.source == "JEV_TO_PLAYWRIGHT"
         assert (
             success.action_result is not None and success.action_result.success is True
         )
-        assert laya_client.call_count == 1
+        assert jev_client.call_count == 1
+        first_jev_event = next(event for event in phase2_store.list_events("run-1") if event["event_type"] == "JEV_CALL")
+        assert first_jev_event["result"]["input_tokens"] == 12
+        assert first_jev_event["result"]["model"] == "typesafe/jev-1.13-test"
+        saved_budget = phase2_store.get_budget("budget-1")
+        assert saved_budget is not None
+        assert budget.snapshot()["input_tokens"] == saved_budget["input_tokens"]
+        assert budget.snapshot()["jev_calls"] == saved_budget["jev_calls"]
+        assert budget.snapshot()["runtime_seconds"] == pytest.approx(saved_budget["runtime_seconds"])
 
         for mode, expected_reason in (
-            ("low", "LOW_LAYA_CONFIDENCE"),
+            ("low", "LOW_JEV_CONFIDENCE"),
             ("illegal", "ILLEGAL_CANDIDATE_ID"),
-            ("failure", "LAYA_ERROR: selector unavailable"),
+            ("failure", "JEV_ERROR: RuntimeError"),
         ):
-            laya_client.mode = mode
+            jev_client.mode = mode
             fallback = await runtime.explore_unknown_path("Open Project")
             assert fallback.source == "TESTER_LLM"
             assert fallback.needs_tester_llm is True
@@ -176,7 +186,7 @@ async def test_layered_decision_laya_fallback_checkpoint_and_crash_recovery(
         }
         assert {
             "BROWSER_ACTION",
-            "LAYA_CALL",
+            "JEV_CALL",
             "SAFE_CHECKPOINT",
             "REQUEST_REPLAN",
             "STOP_CONDITION",
@@ -233,7 +243,7 @@ def fake_runtime(
         executor=executor,  # type: ignore[arg-type]
         page_state_reader=PageStateReader(),
         candidate_builder=None,  # type: ignore[arg-type]
-        laya_selector=None,  # type: ignore[arg-type]
+        jev_selector=None,  # type: ignore[arg-type]
         budget=budget,
         run_id="run-1",
         task_id="task-1",
@@ -305,7 +315,7 @@ async def test_context_budget_exhaustion_records_stop_before_browser_start(
     runtime = build_runtime(
         phase2_store,
         make_budget(max_contexts=0),
-        FakeLayaClient(),
+        FakeJevClient(),
     )
 
     with pytest.raises(BudgetExceededError, match="MAX_BROWSER_CONTEXTS_REACHED"):

@@ -27,7 +27,10 @@ The reset endpoint is `POST /test/reset` and is available only when the server i
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Development tests use Fake providers. They do not call real Gemini, Groq, Laya, or Computer Use services, and `FULL_EVALUATION` remains disabled by default.
+Run a configured test with `python -m web_testing_system path\to\run_config.json`.
+The JSON file follows `RunConfig`; the resulting report is written under `artifacts/runs/<run_id>/report.json`.
+
+Development tests use Fake providers. They do not call real Gemini, Groq, Jev, or Computer Use services, and `FULL_EVALUATION` remains disabled by default.
 
 ## Metrics and Evaluation
 
@@ -36,7 +39,7 @@ Development tests use Fake providers. They do not call real Gemini, Groq, Laya, 
 The six controlled comparison modes are:
 
 1. Single Tester vs Multi-Tester
-2. Laya/Jev vs LLM Every Decision
+2. Jev vs LLM Every Decision
 3. Shared State vs Independent Testers
 4. Auto Reproduction On vs Off
 5. Playwright-first vs Model-every-step
@@ -48,7 +51,7 @@ Full Evaluation has three independent gates: `FULL_EVALUATION=true`, an explicit
 
 ## Real Provider Configuration
 
-Real provider clients are created from `Settings`; API keys and model names are never embedded in Agent code. The current low-cost configuration uses Gemini through `agent-framework-gemini`, Groq's OpenAI-compatible endpoint through `agent-framework-openai`, and the local Laya `english` checkpoint.
+Real provider clients are created from `Settings`; API keys and model names are never embedded in Agent code. The current low-cost configuration uses Gemini through `agent-framework-gemini`, Groq's OpenAI-compatible endpoint through `agent-framework-openai`, and the OpenRouter Jev Decisions API.
 
 ```ini
 MAIN_AGENT_PROVIDER=gemini
@@ -57,7 +60,8 @@ MAIN_AGENT_FALLBACK_MODEL=gemini-3.5-flash-lite
 TESTER_AGENT_PROVIDER=groq
 TESTER_AGENT_MODEL=openai/gpt-oss-20b
 GROQ_BASE_URL=https://api.groq.com/openai/v1
-LAYA_MODEL=english
+OPENROUTER_API_KEY=
+JEV_MODEL=typesafe/jev-1.13
 COMPUTER_USE_PROVIDER=gemini
 COMPUTER_USE_MODEL=gemini-3.5-flash
 FULL_EVALUATION=false

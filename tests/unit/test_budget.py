@@ -12,6 +12,7 @@ from web_testing_system.runtime.budget import (
 def make_budget(
     *,
     max_llm_calls: int = 1,
+    max_jev_calls: int = 1,
     max_input_tokens: int = 10,
     max_output_tokens: int = 10,
 ) -> BudgetGuard:
@@ -21,7 +22,7 @@ def make_budget(
             max_llm_calls=max_llm_calls,
             max_input_tokens=max_input_tokens,
             max_output_tokens=max_output_tokens,
-            max_laya_calls=1,
+            max_jev_calls=max_jev_calls,
             max_computer_use_calls=1,
             max_task_steps=1,
             max_task_replans=1,
@@ -47,9 +48,14 @@ def test_budget_checks_every_phase_two_limit() -> None:
         budget.ensure_can_start("llm")
 
     budget = make_budget()
-    budget.record_laya_call(runtime_seconds=0.1, cost=0)
-    with pytest.raises(BudgetExceededError, match="MAX_LAYA_CALLS_REACHED"):
-        budget.ensure_can_start("laya")
+    budget.record_jev_call(runtime_seconds=0.1, cost=0)
+    with pytest.raises(BudgetExceededError, match="MAX_JEV_CALLS_REACHED"):
+        budget.ensure_can_start("jev")
+
+    budget = make_budget(max_jev_calls=2)
+    budget.record_jev_call(runtime_seconds=0.1, cost=0, input_tokens=10, output_tokens=1)
+    with pytest.raises(BudgetExceededError, match="MAX_JEV_TOKENS_REACHED"):
+        budget.ensure_can_start("jev")
 
     budget = make_budget()
     budget.record_computer_use_call(runtime_seconds=0.1, cost=0)

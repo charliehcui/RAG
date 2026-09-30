@@ -37,7 +37,7 @@ def create_report_store(path: Path) -> StateStore:
     store.update_task_status(task_id="task-delete", expected_status="RUNNING", new_status="COMPLETED")
     store.create_budget(budget_id="budget-delete", run_id="run-report", task_id="task-delete")
     store.update_budget(budget_id="budget-delete", llm_calls=1, jev_calls=1, input_tokens=2, output_tokens=1, browser_steps=4, runtime_seconds=1.5, estimated_cost=0.01)
-    store.record_path(run_id="run-report", feature="Task", page="/tasks", state="deleted", action="refresh", result="FAILED_ASSERTION", last_tester="tester-a")
+    store.record_path(run_id="run-report", feature="Task", page="/tasks", page_state_id="deleted", action="refresh", result="FAILED_ASSERTION", last_tester="tester-a")
     steps = [{"action_type": "refresh", "expected_success": True}, {"action_type": "assertion", "target": "#task-1", "assertion": "hidden", "expected_success": False}]
     store.create_finding(finding_id="finding-b1", run_id="run-report", task_id="task-delete", title="Deleted Task reappears after refresh", status="REPRODUCED", expected_result="Deleted Task remains absent after refresh", actual_result="Deleted Task is visible again", first_seen_by="tester-a", severity_hint="HIGH", affected_role="member", affected_page="/tasks", reproduction_steps=steps)
     store.record_reproduction_attempt(finding_id="finding-b1", status="REPRODUCED", success=True, stable_steps=steps)
@@ -45,7 +45,8 @@ def create_report_store(path: Path) -> StateStore:
     store.create_finding(finding_id="finding-needs-confirmation", run_id="run-report", task_id="task-delete", title="Unclear response", status="NEEDS_CONFIRMATION", expected_result="", actual_result="response contained fake-report-secret", first_seen_by="tester-a", needs_confirmation=True, screening_reason="EXPECTED_BEHAVIOR_MISSING")
     store.add_evidence(evidence_id="evidence-b1", run_id="run-report", task_id="task-delete", finding_id="finding-b1", evidence_type="SCREENSHOT", relative_file_path="run-report/evidence/finding-b1/verification.png", url="http://demo.test/tasks", browser_session_id="browser-a", attempt_id="verify-1")
     store.append_event(event_id="browser-event", run_id="run-report", task_id="task-delete", tester_id="tester-a", browser_session_id="browser-a", event_type="BROWSER_ACTION", url="http://demo.test/tasks", tool="Playwright", action="refresh", result={"success": True}, latency_ms=12)
-    store.append_event(event_id="laya-event", run_id="run-report", task_id="task-delete", tester_id="tester-a", browser_session_id="browser-a", event_type="LAYA_CALL", url="http://demo.test", tool="Laya", action="select_candidate", result={"selected": "Tasks"}, latency_ms=3)
+    store.append_event(event_id="jev-event", run_id="run-report", task_id="task-delete", tester_id="tester-a", browser_session_id="browser-a", event_type="JEV_CALL", url="http://demo.test", tool="Jev", action="select_candidate", result={"selected": "Tasks"}, latency_ms=3)
+    store.append_event(event_id="tester-llm-event", run_id="run-report", task_id="task-delete", tester_id="tester-a", event_type="LLM_CALL", tool="Microsoft Agent Framework", action="complex_reasoning", result={"agent": "tester"}, latency_ms=7)
     store.finish_run(run_id="run-report", status="COMPLETED")
     return store
 
@@ -65,6 +66,7 @@ async def test_final_report_uses_state_facts_and_existing_main_agent_only_summar
     assert report["confirmed_bugs"][0]["evidence"][0]["evidence_id"] == "evidence-b1"
     assert report["needs_confirmation"][0]["observed_behavior"] == "response contained [REDACTED]"
     assert report["cost_and_performance"]["cost_per_confirmed_bug"] == pytest.approx(0.01)
+    assert report["cost_and_performance"]["average_llm_ms"] == 7
     assert report["full_evaluation"] == "Full Evaluation: NOT RUN"
 
     client = FakeSummaryClient()

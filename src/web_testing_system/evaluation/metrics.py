@@ -41,8 +41,8 @@ class MetricsCalculator:
         reproduction_count = sum(int(finding["reproduction_count"]) for finding in findings)
         reproduction_successes = sum(int(finding["reproduction_success_count"]) for finding in findings)
         browser_actions = [event for event in events if event["event_type"] == "BROWSER_ACTION"]
-        laya_calls = [event for event in events if event["event_type"] in {"LAYA_CALL", "JEV_CALL"}]
-        llm_calls = [event for event in events if event["event_type"] in {"LLM_CALL", "MAIN_LLM_CALL", "TESTER_LLM_CALL"}]
+        jev_calls = [event for event in events if event["event_type"] == "JEV_CALL"]
+        llm_calls = [event for event in events if event["event_type"] == "LLM_CALL"]
         computer_results = [event for event in events if event["event_type"] == "COMPUTER_USE_RESULT"]
         final_task_count = sum(task["status"] in {"COMPLETED", "FAILED", "STOPPED", "CANCELLED"} for task in tasks)
         repeated_visits = sum(max(int(path["visited_count"]) - 1, 0) for path in paths)
@@ -56,7 +56,7 @@ class MetricsCalculator:
             "exploration_duplication": self._ratio(repeated_visits, total_visits),
             "task_completion_rate": self._ratio(sum(task["status"] == "COMPLETED" for task in tasks), len(tasks)),
             "browser_action_success_rate": self._ratio(sum(bool(event["result"].get("success")) for event in browser_actions), len(browser_actions)),
-            "average_jev_laya_latency_ms": self._average_latency(laya_calls),
+            "average_jev_latency_ms": self._average_latency(jev_calls),
             "average_llm_latency_ms": self._average_latency(llm_calls),
             "total_test_time_seconds": self._total_test_time(run, events),
             "estimated_total_cost": round(estimated_cost, 6),

@@ -33,7 +33,7 @@ class FakeReplay:
 
 
 def replay_budget() -> BudgetGuard:
-    return BudgetGuard(BudgetLimits(max_runtime_seconds=60, max_llm_calls=0, max_input_tokens=0, max_output_tokens=0, max_laya_calls=0, max_computer_use_calls=0, max_task_steps=30, max_task_replans=0, max_browser_contexts=1))
+    return BudgetGuard(BudgetLimits(max_runtime_seconds=60, max_llm_calls=0, max_input_tokens=0, max_output_tokens=0, max_jev_calls=0, max_computer_use_calls=0, max_task_steps=30, max_task_replans=0, max_browser_contexts=1))
 
 
 def replay_executor(store: StateStore) -> PlaywrightExecutor:
@@ -112,8 +112,8 @@ async def test_finding_reproduces_in_fresh_context_then_verification_confirms_bu
     assert event_types.count("MINIMIZATION_ATTEMPT") == 2
     assert event_types.count("VERIFICATION_ATTEMPT") == 1
     assert "VERIFICATION_RESULT" in event_types
-    assert "LAYA_CALL" not in event_types
-    assert "TESTER_LLM_CALL" not in event_types
+    assert "JEV_CALL" not in event_types
+    assert "LLM_CALL" not in event_types
 
 
 @pytest.mark.integration

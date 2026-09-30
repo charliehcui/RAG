@@ -91,7 +91,7 @@ class DemoState:
 
     def get_project(self, session: DemoSession, project_id: str) -> dict[str, Any]:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_access(session, project)
             return self.public_project(project)
 
@@ -116,7 +116,7 @@ class DemoState:
         if not normalized_name and not self.bugs.b3_empty_project_name:
             raise DemoError(HTTPStatus.BAD_REQUEST, "project name is required")
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_owner_or_admin(session, project)
             old_project = self.public_project(project)
             project["name"] = normalized_name
@@ -124,7 +124,7 @@ class DemoState:
 
     def delete_project(self, session: DemoSession, project_id: str) -> None:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             allowed = session.role == "admin" or project["owner"] == session.username
             if self.bugs.b2_member_deletes_other_project and session.role == "member" and self._has_access(session, project):
                 allowed = True
@@ -135,7 +135,7 @@ class DemoState:
 
     def list_tasks(self, session: DemoSession, project_id: str) -> list[dict[str, Any]]:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_access(session, project)
             return [dict(task) for task in self.tasks.values() if task["project_id"] == project_id]
 
@@ -143,7 +143,7 @@ class DemoState:
         if not title.strip():
             raise DemoError(HTTPStatus.BAD_REQUEST, "task title is required")
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_access(session, project)
             task_id = f"task-{self.next_task}"
             self.next_task += 1
@@ -153,9 +153,9 @@ class DemoState:
 
     def update_task(self, session: DemoSession, project_id: str, task_id: str, title: str, status: str) -> dict[str, Any]:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_access(session, project)
-            task = self._task(project_id, task_id)
+            task = self._require_task(project_id, task_id)
             if title.strip():
                 task["title"] = title.strip()
             if status in {"OPEN", "DONE"}:
@@ -164,22 +164,22 @@ class DemoState:
 
     def delete_task(self, session: DemoSession, project_id: str, task_id: str) -> None:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_access(session, project)
-            self._task(project_id, task_id)
+            self._require_task(project_id, task_id)
             if not self.bugs.b1_deleted_task_reappears:
                 del self.tasks[task_id]
 
     def list_members(self, session: DemoSession, project_id: str) -> list[dict[str, str]]:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_access(session, project)
             usernames = [project["owner"], *project["members"]]
             return [self.public_user(self.users[username]) for username in usernames]
 
     def add_member(self, session: DemoSession, project_id: str, username: str) -> dict[str, str]:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_owner_or_admin(session, project)
             user = self.users.get(username)
             if user is None or user["role"] != "member":
@@ -190,7 +190,7 @@ class DemoState:
 
     def update_member(self, session: DemoSession, project_id: str, username: str, display_name: str) -> dict[str, str]:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_owner_or_admin(session, project)
             if username != project["owner"] and username not in project["members"]:
                 raise DemoError(HTTPStatus.NOT_FOUND, "member not found")
@@ -200,19 +200,19 @@ class DemoState:
 
     def remove_member(self, session: DemoSession, project_id: str, username: str) -> None:
         with self.lock:
-            project = self._project(project_id)
+            project = self._require_project(project_id)
             self._require_owner_or_admin(session, project)
             if username not in project["members"]:
                 raise DemoError(HTTPStatus.NOT_FOUND, "member not found")
             project["members"].remove(username)
 
-    def _project(self, project_id: str) -> dict[str, Any]:
+    def _require_project(self, project_id: str) -> dict[str, Any]:
         project = self.projects.get(project_id)
         if project is None:
             raise DemoError(HTTPStatus.NOT_FOUND, "project not found")
         return project
 
-    def _task(self, project_id: str, task_id: str) -> dict[str, Any]:
+    def _require_task(self, project_id: str, task_id: str) -> dict[str, Any]:
         task = self.tasks.get(task_id)
         if task is None or task["project_id"] != project_id:
             raise DemoError(HTTPStatus.NOT_FOUND, "task not found")
@@ -292,13 +292,13 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path = urlparse(self.path).path
         try:
-            data = self._read_json()
+            request_body = self._read_json()
             if path == "/api/register":
-                user = self.state.register(str(data.get("username", "")), str(data.get("password", "")), str(data.get("display_name", "")))
+                user = self.state.register(str(request_body.get("username", "")), str(request_body.get("password", "")), str(request_body.get("display_name", "")))
                 self._send_json(HTTPStatus.CREATED, {"user": user})
                 return
             if path == "/api/login":
-                token, user = self.state.login(str(data.get("username", "")), str(data.get("password", "")))
+                token, user = self.state.login(str(request_body.get("username", "")), str(request_body.get("password", "")))
                 self._send_json(HTTPStatus.OK, {"user": user}, cookie=token)
                 return
             if path == "/api/logout":
@@ -314,15 +314,15 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
             session = self.state.get_session(self._session_token())
             parts = self._parts(path)
             if parts == ["api", "projects"]:
-                project = self.state.create_project(session, str(data.get("name", "")), str(data["submission_id"]) if data.get("submission_id") else None)
+                project = self.state.create_project(session, str(request_body.get("name", "")), str(request_body["submission_id"]) if request_body.get("submission_id") else None)
                 self._send_json(HTTPStatus.CREATED, {"project": project})
                 return
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "tasks":
-                task = self.state.create_task(session, parts[2], str(data.get("title", "")))
+                task = self.state.create_task(session, parts[2], str(request_body.get("title", "")))
                 self._send_json(HTTPStatus.CREATED, {"task": task})
                 return
             if len(parts) == 4 and parts[:2] == ["api", "projects"] and parts[3] == "members":
-                user = self.state.add_member(session, parts[2], str(data.get("username", "")))
+                user = self.state.add_member(session, parts[2], str(request_body.get("username", "")))
                 self._send_json(HTTPStatus.CREATED, {"member": user})
                 return
             raise DemoError(HTTPStatus.NOT_FOUND, "route not found")
@@ -331,19 +331,19 @@ class DemoRequestHandler(BaseHTTPRequestHandler):
 
     def do_PATCH(self) -> None:
         try:
-            data = self._read_json()
+            request_body = self._read_json()
             session = self.state.get_session(self._session_token())
             parts = self._parts(urlparse(self.path).path)
             if len(parts) == 3 and parts[:2] == ["api", "projects"]:
-                project = self.state.update_project(session, parts[2], str(data.get("name", "")))
+                project = self.state.update_project(session, parts[2], str(request_body.get("name", "")))
                 self._send_json(HTTPStatus.OK, {"project": project})
                 return
             if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "tasks":
-                task = self.state.update_task(session, parts[2], parts[4], str(data.get("title", "")), str(data.get("status", "")))
+                task = self.state.update_task(session, parts[2], parts[4], str(request_body.get("title", "")), str(request_body.get("status", "")))
                 self._send_json(HTTPStatus.OK, {"task": task})
                 return
             if len(parts) == 5 and parts[:2] == ["api", "projects"] and parts[3] == "members":
-                member = self.state.update_member(session, parts[2], parts[4], str(data.get("display_name", "")))
+                member = self.state.update_member(session, parts[2], parts[4], str(request_body.get("display_name", "")))
                 self._send_json(HTTPStatus.OK, {"member": member})
                 return
             raise DemoError(HTTPStatus.NOT_FOUND, "route not found")

@@ -80,7 +80,7 @@ class TesterAgentTools:
         return (await self.runtime.execute_known_action(action)).to_dict()
 
     async def explore_unknown_path(self, current_goal: str) -> dict[str, Any]:
-        """Use Candidate Builder and Laya for an unknown legal path."""
+        """Use Candidate Builder and Jev for an unknown legal path."""
         return asdict(await self.runtime.explore_unknown_path(current_goal))
 
     def read_coverage(self) -> list[dict[str, Any]]:
@@ -107,7 +107,7 @@ class TesterAgentTools:
         self,
         feature: str,
         page: str,
-        state: str,
+        page_state_id: str,
         action: str,
         new_reason: str | None = None,
     ) -> dict[str, Any]:
@@ -116,7 +116,7 @@ class TesterAgentTools:
             run_id=self.assignment.run_id,
             feature=feature,
             page=page,
-            state=state,
+            page_state_id=page_state_id,
             action=action,
         )
         should_explore = existing is None or bool(new_reason and new_reason.strip())
@@ -134,7 +134,7 @@ class TesterAgentTools:
                 result={
                     "feature": feature,
                     "page": page,
-                    "state": state,
+                    "page_state_id": page_state_id,
                     "action": action,
                     "existing_path_id": existing["path_id"],
                 },
@@ -215,17 +215,11 @@ class TesterAgentTools:
         error_text: str | None = None,
     ) -> dict[str, Any]:
         """Record an observation without declaring a confirmed bug."""
-        return self.store.create_finding(
-            finding_id=f"finding-{uuid4().hex}",
-            run_id=self.assignment.run_id,
-            task_id=self.assignment.task_id,
+        return self.record_finding(
             title=title,
             status="OBSERVATION",
             expected_result=expected_result,
             actual_result=actual_result,
-            first_seen_by=self.assignment.tester_id,
-            needs_confirmation=True,
-            affected_role=self.assignment.role,
             affected_page=affected_page,
             action=action,
             error_text=error_text,
@@ -344,10 +338,11 @@ class TesterRunner:
             task_id=self.assignment.task_id,
             tester_id=self.assignment.tester_id,
             browser_session_id=self.runtime.browser_session_id,
-            event_type="TESTER_LLM_CALL",
+            event_type="LLM_CALL",
             tool="Microsoft Agent Framework",
             action="complex_reasoning",
             result={
+                "agent": "tester",
                 "finish_reason": str(response.finish_reason)
                 if response.finish_reason is not None
                 else None

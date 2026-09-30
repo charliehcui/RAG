@@ -88,7 +88,6 @@ class LocalTesterScheduler:
             remaining_budget.get(key) == 0
             for key in (
                 "browser_steps",
-                "max_browser_steps_per_task",
                 "max_runtime_seconds",
             )
         ):

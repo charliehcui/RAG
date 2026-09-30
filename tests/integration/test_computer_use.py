@@ -43,7 +43,7 @@ class FakeComputerUseClient:
 
 
 def computer_budget(max_calls: int = 4) -> BudgetGuard:
-    return BudgetGuard(BudgetLimits(max_runtime_seconds=60, max_llm_calls=0, max_input_tokens=0, max_output_tokens=0, max_laya_calls=0, max_computer_use_calls=max_calls, max_task_steps=10, max_task_replans=0, max_browser_contexts=1))
+    return BudgetGuard(BudgetLimits(max_runtime_seconds=60, max_llm_calls=0, max_input_tokens=0, max_output_tokens=0, max_jev_calls=0, max_computer_use_calls=max_calls, max_task_steps=10, max_task_replans=0, max_browser_contexts=1))
 
 
 @pytest.mark.integration

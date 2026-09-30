@@ -26,13 +26,14 @@ class Settings(BaseSettings):
 
     gemini_api_key: SecretStr | None = None
     groq_api_key: SecretStr | None = None
+    openrouter_api_key: SecretStr | None = None
     main_agent_provider: Literal["gemini"] = "gemini"
     main_agent_model: str | None = None
     main_agent_fallback_model: str | None = None
     tester_agent_provider: Literal["gemini", "groq"] = "gemini"
     tester_agent_model: str | None = None
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    laya_model: Literal["english", "multilingual", "typed-decisions"] = "english"
+    jev_model: str = "typesafe/jev-1.13"
     computer_use_provider: Literal["gemini"] = "gemini"
     computer_use_model: str | None = None
     full_evaluation: bool = False
@@ -72,7 +73,7 @@ class AccountReference(BaseModel):
     secret_reference: str | None = None
 
 
-class ResetHook(BaseModel):
+class ResetHookConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     hook_type: str = Field(min_length=1)
@@ -109,7 +110,7 @@ class RunConfig(BaseModel):
     denied_operations: list[str] = Field(min_length=1)
     expected_behaviors: list[ExpectedBehavior] = Field(default_factory=list)
     application_version: str | None = None
-    reset_hook: ResetHook | None = None
+    reset_hook: ResetHookConfig | None = None
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
 
     @field_validator("test_goal", "application_version")

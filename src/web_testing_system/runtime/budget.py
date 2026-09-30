@@ -19,7 +19,7 @@ class BudgetLimits:
     max_llm_calls: int
     max_input_tokens: int
     max_output_tokens: int
-    max_laya_calls: int
+    max_jev_calls: int
     max_computer_use_calls: int
     max_task_steps: int
     max_task_replans: int
@@ -32,7 +32,7 @@ class BudgetUsage:
     llm_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
-    laya_calls: int = 0
+    jev_calls: int = 0
     computer_use_calls: int = 0
     task_steps: int = 0
     task_replans: int = 0
@@ -61,10 +61,10 @@ class BudgetGuard:
                 self.limits.max_llm_calls,
                 "MAX_LLM_CALLS_REACHED",
             ),
-            "laya": (
-                self.usage.laya_calls,
-                self.limits.max_laya_calls,
-                "MAX_LAYA_CALLS_REACHED",
+            "jev": (
+                self.usage.jev_calls,
+                self.limits.max_jev_calls,
+                "MAX_JEV_CALLS_REACHED",
             ),
             "computer_use": (
                 self.usage.computer_use_calls,
@@ -92,18 +92,20 @@ class BudgetGuard:
         used, limit, reason = limits[operation]
         if used >= limit:
             raise BudgetExceededError(reason)
-        if operation == "llm" and (
+        if operation in {"llm", "jev"} and (
             self.usage.input_tokens >= self.limits.max_input_tokens
             or self.usage.output_tokens >= self.limits.max_output_tokens
         ):
-            raise BudgetExceededError("MAX_LLM_TOKENS_REACHED")
+            raise BudgetExceededError("MAX_LLM_TOKENS_REACHED" if operation == "llm" else "MAX_JEV_TOKENS_REACHED")
 
     def record_browser_step(self, *, runtime_seconds: float) -> None:
         self.usage.task_steps += 1
         self._record_runtime(runtime_seconds)
 
-    def record_laya_call(self, *, runtime_seconds: float, cost: float) -> None:
-        self.usage.laya_calls += 1
+    def record_jev_call(self, *, runtime_seconds: float, cost: float, input_tokens: int = 0, output_tokens: int = 0) -> None:
+        self.usage.jev_calls += 1
+        self.usage.input_tokens += max(input_tokens, 0)
+        self.usage.output_tokens += max(output_tokens, 0)
         self.usage.estimated_cost += max(cost, 0)
         self._record_runtime(runtime_seconds)
 
@@ -143,11 +145,7 @@ class BudgetGuard:
         return self.usage.no_progress_steps >= self.limits.max_no_progress_steps
 
     def snapshot(self) -> dict[str, Any]:
-        snapshot = asdict(self.usage)
-        snapshot["runtime_seconds"] = max(
-            self.usage.runtime_seconds, monotonic() - self.started_at
-        )
-        return snapshot
+        return asdict(self.usage)
 
     def _record_runtime(self, runtime_seconds: float) -> None:
         self.usage.runtime_seconds += max(runtime_seconds, 0)

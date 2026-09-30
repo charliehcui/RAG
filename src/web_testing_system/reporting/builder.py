@@ -134,7 +134,7 @@ class FinalReportBuilder:
             **totals,
             "total_run_time_seconds": FinalReportBuilder._run_time_seconds(run, events),
             "average_browser_action_ms": FinalReportBuilder._average_latency(events, "BROWSER_ACTION"),
-            "average_jev_decision_ms": FinalReportBuilder._average_latency(events, "LAYA_CALL"),
+            "average_jev_decision_ms": FinalReportBuilder._average_latency(events, "JEV_CALL"),
             "average_llm_ms": FinalReportBuilder._average_latency(events, "LLM_CALL"),
             "average_computer_use_ms": FinalReportBuilder._average_latency(events, "COMPUTER_USE_RESULT"),
             "cost_per_confirmed_bug": estimated_cost / confirmed_bug_count if confirmed_bug_count else "N/A",

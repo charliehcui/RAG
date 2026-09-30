@@ -8,12 +8,12 @@ import pytest
 
 from web_testing_system.config import Settings
 from web_testing_system.evaluation import (
+    AcceptanceChecklist,
     EvaluationControls,
     EvaluationExecution,
     EvaluationMode,
     EvaluationRunner,
     EvaluationRunRecord,
-    FinalAcceptanceChecker,
     FullEvaluationGate,
     FullEvaluationGateResult,
     build_evaluation_plan,
@@ -44,7 +44,7 @@ class RealExecutor(FakeExecutor):
 
 
 def complete_acceptance(*, task23_passed: bool = True, full_evaluation_ran: bool = False, agent_types: tuple[str, ...] = ("Main Agent", "Tester Agent")):
-    checker = FinalAcceptanceChecker()
+    checker = AcceptanceChecklist()
     checks = {name: True for name in checker.REQUIRED_CAPABILITIES}
     return checker.check(capability_checks=checks, agent_types=agent_types, task23_passed=task23_passed, full_evaluation_ran=full_evaluation_ran)
 
@@ -69,7 +69,7 @@ def test_six_mode_variants_select_the_required_execution_paths() -> None:
     tester_routes = [build_execution_route(variant, full_evaluation_enabled=False) for variant in plans[EvaluationMode.TESTER_COUNT].variants]
     assert [route.tester_count for route in tester_routes] == [1, 2]
     decision_routes = [build_execution_route(variant, full_evaluation_enabled=False) for variant in plans[EvaluationMode.DECISION_ENGINE].variants]
-    assert [route.candidate_selection for route in decision_routes] == ["LAYA_JEV", "TESTER_LLM_EVERY_DECISION"]
+    assert [route.candidate_selection for route in decision_routes] == ["JEV", "TESTER_LLM_EVERY_DECISION"]
     coordination_routes = [build_execution_route(variant, full_evaluation_enabled=False) for variant in plans[EvaluationMode.COORDINATION].variants]
     assert [route.coordination for route in coordination_routes] == ["SHARED_STATE", "INDEPENDENT_TESTER_STATE"]
     reproduction_routes = [build_execution_route(variant, full_evaluation_enabled=False) for variant in plans[EvaluationMode.REPRODUCTION].variants]
