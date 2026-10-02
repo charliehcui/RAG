@@ -45,6 +45,9 @@ class ComputerUseDecision:
     risk: str = "LOW"
     cost: float = 0
     error: str | None = None
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str | None = None
 
 
 class ComputerUseClient(Protocol):
@@ -62,7 +65,7 @@ class GeminiComputerUseClient:
         if settings.computer_use_model is None or not settings.computer_use_model.strip():
             raise ValueError("COMPUTER_USE_MODEL is required")
         self.model = settings.computer_use_model
-        self.client = client or genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+        self.client = client or genai.Client(api_key=settings.gemini_api_key.get_secret_value(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
 
     async def execute(self, request: ComputerUseRequest) -> ComputerUseDecision:
         excluded_actions = self._excluded_actions(request.allowed_visual_actions)
@@ -78,16 +81,20 @@ class GeminiComputerUseClient:
                 tools=[types.Tool(computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER, excluded_predefined_functions=excluded_actions, enable_prompt_injection_detection=True))]
             ),
         )
+        usage = getattr(response, "usage_metadata", None)
+        input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
+        output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
+        model = str(getattr(response, "model_version", None) or self.model)
         function_call = self._first_function_call(response)
         if function_call is None:
-            return ComputerUseDecision(status="REFUSED", error="NO_COMPUTER_USE_ACTION")
+            return ComputerUseDecision(status="REFUSED", error="NO_COMPUTER_USE_ACTION", input_tokens=input_tokens, output_tokens=output_tokens, model=model)
         arguments = dict(function_call.args or {})
         safety_error = self._safety_error(arguments)
         if safety_error is not None:
-            return ComputerUseDecision(status="REFUSED", error=safety_error)
+            return ComputerUseDecision(status="REFUSED", error=safety_error, input_tokens=input_tokens, output_tokens=output_tokens, model=model)
         width, height = self._png_size(request.screenshot)
         if function_call.name in {"click", "click_at"} and "click" in request.allowed_visual_actions:
-            return ComputerUseDecision(status="ACTION", action="click", x=self._scale(arguments.get("x"), width), y=self._scale(arguments.get("y"), height))
+            return ComputerUseDecision(status="ACTION", action="click", x=self._scale(arguments.get("x"), width), y=self._scale(arguments.get("y"), height), input_tokens=input_tokens, output_tokens=output_tokens, model=model)
         if function_call.name in {"drag", "drag_and_drop"} and "drag" in request.allowed_visual_actions:
             return ComputerUseDecision(
                 status="ACTION",
@@ -96,8 +103,11 @@ class GeminiComputerUseClient:
                 y=self._scale(arguments.get("start_y", arguments.get("y")), height),
                 to_x=self._scale(arguments.get("end_x", arguments.get("destination_x")), width),
                 to_y=self._scale(arguments.get("end_y", arguments.get("destination_y")), height),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=model,
             )
-        return ComputerUseDecision(status="REFUSED", error="MODEL_RETURNED_DISALLOWED_ACTION")
+        return ComputerUseDecision(status="REFUSED", error="MODEL_RETURNED_DISALLOWED_ACTION", input_tokens=input_tokens, output_tokens=output_tokens, model=model)
 
     @staticmethod
     def _first_function_call(response: Any) -> Any | None:
@@ -200,6 +210,14 @@ class ComputerUseController:
         remaining_budget = self.budget.limits.max_computer_use_calls - self.budget.usage.computer_use_calls
         request = ComputerUseRequest(screenshot=screenshot, goal=goal, url=page.url, allowed_visual_actions=allowed_visual_actions, remaining_budget=remaining_budget)
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, browser_session_id=browser_session_id, event_type="COMPUTER_USE_REQUEST", url=page.url, tool="ComputerUseGateway", action="request_visual_action", result={"finding_id": finding_id, "goal": goal, "component_type": component, "playwright_failure_reason": playwright_failure_reason, "allowed_visual_actions": list(allowed_visual_actions), "remaining_budget": remaining_budget}, evidence_references=[before_evidence_id], latency_ms=0)
+        run = self.store.get_run(self.run_id)
+        if run is None:
+            raise KeyError(f"unknown run: {self.run_id}")
+        real_provider = isinstance(self.client, GeminiComputerUseClient)
+        if run["remaining_budget"].get("max_computer_use_calls", self.budget.limits.max_computer_use_calls) <= 0 or (real_provider and run["remaining_budget"].get("max_llm_calls", self.budget.limits.max_llm_calls) <= 0):
+            self._record_stop(browser_session_id, page.url, "MAX_PROVIDER_CALLS_REACHED")
+            return ComputerUseResult("STOPPED", "MAX_PROVIDER_CALLS_REACHED", None, None, None, ())
+        self.store.update_budget(budget_id=self.budget_id, computer_use_calls=1, llm_calls=int(real_provider))
         started = perf_counter()
         started_at = datetime.now(UTC).isoformat()
         try:
@@ -207,13 +225,21 @@ class ComputerUseController:
         except Exception as error:
             duration_seconds = perf_counter() - started
             self.budget.record_computer_use_call(runtime_seconds=duration_seconds, cost=0)
-            self.store.update_budget(budget_id=self.budget_id, computer_use_calls=1, runtime_seconds=duration_seconds)
+            if real_provider:
+                self.budget.record_llm_call(input_tokens=0, output_tokens=0, runtime_seconds=0, cost=0)
+            self.store.update_budget(budget_id=self.budget_id, runtime_seconds=duration_seconds)
+            if real_provider:
+                self._record_provider_event(latency_ms=duration_seconds * 1_000, success=False, input_tokens=0, output_tokens=0, model=self.model, error_type=type(error).__name__)
             self.consecutive_failures += 1
             return await self._finish(page=page, browser_session_id=browser_session_id, finding_id=finding_id, attempt_id=attempt_id, before_state=before_state, before_evidence_id=before_evidence_id, status="FAILED", reason=str(error), action=None, started_at=started_at, latency_ms=duration_seconds * 1_000, cost=0)
         duration_seconds = perf_counter() - started
         recorded_cost = max(decision.cost, 0)
         self.budget.record_computer_use_call(runtime_seconds=duration_seconds, cost=recorded_cost)
-        self.store.update_budget(budget_id=self.budget_id, computer_use_calls=1, runtime_seconds=duration_seconds, estimated_cost=recorded_cost)
+        if real_provider:
+            self.budget.record_llm_call(input_tokens=decision.input_tokens, output_tokens=decision.output_tokens, runtime_seconds=0, cost=0)
+        self.store.update_budget(budget_id=self.budget_id, input_tokens=decision.input_tokens if real_provider else 0, output_tokens=decision.output_tokens if real_provider else 0, runtime_seconds=duration_seconds, estimated_cost=recorded_cost)
+        if real_provider:
+            self._record_provider_event(latency_ms=duration_seconds * 1_000, success=True, input_tokens=decision.input_tokens, output_tokens=decision.output_tokens, model=decision.model, error_type=None)
         validation_error = self._validate_decision(decision, allowed_visual_actions)
         if validation_error is None:
             validation_error = await self._validate_coordinates(page, decision)
@@ -228,6 +254,9 @@ class ComputerUseController:
             return await self._finish(page=page, browser_session_id=browser_session_id, finding_id=finding_id, attempt_id=attempt_id, before_state=before_state, before_evidence_id=before_evidence_id, status="FAILED", reason=str(error), action=decision.action, started_at=started_at, latency_ms=duration_seconds * 1_000, cost=recorded_cost)
         self.consecutive_failures = 0
         return await self._finish(page=page, browser_session_id=browser_session_id, finding_id=finding_id, attempt_id=attempt_id, before_state=before_state, before_evidence_id=before_evidence_id, status="RETURN_TO_PLAYWRIGHT", reason=None, action=decision.action, started_at=started_at, latency_ms=duration_seconds * 1_000, cost=recorded_cost)
+
+    def _record_provider_event(self, *, latency_ms: float, success: bool, input_tokens: int, output_tokens: int, model: str | None, error_type: str | None) -> None:
+        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool="gemini", action="computer_use_provider_request", result={"agent": "computer_use", "provider": "gemini", "model": model, "success": success, "error_type": error_type, "input_tokens": input_tokens, "output_tokens": output_tokens, "usage_source": "provider" if success else "unavailable"}, latency_ms=latency_ms)
 
     def _validate_decision(self, decision: ComputerUseDecision, allowed_actions: tuple[str, ...]) -> str | None:
         if decision.status == "REFUSED":

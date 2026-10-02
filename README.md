@@ -29,12 +29,14 @@ The reset endpoint is `POST /test/reset` and is available only when the server i
 
 Run a configured test with `python -m web_testing_system path\to\run_config.json`.
 The JSON file follows `RunConfig`; the resulting report is written under `artifacts/runs/<run_id>/report.json`.
+The entry point uses the local AsyncIO Scheduler. Set `budget.max_testers` to 1 for Single Tester or 2–4 for concurrent Testers; each Task gets its own MAF Session and Browser Context.
 
 Development tests use Fake providers. They do not call real Gemini, Groq, Jev, or Computer Use services, and `FULL_EVALUATION` remains disabled by default.
 
 ## Metrics and Evaluation
 
 `MetricsCalculator` derives run, finding, browser, latency, cost, recovery, stability, and report-usability metrics from SQLite Shared State. Ground Truth is supplied only after a run for recall and false-positive calculation. Rates with no denominator are reported as `N/A`.
+Gemini and Groq requests record Provider-returned token usage, model, success/failure, and latency as `LLM_CALL` events. Jev keeps its separate `JEV_CALL` accounting.
 
 The six controlled comparison modes are:
 
@@ -45,9 +47,10 @@ The six controlled comparison modes are:
 5. Playwright-first vs Model-every-step
 6. Computer Use Fallback On vs Off
 
-Each comparison keeps the Demo version, seeded bugs, model configuration, budgets, accounts, initial data, and scope fixed. Every run resets the Demo state and writes to an independent evidence directory. Raw results and Run 1/2/3, median, minimum, and maximum summaries are stored under the selected evaluation output directory.
+`FormalRunExecutor` passes each variant's route to the same `run()` used by the CLI. Each comparison keeps the Demo version, seeded bugs, model configuration, budgets, accounts, initial data, and scope fixed. Every run resets the Demo state and writes to an independent evidence directory. Raw results and Run 1/2/3, median, minimum, and maximum summaries are stored under the selected evaluation output directory.
+Each Evaluation Run uses its own SQLite file so repeated Task IDs from separate variants do not conflict.
 
-Full Evaluation has three independent gates: `FULL_EVALUATION=true`, an explicit caller decision, and successful Task 23 plus final functional acceptance. Model-every-step is also rejected outside Full Evaluation. Normal test commands cannot start the full experiment matrix.
+Full Evaluation has three independent gates: `FULL_EVALUATION=true`, an explicit caller decision, and successful Task 23 plus final functional acceptance. Model-every-step is permitted in Fake Provider samples; real execution still requires the Full Evaluation gate. Normal test commands cannot start the full experiment matrix.
 
 ## Real Provider Configuration
 

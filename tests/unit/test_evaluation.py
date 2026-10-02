@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from web_testing_system.config import Settings
+from web_testing_system.config import RunConfig, Settings
 from web_testing_system.evaluation import (
     AcceptanceChecklist,
     EvaluationControls,
@@ -14,6 +14,7 @@ from web_testing_system.evaluation import (
     EvaluationMode,
     EvaluationRunner,
     EvaluationRunRecord,
+    FormalRunExecutor,
     FullEvaluationGate,
     FullEvaluationGateResult,
     build_evaluation_plan,
@@ -80,7 +81,10 @@ def test_six_mode_variants_select_the_required_execution_paths() -> None:
     assert build_execution_route(action_variants[0], full_evaluation_enabled=False).known_action == "PLAYWRIGHT"
     with pytest.raises(PermissionError, match="MODEL_EVERY_STEP_REQUIRES_FULL_EVALUATION"):
         build_execution_route(action_variants[1], full_evaluation_enabled=False)
-    assert build_execution_route(action_variants[1], full_evaluation_enabled=True).known_action == "TESTER_LLM_EVERY_STEP"
+    model_every_step_route = build_execution_route(action_variants[1], full_evaluation_enabled=True)
+    assert model_every_step_route.known_action == "TESTER_LLM_EVERY_STEP"
+    assert model_every_step_route.candidate_selection == "TESTER_LLM_EVERY_DECISION"
+    assert model_every_step_route.full_evaluation is True
 
 
 def test_invalid_policy_cannot_bypass_the_model_every_step_gate() -> None:
@@ -172,3 +176,40 @@ def test_final_acceptance_and_full_evaluation_gate_require_every_condition() -> 
     assert not extra_agent.passed
     assert gate.check(settings=enabled_settings, acceptance=extra_agent, explicitly_enabled=True).reason == "FINAL_ACCEPTANCE_INCOMPLETE"
     assert gate.check(settings=enabled_settings, acceptance=complete, explicitly_enabled=True).allowed
+
+
+@pytest.mark.asyncio
+async def test_all_fake_evaluation_modes_dispatch_to_formal_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = RunConfig.model_validate({"target_url": "http://app.test/", "test_goal": "Test scoped app", "focus_features": ["Project"], "allowed_scope": ["/"], "account_references": [{"identity_reference": "admin", "role": "admin", "permissions": ["read"]}], "test_data": {}, "denied_operations": ["production deletion"]})
+    settings = Settings(_env_file=None, full_evaluation=False, state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
+    routes: list[object] = []
+    database_paths: list[Path] = []
+
+    async def fake_run(run_config: RunConfig, run_settings: Settings, **kwargs: object) -> Path:
+        assert run_config is config
+        assert run_settings.state_db_path == run_settings.artifacts_dir / "state.db"
+        routes.append(kwargs["route"])
+        database_paths.append(run_settings.state_db_path)
+        path = run_settings.artifacts_dir / str(kwargs["run_id"]) / "report.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"test_summary": {"run_status": "COMPLETED"}}), encoding="utf-8")
+        return path
+
+    monkeypatch.setattr("web_testing_system.run.run", fake_run)
+    monkeypatch.setattr("web_testing_system.evaluation.runner.MetricsCalculator.calculate", lambda self, run_id, **kwargs: {"score": 1.0})
+    executor = FormalRunExecutor(config, settings, main_client_factory=lambda: object(), tester_client_factory=lambda: object(), jev_selector_factory=lambda: object(), computer_use_client_factory=lambda: object())  # type: ignore[arg-type]
+    assert executor.is_fake
+
+    async def reset() -> None:
+        return None
+
+    for mode in EvaluationMode:
+        plan = build_evaluation_plan(mode, make_controls())
+        records = await EvaluationRunner(tmp_path / "evaluation").run_fake_sample(plan=plan, executor=executor, reset=reset)
+        assert len(records) == 2 and all(record.status == "COMPLETED" for record in records)
+
+    assert len(routes) == 12
+    assert len(set(database_paths)) == 12
+    assert {route.tester_count for route in routes[:2]} == {1, 2}
+    assert {route.known_action for route in routes[8:10]} == {"PLAYWRIGHT", "TESTER_LLM_EVERY_STEP"}
+    assert settings.full_evaluation is False

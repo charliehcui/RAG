@@ -31,7 +31,7 @@ class ScheduleResult:
 
 
 class LocalTesterScheduler:
-    """Claim and run one priority-ordered batch with two to four local Testers."""
+    """Claim and run one priority-ordered batch with one to four local Testers."""
 
     def __init__(
         self,
@@ -42,9 +42,9 @@ class LocalTesterScheduler:
         max_testers: int,
         max_browser_contexts: int,
     ) -> None:
-        if not 2 <= len(testers) <= 4:
-            raise ValueError("the local Tester pool must contain 2 to 4 instances")
-        if not 2 <= max_testers <= 4 or not 1 <= max_browser_contexts <= 4:
+        if not 1 <= len(testers) <= 4:
+            raise ValueError("the local Tester pool must contain 1 to 4 instances")
+        if not 1 <= max_testers <= 4 or not 1 <= max_browser_contexts <= 4:
             raise ValueError("Tester and Browser Context limits must be within the supported range")
         tester_ids = [tester.tester_id for tester in testers]
         session_ids = [tester.runner.session.session_id for tester in testers]

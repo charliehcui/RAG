@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -29,11 +30,20 @@ from web_testing_system.config import (
     RunConfig,
     Settings,
 )
+from web_testing_system.evaluation.runner import (
+    EvaluationControls,
+    EvaluationMode,
+    EvaluationRunner,
+    ExecutionRoute,
+    FormalRunExecutor,
+    build_evaluation_plan,
+)
 from web_testing_system.evidence import EvidenceStore
 from web_testing_system.findings import FindingService, ScreeningSignals
 from web_testing_system.reporting import FinalReportBuilder
 from web_testing_system.reproduction import ReplayPlanBuilder, ReproductionRunner
 from web_testing_system.reproduction.replay import DeterministicReplay
+from web_testing_system.run import run as run_formal
 from web_testing_system.runtime.browser import BrowserManager
 from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
 from web_testing_system.runtime.candidates import CandidateBuilder, PageStateReader
@@ -107,6 +117,67 @@ class FakeTesterClient(FunctionInvocationLayer, BaseChatClient):
         return ChatResponse(messages=[Message(role="assistant", contents=["Done."])], usage_details={"input_token_count": 1, "output_token_count": 1})
 
 
+class ConcurrentTesterClient(FakeTesterClient):
+    active = 0
+    maximum_active = 0
+    expected_active = 1
+
+    async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+        type(self).active += 1
+        type(self).maximum_active = max(type(self).maximum_active, type(self).active)
+        try:
+            async with asyncio.timeout(3):
+                while type(self).maximum_active < type(self).expected_active:
+                    await asyncio.sleep(0.01)
+            return await super()._inner_get_response(messages=messages, stream=stream, options=options, **kwargs)
+        finally:
+            type(self).active -= 1
+
+
+class ModelStepTesterClient(FakeTesterClient):
+    async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+        if "Decide whether the next scoped known action" in "\n".join(message.text for message in messages):
+            return ChatResponse(messages=[Message(role="assistant", contents=["APPROVE"])], usage_details={"input_token_count": 1, "output_token_count": 1})
+        return await super()._inner_get_response(messages=messages, stream=stream, options=options, **kwargs)
+
+
+class ReplanningMainClient(FakeGeminiMainClient):
+    def _initial(self) -> ChatResponse:
+        if self.step == 1:
+            return self._tool("todo", "todos_add", {"todos": [{"title": "Test Task deletion"}, {"title": "Test Project flow"}]})
+        if self.step == 2:
+            return self._tool("delete", "create_task", {"task_id": "task-delete", "goal": "Test Task deletion", "feature": "Task", "priority": "P0", "dependencies": [], "step_budget": 20, "data_requirements": {"role": "member"}, "scope_targets": ["/"], "required_operations": ["read", "delete"]})
+        if self.step == 3:
+            return self._tool("project", "create_task", {"task_id": "task-project", "goal": "Test Project flow", "feature": "Project", "priority": "P1", "dependencies": ["task-delete"], "step_budget": 20, "data_requirements": {"role": "admin"}, "scope_targets": ["/"], "required_operations": ["read"]})
+        return self._text("Initial plan ready.")
+
+
+class FourTaskMainClient(FakeGeminiMainClient):
+    def _initial(self) -> ChatResponse:
+        if self.step == 1:
+            return self._tool("todo", "todos_add", {"todos": [{"title": f"Test Project {index}"} for index in range(4)]})
+        if 2 <= self.step <= 5:
+            index = self.step - 2
+            return self._tool(f"task-{index}", "create_task", {"task_id": f"task-{index}", "goal": f"Test Project {index}", "feature": "Project", "priority": "P1", "dependencies": [], "step_budget": 20, "data_requirements": {"role": "admin"}, "scope_targets": ["/"], "required_operations": ["read"]})
+        return self._text("Four tasks ready.")
+
+
+class FindingTesterClient(FakeTesterClient):
+    def __init__(self, store: StateStore, main_client: ReplanningMainClient, run_id: str) -> None:
+        super().__init__()
+        self.store = store
+        self.main_client = main_client
+        self.run_id = run_id
+
+    async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+        if "Execute assigned Task task-delete:" in "\n".join(message.text for message in messages) and self.main_client.phase == "initial":
+            task = self.store.get_task("task-delete")
+            assert task is not None and task["assigned_tester"] is not None
+            self.store.create_finding(finding_id="finding-delete", run_id=self.run_id, task_id="task-delete", title="Task delete persistence", status="ANOMALY", expected_result="Deleted Task stays absent", actual_result="Deleted Task reappears", first_seen_by=str(task["assigned_tester"]))
+            self.main_client.begin_replan("finding-delete")
+        return await super()._inner_get_response(messages=messages, stream=stream, options=options, **kwargs)
+
+
 class FakeJevClient:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -142,6 +213,91 @@ def make_run_config(base_url: str) -> RunConfig:
         application_version=DEMO_VERSION,
         budget=BudgetConfig(max_runtime_seconds=60, max_llm_calls=5, max_input_tokens=500, max_output_tokens=500, max_jev_calls=5, max_computer_use_calls=0, max_testers=2, max_browser_steps_per_task=100, max_replans_per_task=1, max_reproductions_per_finding=2, max_parallel_browser_contexts=2),
     )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tester_count, expected_concurrency", [(1, 1), (2, 2), (4, 4)])
+async def test_formal_run_uses_scheduler_with_single_or_concurrent_testers(tmp_path: Path, tester_count: int, expected_concurrency: int) -> None:
+    with DemoAppServer() as app:
+        config = make_run_config(app.base_url)
+        config.budget.max_testers = tester_count
+        if tester_count == 4:
+            config.budget.max_parallel_browser_contexts = 4
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
+        ConcurrentTesterClient.active = 0
+        ConcurrentTesterClient.maximum_active = 0
+        ConcurrentTesterClient.expected_active = expected_concurrency
+
+        main_client = FourTaskMainClient() if tester_count == 4 else FakeGeminiMainClient()
+        report_path = await run_formal(config, settings, main_client=main_client, tester_client_factory=ConcurrentTesterClient, jev_selector=JevSelector(FakeJevClient()))
+
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        run_id = report["test_summary"]["run_id"]
+        store = StateStore(settings.state_db_path)
+        assert report["test_summary"]["run_status"] == "COMPLETED"
+        assert ConcurrentTesterClient.maximum_active == expected_concurrency
+        assert {event["event_type"] for event in store.list_events(run_id)} >= {"TASK_ASSIGNED", "TASK_STARTED", "TASK_FINISHED"}
+        session_references = {tester["session_reference"] for tester in store.list_testers(run_id)}
+        assert len(session_references) == (4 if tester_count == 4 else 2)
+        assert all(reference.startswith("tester-session-") for reference in session_references)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_formal_run_replans_pending_task_from_tester_finding(tmp_path: Path) -> None:
+    with DemoAppServer() as app:
+        config = make_run_config(app.base_url)
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
+        main_client = ReplanningMainClient()
+        store = StateStore(settings.state_db_path)
+        run_id = "run-formal-replan"
+        route = ExecutionRoute(tester_count=2, candidate_selection="JEV", coordination="SHARED_STATE", finding_after_anomaly="SUSPECTED_ISSUE", known_action="PLAYWRIGHT", visual_fallback="FAIL_WITHOUT_COMPUTER_USE")
+
+        await run_formal(config, settings, route=route, run_id=run_id, main_client=main_client, tester_client_factory=lambda: FindingTesterClient(store, main_client, run_id), jev_selector=JevSelector(FakeJevClient()))
+
+        task = store.get_task("task-project")
+        assert task is not None and task["status"] == "COMPLETED"
+        assert "related Project deletion persistence" in task["goal"]
+        assert task["parent_finding"] == "finding-delete"
+        assert {event["event_type"] for event in store.list_events(run_id)} >= {"PLAN_CHANGE", "REPLAN_COMPLETED"}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_model_every_step_route_calls_tester_before_known_navigation(tmp_path: Path) -> None:
+    with DemoAppServer() as app:
+        config = make_run_config(app.base_url)
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
+        route = ExecutionRoute(tester_count=2, candidate_selection="TESTER_LLM_EVERY_DECISION", coordination="SHARED_STATE", finding_after_anomaly="SUSPECTED_ISSUE", known_action="TESTER_LLM_EVERY_STEP", visual_fallback="FAIL_WITHOUT_COMPUTER_USE")
+
+        report_path = await run_formal(config, settings, route=route, main_client=FakeGeminiMainClient(), tester_client_factory=ModelStepTesterClient, jev_selector=JevSelector(FakeJevClient()))
+
+        budgets = StateStore(settings.state_db_path).list_budgets(report_path.parent.name)
+        assert sum(budget["llm_calls"] for budget in budgets) == 4
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_fake_evaluation_runner_reuses_formal_run_with_isolated_databases(tmp_path: Path) -> None:
+    with DemoAppServer() as app:
+        config = make_run_config(app.base_url)
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "unused.db", artifacts_dir=tmp_path / "unused-runs")
+        controls = EvaluationControls(demo_version=DEMO_VERSION, seeded_bugs=(), model_configuration=(("main", "fake-gemini-main"), ("tester", "fake-groq-tester")), token_budget=500, time_budget_seconds=60, accounts=("admin", "member"), initial_data=(), test_scope=("Project", "Task"))
+        plan = build_evaluation_plan(EvaluationMode.TESTER_COUNT, controls)
+        executor = FormalRunExecutor(config, settings, main_client_factory=FakeGeminiMainClient, tester_client_factory=FakeTesterClient, jev_selector_factory=lambda: JevSelector(FakeJevClient()), computer_use_client_factory=lambda: object())  # type: ignore[arg-type]
+
+        async def reset() -> None:
+            return None
+
+        records = await EvaluationRunner(tmp_path / "evaluation").run_fake_sample(plan=plan, executor=executor, reset=reset)
+
+        assert [record.status for record in records] == ["COMPLETED", "COMPLETED"]
+        for record in records:
+            database_path = tmp_path / "evaluation" / plan.mode.value / record.variant_id / "run-1" / "state.db"
+            store = StateStore(database_path)
+            assert len(store.list_tasks(record.run_id)) == 2
+            assert len([event for event in store.list_events(record.run_id) if event["event_type"] == "TASK_ASSIGNED"]) == 2
 
 
 def make_tester(*, store: StateStore, manager: BrowserManager, base_url: str, tester_id: str, identity_id: str, task_id: str, role: str, jev: FakeJevClient) -> tuple[Runner, AgentTools, PlaywrightExecutor, BudgetGuard]:

@@ -33,7 +33,7 @@ class FinalReportBuilder:
             if finding_id is not None:
                 evidence_by_finding.setdefault(str(finding_id), []).append(item)
         confirmed = [self._confirmed_finding(item, evidence_by_finding) for item in findings if item["status"] == "CONFIRMED_BUG"]
-        needs_confirmation = [self._unconfirmed_finding(item, evidence_by_finding) for item in findings if item["status"] == "NEEDS_CONFIRMATION"]
+        needs_confirmation = [self._unconfirmed_finding(item, evidence_by_finding) for item in findings if item["status"] in {"NEEDS_CONFIRMATION", "SUSPECTED_ISSUE"}]
         environment_issues = [self._environment_finding(item, evidence_by_finding) for item in findings if item["status"] == "ENVIRONMENT_ISSUE"]
         report = {
             "test_summary": self._test_summary(run, tasks, testers, events),
@@ -130,8 +130,15 @@ class FinalReportBuilder:
         for field in ("llm_calls", "jev_calls", "computer_use_calls", "input_tokens", "output_tokens", "runtime_seconds", "estimated_cost"):
             totals[field] = sum(item[field] for item in budgets)
         estimated_cost = float(totals["estimated_cost"])
+        llm_events = [event for event in events if event["event_type"] == "LLM_CALL"]
         return {
             **totals,
+            "llm_request_count": len(llm_events),
+            "llm_success_count": sum(event["result"].get("success") is True for event in llm_events),
+            "llm_failure_count": sum(event["result"].get("success") is False for event in llm_events),
+            "llm_input_tokens": sum(int(event["result"].get("input_tokens") or 0) for event in llm_events),
+            "llm_output_tokens": sum(int(event["result"].get("output_tokens") or 0) for event in llm_events),
+            "llm_models": sorted({str(event["result"]["model"]) for event in llm_events if event["result"].get("model")}),
             "total_run_time_seconds": FinalReportBuilder._run_time_seconds(run, events),
             "average_browser_action_ms": FinalReportBuilder._average_latency(events, "BROWSER_ACTION"),
             "average_jev_decision_ms": FinalReportBuilder._average_latency(events, "JEV_CALL"),

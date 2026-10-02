@@ -23,9 +23,10 @@ class ScreeningSignals:
 class FindingService:
     """Apply explicit screening, duplicate, reproduction, and verification rules."""
 
-    def __init__(self, store: StateStore, run_id: str) -> None:
+    def __init__(self, store: StateStore, run_id: str, *, shared_state: bool = True) -> None:
         self.store = store
         self.run_id = run_id
+        self.shared_state = shared_state
 
     def screen(self, finding_id: str, signals: ScreeningSignals, limited_decision: str | None = None, limited_duplicate_of: str | None = None) -> dict[str, Any]:
         finding = self._get_finding(finding_id)
@@ -67,6 +68,8 @@ class FindingService:
         candidate = self._get_finding(finding_id)
         for existing in self.store.list_recent_findings(self.run_id):
             if existing["finding_id"] == finding_id or existing["status"] == "DUPLICATE":
+                continue
+            if not self.shared_state and existing["first_seen_by"] != candidate["first_seen_by"]:
                 continue
             same_context = self._normalize(existing["affected_page"]) == self._normalize(candidate["affected_page"]) and self._normalize(existing["action"]) == self._normalize(candidate["action"])
             same_error = bool(candidate["error_text"]) and self._normalize(existing["error_text"]) == self._normalize(candidate["error_text"])

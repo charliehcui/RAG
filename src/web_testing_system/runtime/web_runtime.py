@@ -132,6 +132,17 @@ class WebTestingRuntime:
         except BudgetExceededError as error:
             await self.stop_task(error.reason)
             return DecisionResult(source="STOP", reason=error.reason)
+        run = self.store.get_run(self.run_id)
+        if run is None:
+            raise KeyError(f"unknown run: {self.run_id}")
+        remaining = run["remaining_budget"]
+        if remaining.get("max_jev_calls", self.budget.limits.max_jev_calls) <= 0:
+            await self.stop_task("MAX_JEV_CALLS_REACHED")
+            return DecisionResult(source="STOP", reason="MAX_JEV_CALLS_REACHED")
+        if remaining.get("max_input_tokens", self.budget.limits.max_input_tokens) <= 0 or remaining.get("max_output_tokens", self.budget.limits.max_output_tokens) <= 0:
+            await self.stop_task("MAX_JEV_TOKENS_REACHED")
+            return DecisionResult(source="STOP", reason="MAX_JEV_TOKENS_REACHED")
+        self.store.update_budget(budget_id=self.budget_id, jev_calls=1)
         selection = await self.jev_selector.select(
             current_goal=current_goal, page_state=page_state, candidates=candidates
         )
@@ -143,7 +154,6 @@ class WebTestingRuntime:
         )
         self.store.update_budget(
             budget_id=self.budget_id,
-            jev_calls=1,
             input_tokens=selection.input_tokens,
             output_tokens=selection.output_tokens,
             runtime_seconds=selection.latency_ms / 1_000,

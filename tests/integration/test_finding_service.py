@@ -11,6 +11,17 @@ def create_finding(store: StateStore, finding_id: str, *, expected: str = "Proje
 
 
 @pytest.mark.integration
+def test_independent_tester_findings_do_not_cross_deduplicate(phase2_store: StateStore) -> None:
+    create_finding(phase2_store, "finding-a")
+    phase2_store.register_tester(tester_id="tester-2", run_id="run-1", session_reference="session-2", identity_id="identity-1", role="member", data_namespace="tester-2-data")
+    phase2_store.create_task(task_id="task-2", run_id="run-1", goal="Check Project deletion", priority="P1", dependencies=[], created_by="main", step_budget=10)
+    phase2_store.create_finding(finding_id="finding-b", run_id="run-1", task_id="task-2", title="Project deletion anomaly", status="OBSERVATION", expected_result="Project is deleted", actual_result="Project is still visible", first_seen_by="tester-2", affected_page="/projects", action="delete", error_text="Project remained after refresh")
+
+    assert FindingService(phase2_store, "run-1").find_duplicate("finding-b") is not None
+    assert FindingService(phase2_store, "run-1", shared_state=False).find_duplicate("finding-b") is None
+
+
+@pytest.mark.integration
 def test_finding_screening_duplicate_rules_and_state_transitions(phase2_store: StateStore) -> None:
     service = FindingService(phase2_store, "run-1")
     original = create_finding(phase2_store, "finding-original")

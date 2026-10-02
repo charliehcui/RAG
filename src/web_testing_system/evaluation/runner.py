@@ -11,7 +11,13 @@ from statistics import median
 from typing import Any, Protocol
 from uuid import uuid4
 
-from web_testing_system.config import Settings
+from agent_framework import BaseChatClient
+
+from web_testing_system.config import RunConfig, Settings
+from web_testing_system.evaluation.metrics import MetricsCalculator
+from web_testing_system.runtime.computer_use import ComputerUseClient
+from web_testing_system.runtime.jev_selector import JevSelector
+from web_testing_system.state import StateStore
 
 N_A = "N/A"
 MetricValue = int | float | str
@@ -65,6 +71,7 @@ class ExecutionRoute:
     finding_after_anomaly: str
     known_action: str
     visual_fallback: str
+    full_evaluation: bool = False
 
 
 @dataclass(frozen=True)
@@ -174,23 +181,51 @@ def build_evaluation_plan(mode: EvaluationMode, controls: EvaluationControls) ->
     return plan
 
 
-def build_execution_route(config: EvaluationVariant, *, full_evaluation_enabled: bool) -> ExecutionRoute:
+def build_execution_route(config: EvaluationVariant, *, full_evaluation_enabled: bool, fake_provider: bool = False) -> ExecutionRoute:
     if not 1 <= config.tester_count <= 4:
         raise ValueError("tester_count must be between 1 and 4")
     if config.decision_policy not in {"JEV", "LLM_EVERY_DECISION"}:
         raise ValueError(f"unsupported decision policy: {config.decision_policy}")
     if config.action_policy not in {"PLAYWRIGHT_FIRST", "MODEL_EVERY_STEP"}:
         raise ValueError(f"unsupported action policy: {config.action_policy}")
-    if config.action_policy == "MODEL_EVERY_STEP" and not full_evaluation_enabled:
+    if config.action_policy == "MODEL_EVERY_STEP" and not (full_evaluation_enabled or fake_provider):
         raise PermissionError("MODEL_EVERY_STEP_REQUIRES_FULL_EVALUATION")
     return ExecutionRoute(
         tester_count=config.tester_count,
-        candidate_selection="JEV" if config.decision_policy == "JEV" else "TESTER_LLM_EVERY_DECISION",
+        candidate_selection="JEV" if config.decision_policy == "JEV" and config.action_policy == "PLAYWRIGHT_FIRST" else "TESTER_LLM_EVERY_DECISION",
         coordination="SHARED_STATE" if config.shared_state else "INDEPENDENT_TESTER_STATE",
         finding_after_anomaly="REPRODUCTION" if config.auto_reproduction else "SUSPECTED_ISSUE",
         known_action="PLAYWRIGHT" if config.action_policy == "PLAYWRIGHT_FIRST" else "TESTER_LLM_EVERY_STEP",
         visual_fallback="COMPUTER_USE" if config.computer_use_fallback else "FAIL_WITHOUT_COMPUTER_USE",
+        full_evaluation=full_evaluation_enabled,
     )
+
+
+class FormalRunExecutor:
+    """Run an Evaluation variant through the same entry point as the CLI."""
+
+    def __init__(self, run_config: RunConfig, settings: Settings, *, main_client_factory: Callable[[], BaseChatClient] | None = None, tester_client_factory: Callable[[], BaseChatClient] | None = None, jev_selector_factory: Callable[[], JevSelector] | None = None, computer_use_client_factory: Callable[[], ComputerUseClient] | None = None) -> None:
+        self.run_config = run_config
+        self.settings = settings
+        self.main_client_factory = main_client_factory
+        self.tester_client_factory = tester_client_factory
+        self.jev_selector_factory = jev_selector_factory
+        self.computer_use_client_factory = computer_use_client_factory
+        self.is_fake = all(factory is not None for factory in (main_client_factory, tester_client_factory, jev_selector_factory, computer_use_client_factory))
+
+    async def execute(self, *, config: EvaluationVariant, route: ExecutionRoute, run_number: int, run_id: str, evidence_directory: Path) -> EvaluationExecution:
+        del config, run_number
+        from web_testing_system.run import run
+
+        main_client = self.main_client_factory() if self.main_client_factory is not None else None
+        jev_selector = self.jev_selector_factory() if self.jev_selector_factory is not None else None
+        run_directory = evidence_directory.parent.parent
+        run_settings = self.settings.model_copy(update={"artifacts_dir": run_directory, "state_db_path": run_directory / "state.db", "temporary_sensitive_dir": run_directory / "temporary_sensitive"})
+        report_path = await run(self.run_config, run_settings, route=route, run_id=run_id, main_client=main_client, tester_client_factory=self.tester_client_factory, computer_use_client_factory=self.computer_use_client_factory, jev_selector=jev_selector)
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        metrics = MetricsCalculator(StateStore(run_settings.state_db_path)).calculate(run_id, final_report=report)
+        status = str(report["test_summary"]["run_status"])
+        return EvaluationExecution(status="INTERRUPTED" if status == "STOPPED" else status, metrics=metrics)
 
 
 class EvaluationRunner:
@@ -202,8 +237,6 @@ class EvaluationRunner:
     async def run_fake_sample(self, *, plan: EvaluationPlan, executor: VariantExecutor, reset: ResetCallback) -> list[EvaluationRunRecord]:
         if not executor.is_fake:
             raise PermissionError("DEVELOPMENT_SAMPLE_REQUIRES_FAKE_EXECUTOR")
-        if plan.mode == EvaluationMode.ACTION_POLICY:
-            raise PermissionError("MODEL_EVERY_STEP_REQUIRES_FULL_EVALUATION")
         records = await self._run(plan=plan, executor=executor, reset=reset, runs_per_variant=1, full_evaluation_enabled=False)
         self._save_summary(plan, records)
         return records
@@ -218,12 +251,12 @@ class EvaluationRunner:
     async def _run(self, *, plan: EvaluationPlan, executor: VariantExecutor, reset: ResetCallback, runs_per_variant: int, full_evaluation_enabled: bool) -> list[EvaluationRunRecord]:
         records: list[EvaluationRunRecord] = []
         for variant in plan.variants:
-            route = build_execution_route(variant, full_evaluation_enabled=full_evaluation_enabled)
+            route = build_execution_route(variant, full_evaluation_enabled=full_evaluation_enabled, fake_provider=executor.is_fake)
             for run_number in range(1, runs_per_variant + 1):
                 await reset()
                 run_id = f"evaluation-{plan.mode.value}-{variant.variant_id}-{run_number}-{uuid4().hex[:8]}"
                 run_directory = self.output_directory / plan.mode.value / variant.variant_id / f"run-{run_number}"
-                evidence_directory = run_directory / "evidence"
+                evidence_directory = run_directory / run_id / "evidence"
                 evidence_directory.mkdir(parents=True, exist_ok=True)
                 try:
                     execution = await executor.execute(config=variant, route=route, run_number=run_number, run_id=run_id, evidence_directory=evidence_directory)

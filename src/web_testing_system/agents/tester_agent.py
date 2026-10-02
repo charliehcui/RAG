@@ -10,7 +10,12 @@ from uuid import uuid4
 from agent_framework import Agent, AgentResponse, AgentSession
 
 from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
-from web_testing_system.runtime.models import ActionType, WebAction
+from web_testing_system.runtime.models import (
+    ActionCandidate,
+    ActionType,
+    PageState,
+    WebAction,
+)
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
 from web_testing_system.state import StateStore
 
@@ -34,10 +39,19 @@ class TesterAgentTools:
         assignment: TesterAssignment,
         runtime: WebTestingRuntime,
         store: StateStore,
+        shared_state: bool = True,
+        decision_policy: str = "JEV",
+        action_policy: str = "PLAYWRIGHT",
     ) -> None:
         self.assignment = assignment
         self.runtime = runtime
         self.store = store
+        self.shared_state = shared_state
+        self.decision_policy = decision_policy
+        self.action_policy = action_policy
+        self.pending_candidates: dict[str, ActionCandidate] = {}
+        self.pending_page_state: PageState | None = None
+        self.pending_goal: str | None = None
 
     async def execute_known_action(
         self,
@@ -81,11 +95,46 @@ class TesterAgentTools:
 
     async def explore_unknown_path(self, current_goal: str) -> dict[str, Any]:
         """Use Candidate Builder and Jev for an unknown legal path."""
+        if self.decision_policy == "TESTER_LLM_EVERY_DECISION":
+            if self.runtime.browser_session_id is None:
+                raise RuntimeError("browser session has not started")
+            session = self.runtime.browser_manager.get_session(self.runtime.browser_session_id)
+            page_state = await self.runtime.page_state_reader.read(session.page)
+            candidates = self.runtime.candidate_builder.build(goal=current_goal, page_state=page_state, explored_targets=set())
+            self.pending_candidates = {candidate.candidate_id: candidate for candidate in candidates}
+            self.pending_page_state = page_state
+            self.pending_goal = current_goal
+            return {"source": "TESTER_LLM", "candidates": [{"candidate_id": candidate.candidate_id, "action": candidate.action, "label": candidate.label} for candidate in candidates], "instruction": "Choose one Candidate ID with select_candidate. The Runtime will revalidate it."}
         return asdict(await self.runtime.explore_unknown_path(current_goal))
+
+    async def select_candidate(self, candidate_id: str) -> dict[str, Any]:
+        """Execute one LLM-selected Candidate after Runtime revalidation."""
+        if self.decision_policy != "TESTER_LLM_EVERY_DECISION" or self.pending_page_state is None or self.runtime.browser_session_id is None:
+            return {"success": False, "error_type": "CANDIDATE_NOT_AVAILABLE"}
+        candidate = self.pending_candidates.get(candidate_id)
+        if candidate is None:
+            return {"success": False, "error_type": "ILLEGAL_CANDIDATE_ID"}
+        session = self.runtime.browser_manager.get_session(self.runtime.browser_session_id)
+        current_page_state = await self.runtime.page_state_reader.read(session.page)
+        validation = self.runtime.candidate_builder.validate(candidate=candidate, current_page_state=current_page_state)
+        self.pending_candidates = {}
+        if not validation.valid:
+            return {"success": False, "error_type": validation.reason}
+        if candidate.action == "request_replan":
+            await self.runtime.request_replan("TESTER_LLM_REQUESTED_REPLAN")
+            return {"success": True, "action": "request_replan"}
+        if candidate.action == "stop_current_path":
+            return {"success": True, "action": "stop_current_path"}
+        assert validation.action is not None
+        result = await self.runtime.execute_known_action(validation.action)
+        if result.success:
+            self.runtime.store.record_path(run_id=self.assignment.run_id, feature=self.pending_goal or "", page=self.pending_page_state.url, page_state_id=self.pending_page_state.state_id, action=candidate.action, result="SUCCESS", last_tester=self.assignment.tester_id)
+        return result.to_dict()
 
     def read_coverage(self) -> list[dict[str, Any]]:
         """Read coverage already recorded for the current run."""
-        return self.store.list_paths(self.assignment.run_id)
+        paths = self.store.list_paths(self.assignment.run_id)
+        return paths if self.shared_state else [path for path in paths if path["last_tester"] == self.assignment.tester_id]
 
     def read_shared_facts(self) -> dict[str, Any]:
         """Read structured collaboration facts without another Tester's conversation."""
@@ -96,11 +145,9 @@ class TesterAgentTools:
         ]
         return {
             "current_task": self.store.get_task(self.assignment.task_id),
-            "coverage": self.store.list_paths(self.assignment.run_id),
-            "recent_findings": self.store.list_recent_findings(
-                self.assignment.run_id
-            ),
-            "tester_progress": progress,
+            "coverage": self.read_coverage(),
+            "recent_findings": [finding for finding in self.store.list_recent_findings(self.assignment.run_id) if self.shared_state or finding["first_seen_by"] == self.assignment.tester_id],
+            "tester_progress": [event for event in progress if self.shared_state or event["tester_id"] == self.assignment.tester_id],
         }
 
     def check_path_before_exploring(
@@ -119,6 +166,8 @@ class TesterAgentTools:
             page_state_id=page_state_id,
             action=action,
         )
+        if existing is not None and not self.shared_state and existing["last_tester"] != self.assignment.tester_id:
+            existing = None
         should_explore = existing is None or bool(new_reason and new_reason.strip())
         if not should_explore:
             assert existing is not None
@@ -251,6 +300,10 @@ def create_tester_agent(
         "Never change global scope, bypass permissions, create another Agent, or declare a confirmed bug. "
         "Record uncertain behavior only with record_observation. Request replan when the local path cannot continue."
     )
+    if tools.action_policy == "TESTER_LLM_EVERY_STEP":
+        instructions += " For this evaluation route, decide one browser action per model response. Call at most one browser action tool before reasoning again."
+    if tools.decision_policy == "TESTER_LLM_EVERY_DECISION":
+        instructions += " For unknown paths, inspect explore_unknown_path candidates and select exactly one ID with select_candidate."
     return Agent(
         client=client,
         name="tester-agent",
@@ -259,6 +312,7 @@ def create_tester_agent(
         tools=[
             tools.execute_known_action,
             tools.explore_unknown_path,
+            tools.select_candidate,
             tools.read_coverage,
             tools.read_shared_facts,
             tools.check_path_before_exploring,
@@ -282,6 +336,9 @@ class TesterRunner:
         store: StateStore,
         budget: BudgetGuard,
         budget_id: str,
+        provider_usage_recorded: bool = False,
+        decision_policy: str = "JEV",
+        action_policy: str = "PLAYWRIGHT",
     ) -> None:
         self.agent = agent
         self.assignment = assignment
@@ -289,13 +346,24 @@ class TesterRunner:
         self.store = store
         self.budget = budget
         self.budget_id = budget_id
+        self.provider_usage_recorded = provider_usage_recorded
+        self.decision_policy = decision_policy
+        self.action_policy = action_policy
         self.session = AgentSession(session_id=f"tester-session-{uuid4().hex}")
 
     async def execute_known(self, action: WebAction) -> dict[str, Any]:
         """Known Replay and assertions bypass the LLM and go directly to Playwright."""
+        if self.action_policy == "TESTER_LLM_EVERY_STEP":
+            answer = await self.ask_tester_llm(f"Decide whether the next scoped known action is safe: {action.action_type.value}. Reply APPROVE or STOP without calling tools.")
+            if answer.startswith("STOPPED:"):
+                return {"success": False, "error_type": "BUDGET_STOP", "error": answer}
+            if not answer.strip().upper().startswith("APPROVE"):
+                return {"success": False, "error_type": "MODEL_STEP_STOP", "error": answer}
         return (await self.runtime.execute_known_action(action)).to_dict()
 
     async def explore(self, current_goal: str) -> dict[str, Any]:
+        if self.decision_policy == "TESTER_LLM_EVERY_DECISION":
+            return {"tester_llm": await self.ask_tester_llm(f"Choose the next legal action for: {current_goal}. Use only the provided runtime tools and permissions.")}
         decision = await self.runtime.explore_unknown_path(current_goal)
         result: dict[str, Any] = {"decision": asdict(decision)}
         if decision.needs_tester_llm:
@@ -311,8 +379,14 @@ class TesterRunner:
             await self.runtime.stop_task(error.reason)
             return f"STOPPED: {error.reason}"
         started_at = perf_counter()
-        response = await self.agent.run(prompt, session=self.session)
+        try:
+            response = await self.agent.run(prompt, session=self.session)
+        except BudgetExceededError as error:
+            await self.runtime.stop_task(error.reason)
+            return f"STOPPED: {error.reason}"
         assert isinstance(response, AgentResponse)
+        if self.provider_usage_recorded:
+            return response.text
         latency_seconds = perf_counter() - started_at
         usage = response.usage_details or {}
         input_tokens = int(usage.get("input_token_count") or 0)

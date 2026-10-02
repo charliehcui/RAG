@@ -6,6 +6,8 @@ from typing import Any
 import pytest
 from playwright.async_api import Page, Route
 
+from web_testing_system.agents import TesterAgentTools as AgentTools
+from web_testing_system.agents import TesterAssignment as Assignment
 from web_testing_system.runtime.browser import BrowserManager
 from web_testing_system.runtime.budget import (
     BudgetExceededError,
@@ -111,6 +113,31 @@ async def install_page(page: Page) -> None:
         await route.fulfill(status=200, content_type="text/html", body=HTML)
 
     await page.route("http://app.test/**", handle)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_llm_decision_route_uses_candidate_id_and_runtime_revalidation(phase2_store: StateStore) -> None:
+    jev_client = FakeJevClient()
+    runtime = build_runtime(phase2_store, make_budget(), jev_client)
+    session_id = await runtime.start_session()
+    session = runtime.browser_manager.get_session(session_id)
+    await install_page(session.page)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="admin", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store, decision_policy="TESTER_LLM_EVERY_DECISION")
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/projects"))
+        choices = await tools.explore_unknown_path("Open Project")
+        candidate_id = next(candidate["candidate_id"] for candidate in choices["candidates"] if candidate["label"] == "Open Project")
+        assert (await tools.select_candidate("candidate-forged"))["error_type"] == "ILLEGAL_CANDIDATE_ID"
+        assert (await tools.select_candidate(candidate_id))["success"] is True
+        assert jev_client.call_count == 0
+        choices = await tools.explore_unknown_path("Open Project")
+        candidate_id = next(candidate["candidate_id"] for candidate in choices["candidates"] if candidate["label"] == "Open Project")
+        await session.page.set_content("<main>Changed</main>")
+        assert (await tools.select_candidate(candidate_id))["error_type"] == "CANDIDATE_EXPIRED"
+    finally:
+        await runtime.browser_manager.close()
 
 
 @pytest.mark.integration
