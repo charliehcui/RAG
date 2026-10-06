@@ -164,9 +164,9 @@ class FullEvaluationGate:
 
 
 def build_evaluation_plan(mode: EvaluationMode, controls: EvaluationControls) -> EvaluationPlan:
-    base = EvaluationVariant(variant_id="baseline", tester_count=2, decision_policy="JEV", shared_state=True, auto_reproduction=True, action_policy="PLAYWRIGHT_FIRST", computer_use_fallback=True, controls=controls)
+    base = EvaluationVariant(variant_id="baseline", tester_count=3, decision_policy="JEV", shared_state=True, auto_reproduction=True, action_policy="PLAYWRIGHT_FIRST", computer_use_fallback=True, controls=controls)
     values: dict[EvaluationMode, tuple[str, str, Any, str, Any]] = {
-        EvaluationMode.TESTER_COUNT: ("single-tester", "tester_count", 1, "multi-tester", 2),
+        EvaluationMode.TESTER_COUNT: ("single-tester", "tester_count", 1, "multi-tester", 3),
         EvaluationMode.DECISION_ENGINE: ("jev", "decision_policy", "JEV", "llm-every-decision", "LLM_EVERY_DECISION"),
         EvaluationMode.COORDINATION: ("shared-state", "shared_state", True, "independent-testers", False),
         EvaluationMode.REPRODUCTION: ("auto-reproduction-on", "auto_reproduction", True, "auto-reproduction-off", False),
@@ -215,7 +215,7 @@ class FormalRunExecutor:
 
     async def execute(self, *, config: EvaluationVariant, route: ExecutionRoute, run_number: int, run_id: str, evidence_directory: Path) -> EvaluationExecution:
         del config, run_number
-        from web_testing_system.run import run
+        from web_testing_system.orchestration.runner import run
 
         main_client = self.main_client_factory() if self.main_client_factory is not None else None
         jev_selector = self.jev_selector_factory() if self.jev_selector_factory is not None else None

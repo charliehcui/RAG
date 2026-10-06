@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from web_testing_system.evidence import EvidenceBuffer, EvidenceStore
+from web_testing_system.observability import trace_result, trace_span
 from web_testing_system.runtime.browser import BrowserManager, LoginHandler
 from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
 from web_testing_system.runtime.candidates import CandidateBuilder, PageStateReader
@@ -43,6 +46,9 @@ class WebTestingRuntime:
         jev_confidence_threshold: float = 0.6,
         max_timeout_retries: int = 1,
         computer_use_controller: ComputerUseController | None = None,
+        input_values: Mapping[str, str] | None = None,
+        expected_behavior_ids: tuple[str, ...] = (),
+        evidence_store: EvidenceStore | None = None,
     ) -> None:
         self.store = store
         self.browser_manager = browser_manager
@@ -60,6 +66,13 @@ class WebTestingRuntime:
         self.max_timeout_retries = max_timeout_retries
         self.computer_use_controller = computer_use_controller
         self.browser_session_id: str | None = None
+        self.page_lock = asyncio.Lock()
+        self.input_values = dict(input_values or {})
+        self.expected_behavior_ids = expected_behavior_ids
+        self.evidence_store = evidence_store
+        self.evidence_buffer = EvidenceBuffer()
+        self.evidence_marker = (0, 0)
+        self.task_finished = False
 
     async def start_session(self) -> str:
         try:
@@ -70,9 +83,17 @@ class WebTestingRuntime:
             await self.stop_task(error.reason)
             raise
         self.browser_session_id = session.session_id
+        if self.evidence_store is not None:
+            self.evidence_buffer.attach(session.page)
         return session.session_id
 
     async def execute_known_action(self, action: WebAction) -> ActionResult:
+        async with self.page_lock:
+            if self.task_finished:
+                return self._stopped_result("TASK_ALREADY_FINISHED")
+            return await self._execute_known_action(action)
+
+    async def _execute_known_action(self, action: WebAction) -> ActionResult:
         if self.browser_session_id is None:
             raise RuntimeError("browser session has not started")
         session = self.browser_manager.get_session(self.browser_session_id)
@@ -107,6 +128,12 @@ class WebTestingRuntime:
             attempts += 1
 
     async def explore_unknown_path(self, current_goal: str) -> DecisionResult:
+        async with self.page_lock:
+            if self.task_finished:
+                return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
+            return await self._explore_unknown_path(current_goal)
+
+    async def _explore_unknown_path(self, current_goal: str) -> DecisionResult:
         if self.browser_session_id is None:
             raise RuntimeError("browser session has not started")
         session = self.browser_manager.get_session(self.browser_session_id)
@@ -143,9 +170,9 @@ class WebTestingRuntime:
             await self.stop_task("MAX_JEV_TOKENS_REACHED")
             return DecisionResult(source="STOP", reason="MAX_JEV_TOKENS_REACHED")
         self.store.update_budget(budget_id=self.budget_id, jev_calls=1)
-        selection = await self.jev_selector.select(
-            current_goal=current_goal, page_state=page_state, candidates=candidates
-        )
+        with trace_span("Jev", "llm", metadata={"agent_role": "jev", "phase": "jev", "model": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "provider": "openrouter", "ls_model_name": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "ls_provider": "openrouter"}) as span:
+            selection = await self.jev_selector.select(current_goal=current_goal, page_state=page_state, candidates=candidates)
+            trace_result(span, input_tokens=selection.input_tokens, output_tokens=selection.output_tokens, cost=selection.cost, success=selection.error is None, error_type=selection.error)
         self.budget.record_jev_call(
             runtime_seconds=selection.latency_ms / 1_000,
             cost=selection.cost,
@@ -230,7 +257,7 @@ class WebTestingRuntime:
                 source="JEV", reason="STOP_CURRENT_PATH", candidate=candidate
             )
         assert validation.action is not None
-        action_result = await self.execute_known_action(validation.action)
+        action_result = await self._execute_known_action(validation.action)
         if action_result.success:
             self.store.record_path(
                 run_id=self.run_id,
@@ -249,12 +276,61 @@ class WebTestingRuntime:
         )
 
     async def use_computer_fallback(self, *, finding_id: str, goal: str, component_type: str, playwright_failure_reason: str, allowed_visual_actions: tuple[str, ...]) -> ComputerUseResult:
+        async with self.page_lock:
+            if self.task_finished:
+                return ComputerUseResult("STOPPED", "TASK_ALREADY_FINISHED", None, None, None, ())
+            return await self._use_computer_fallback(finding_id=finding_id, goal=goal, component_type=component_type, playwright_failure_reason=playwright_failure_reason, allowed_visual_actions=allowed_visual_actions)
+
+    async def _use_computer_fallback(self, *, finding_id: str, goal: str, component_type: str, playwright_failure_reason: str, allowed_visual_actions: tuple[str, ...]) -> ComputerUseResult:
         if self.computer_use_controller is None:
             return ComputerUseResult("REFUSED", "COMPUTER_USE_NOT_CONFIGURED", None, None, None, ())
         if self.browser_session_id is None:
             raise RuntimeError("browser session has not started")
         session = self.browser_manager.get_session(self.browser_session_id)
         return await self.computer_use_controller.run(page=session.page, browser_session_id=session.session_id, finding_id=finding_id, goal=goal, component_type=component_type, playwright_failure_reason=playwright_failure_reason, allowed_visual_actions=allowed_visual_actions)
+
+    async def capture_finding_evidence(self, finding_id: str) -> None:
+        if self.evidence_store is None or self.browser_session_id is None:
+            return
+        async with self.page_lock:
+            if self.store.list_evidence(run_id=self.run_id, finding_id=finding_id):
+                return
+            session = self.browser_manager.get_session(self.browser_session_id)
+            identifiers = {"run_id": self.run_id, "task_id": self.task_id, "finding_id": finding_id, "attempt_id": f"observation-{uuid4().hex}", "browser_session_id": session.session_id}
+            with trace_span("Evidence", "tool", metadata={"finding_id": finding_id}):
+                await self.evidence_store.capture_screenshot(page=session.page, name="observed", **identifiers)
+                await self.evidence_store.capture_dom(page=session.page, **identifiers)
+                self.evidence_store.capture_network(buffer=self.evidence_buffer, marker=self.evidence_marker, url=session.page.url, **identifiers)
+                self.evidence_store.capture_console(buffer=self.evidence_buffer, marker=self.evidence_marker, url=session.page.url, **identifiers)
+            self.evidence_marker = self.evidence_buffer.mark()
+
+    async def record_task_outcome(self, *, finish: bool = False) -> dict[str, object]:
+        """Only goal assertions establish success; ordinary completion text establishes nothing."""
+        async with self.page_lock:
+            histories = self.store.list_action_history(run_id=self.run_id, task_id=self.task_id)
+            latest: dict[str, dict[str, object]] = {}
+            for history in histories:
+                action = history["action_data"]
+                if history["browser_session_id"] != self.browser_session_id or action.get("action_type") not in {"assertion", "url_check"}:
+                    continue
+                behavior_id = action.get("behavior_id")
+                if not action.get("goal_check") and behavior_id not in self.expected_behavior_ids:
+                    continue
+                key = str(behavior_id or (action.get("target"), action.get("assertion"), action.get("expected")))
+                latest[key] = {"event_id": history["event_id"], "behavior_id": behavior_id, "success": bool(history["success"]), "error_type": history["result"].get("error_type")}
+            results = list(latest.values())
+            covered = {item["behavior_id"] for item in results}
+            if any(not item["success"] for item in results):
+                status, reason = "FAIL", "GOAL_ASSERTION_FAILED"
+            elif not results or not set(self.expected_behavior_ids).issubset(covered):
+                status, reason = "UNKNOWN", "GOAL_ASSERTION_MISSING"
+            else:
+                status, reason = "PASS", "GOAL_ASSERTIONS_PASSED"
+            self.store.record_task_outcome(task_id=self.task_id, success_status=status, reason=reason, assertion_results=results)
+            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="TASK_OUTCOME", tool="Python", action="evaluate_goal_assertions", result={"success_status": status, "reason": reason, "assertions": results}, latency_ms=0)
+            if finish:
+                self.task_finished = True
+            return {"success_status": status, "reason": reason, "assertions": results}
 
     def save_checkpoint(self, *, url: str, last_action: str) -> dict[str, object]:
         if self.browser_session_id is None:
@@ -353,6 +429,8 @@ class WebTestingRuntime:
             latency_ms=0,
         )
         task = self.store.get_task(self.task_id)
+        if task is not None and task["success_status"] == "UNKNOWN":
+            self.store.record_task_outcome(task_id=self.task_id, success_status="UNKNOWN", reason=reason, assertion_results=task["assertion_results"])
         if task is not None and task["status"] in {
             "PENDING",
             "RUNNING",

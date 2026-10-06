@@ -93,6 +93,8 @@ class WebAction:
     requires_resource: bool = False
     confirmed: bool = False
     timeout_ms: int = 2_000
+    behavior_id: str | None = None
+    goal_check: bool = False
 
 
 @dataclass(frozen=True)

@@ -17,9 +17,13 @@ from web_testing_system.state import (
 class FakeRuntime:
     browser_session_id = "browser-tester-2"
 
+    async def capture_finding_evidence(self, finding_id: str) -> None:
+        pass
+
 
 @pytest.mark.integration
-def test_structured_coordination_scope_resource_and_plan_controls(
+@pytest.mark.asyncio
+async def test_structured_coordination_scope_resource_and_plan_controls(
     phase2_store: StateStore,
 ) -> None:
     phase2_store.create_identity(
@@ -83,7 +87,7 @@ def test_structured_coordination_scope_resource_and_plan_controls(
         "open",
         new_reason="new cross-user Finding",
     )
-    finding = tester_tools.record_finding(
+    finding = await tester_tools.record_finding(
         title="Member can delete another user's Project",
         status="ANOMALY",
         expected_result="Cross-user delete is denied",
@@ -109,7 +113,7 @@ def test_structured_coordination_scope_resource_and_plan_controls(
     assert shared_facts["recent_findings"][0]["finding_id"] == finding["finding_id"]
     assert shared_facts["tester_progress"][0]["tester_id"] == "tester-2"
     with pytest.raises(ValueError, match="early Finding"):
-        tester_tools.record_finding(
+        await tester_tools.record_finding(
             title="Unverified issue",
             status="CONFIRMED_BUG",
             expected_result="expected",
@@ -292,7 +296,7 @@ def test_structured_coordination_scope_resource_and_plan_controls(
     assert main_tools.stop_task("task-stop", "duplicate work")["task"]["status"] == "STOPPED"
     event_types = {event["event_type"] for event in phase2_store.list_events("run-1")}
     assert {"DUPLICATE_EXPLORATION", "PRIORITY_CHANGE", "TASK_REASSIGNED", "PLAN_CHANGE"} <= event_types
-    observation = tester_tools.record_observation(
+    observation = await tester_tools.record_observation(
         title="Unexpected response",
         expected_result="Success",
         actual_result="Error",

@@ -9,11 +9,10 @@ description = "A focused multi-agent web testing demonstration."
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "agent-framework-core==1.19.0",
-    "agent-framework-gemini==1.0.0b260910",
     "agent-framework-openai==1.14.4",
-    "google-genai==2.25.0",
     "playwright==1.63.0",
     "pydantic-settings==2.15.0",
+    "langsmith==0.14.4",
 ]
 
 [project.optional-dependencies]

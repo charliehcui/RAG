@@ -55,6 +55,8 @@ class MetricsCalculator:
             "duplicate_finding_rate": self._ratio(sum(finding["status"] == "DUPLICATE" for finding in findings), len(findings)),
             "exploration_duplication": self._ratio(repeated_visits, total_visits),
             "task_completion_rate": self._ratio(sum(task["status"] == "COMPLETED" for task in tasks), len(tasks)),
+            "task_success_rate": self._ratio(sum(task["success_status"] == "PASS" for task in tasks), len(tasks)),
+            "task_success_unknown_count": sum(task["success_status"] == "UNKNOWN" for task in tasks),
             "browser_action_success_rate": self._ratio(sum(bool(event["result"].get("success")) for event in browser_actions), len(browser_actions)),
             "average_jev_latency_ms": self._average_latency(jev_calls),
             "average_llm_latency_ms": self._average_latency(llm_calls),

@@ -68,7 +68,7 @@ def test_six_mode_variants_select_the_required_execution_paths() -> None:
     plans = {mode: build_evaluation_plan(mode, make_controls()) for mode in EvaluationMode}
 
     tester_routes = [build_execution_route(variant, full_evaluation_enabled=False) for variant in plans[EvaluationMode.TESTER_COUNT].variants]
-    assert [route.tester_count for route in tester_routes] == [1, 2]
+    assert [route.tester_count for route in tester_routes] == [1, 3]
     decision_routes = [build_execution_route(variant, full_evaluation_enabled=False) for variant in plans[EvaluationMode.DECISION_ENGINE].variants]
     assert [route.candidate_selection for route in decision_routes] == ["JEV", "TESTER_LLM_EVERY_DECISION"]
     coordination_routes = [build_execution_route(variant, full_evaluation_enabled=False) for variant in plans[EvaluationMode.COORDINATION].variants]
@@ -195,7 +195,7 @@ async def test_all_fake_evaluation_modes_dispatch_to_formal_run(tmp_path: Path, 
         path.write_text(json.dumps({"test_summary": {"run_status": "COMPLETED"}}), encoding="utf-8")
         return path
 
-    monkeypatch.setattr("web_testing_system.run.run", fake_run)
+    monkeypatch.setattr("web_testing_system.orchestration.runner.run", fake_run)
     monkeypatch.setattr("web_testing_system.evaluation.runner.MetricsCalculator.calculate", lambda self, run_id, **kwargs: {"score": 1.0})
     executor = FormalRunExecutor(config, settings, main_client_factory=lambda: object(), tester_client_factory=lambda: object(), jev_selector_factory=lambda: object(), computer_use_client_factory=lambda: object())  # type: ignore[arg-type]
     assert executor.is_fake
@@ -210,6 +210,6 @@ async def test_all_fake_evaluation_modes_dispatch_to_formal_run(tmp_path: Path, 
 
     assert len(routes) == 12
     assert len(set(database_paths)) == 12
-    assert {route.tester_count for route in routes[:2]} == {1, 2}
+    assert {route.tester_count for route in routes[:2]} == {1, 3}
     assert {route.known_action for route in routes[8:10]} == {"PLAYWRIGHT", "TESTER_LLM_EVERY_STEP"}
     assert settings.full_evaluation is False

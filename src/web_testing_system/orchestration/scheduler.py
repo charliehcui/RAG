@@ -31,18 +31,20 @@ class ScheduleResult:
 
 
 class LocalTesterScheduler:
-    """Claim and run one priority-ordered batch with one to four local Testers."""
+    """Continuously fill available local slots with dependency-ready Tasks."""
 
     def __init__(
         self,
         *,
         store: StateStore,
         run_id: str,
-        testers: Sequence[TesterInstance],
+        testers: Sequence[TesterInstance] = (),
         max_testers: int,
         max_browser_contexts: int,
+        tester_factory: Callable[[Mapping[str, Any]], TesterInstance] | None = None,
+        on_task_finished: Callable[[ScheduleResult], Awaitable[None]] | None = None,
     ) -> None:
-        if not 1 <= len(testers) <= 4:
+        if tester_factory is None and not 1 <= len(testers) <= 4:
             raise ValueError("the local Tester pool must contain 1 to 4 instances")
         if not 1 <= max_testers <= 4 or not 1 <= max_browser_contexts <= 4:
             raise ValueError("Tester and Browser Context limits must be within the supported range")
@@ -61,25 +63,38 @@ class LocalTesterScheduler:
         self.store = store
         self.run_id = run_id
         self.testers = list(testers)
-        self.capacity = min(max_testers, max_browser_contexts, len(testers))
+        self.tester_factory = tester_factory
+        self.on_task_finished = on_task_finished
+        self.capacity = min(max_testers, max_browser_contexts, len(testers) if tester_factory is None else max_testers)
 
     async def run_ready_tasks(self, execute_task: TaskExecutor) -> list[ScheduleResult]:
-        """Run one bounded batch of dependency-ready Tasks in priority order."""
-        assignments = self._claim_ready_assignments()
-        if not assignments:
-            return []
-        return list(
-            await asyncio.gather(
-                *(
-                    self._run_assignment(instance, task, execute_task)
-                    for instance, task in assignments
-                )
-            )
-        )
+        """Refill a freed slot immediately, without waiting for its slower siblings."""
+        active: set[asyncio.Task[ScheduleResult]] = set()
+        results: list[ScheduleResult] = []
+        try:
+            while True:
+                for instance, task in self._claim_ready_assignments(limit=self.capacity - len(active)):
+                    active.add(asyncio.create_task(self._run_assignment(instance, task, execute_task)))
+                if not active:
+                    return results
+                finished, active = await asyncio.wait(active, return_when=asyncio.FIRST_COMPLETED)
+                for future in finished:
+                    result = future.result()
+                    results.append(result)
+                    if self.on_task_finished is not None:
+                        await self.on_task_finished(result)
+        finally:
+            for future in active:
+                future.cancel()
+            if active:
+                await asyncio.gather(*active, return_exceptions=True)
 
     def _claim_ready_assignments(
-        self,
+        self, *, limit: int | None = None,
     ) -> list[tuple[TesterInstance, dict[str, Any]]]:
+        limit = self.capacity if limit is None else limit
+        if limit <= 0:
+            return []
         run = self.store.get_run(self.run_id)
         if run is None:
             raise KeyError(f"unknown run: {self.run_id}")
@@ -112,7 +127,7 @@ class LocalTesterScheduler:
         ]
         assignments: list[tuple[TesterInstance, dict[str, Any]]] = []
         for task in ready_tasks:
-            if len(assignments) >= self.capacity:
+            if len(assignments) >= limit:
                 break
             instance = next(
                 (
@@ -124,7 +139,13 @@ class LocalTesterScheduler:
                 None,
             )
             if instance is None:
-                continue
+                if self.tester_factory is None or task["assigned_tester"] is not None:
+                    continue
+                instance = self.tester_factory(task)
+                self.testers.append(instance)
+                available_instances.append(instance)
+                if not self._tester_can_run(instance.tester_id, task):
+                    continue
             try:
                 claimed = self.store.claim_task(
                     task_id=str(task["task_id"]), tester_id=instance.tester_id

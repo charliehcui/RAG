@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from agent_framework import BaseChatClient, ChatResponse, Message
+from agent_framework import BaseChatClient, ChatResponse, Content, Message
 from agent_framework._tools import FunctionInvocationLayer
 
 from web_testing_system.agents import MainAgentRunner, MainAgentTools, create_main_agent
@@ -71,7 +71,7 @@ async def test_final_report_uses_state_facts_and_existing_main_agent_only_summar
 
     client = FakeSummaryClient()
     tools = MainAgentTools(store=store, run_id="run-report", target_url="http://demo.test", focus_features=["Task", "Permission"], allowed_scope=["/"], denied_operations=["production delete"], max_step_budget=5)
-    agent = create_main_agent(client=client, settings=Settings(_env_file=None, main_agent_provider="gemini", main_agent_model="fake-gemini"), tools=tools)
+    agent = create_main_agent(client=client, settings=Settings(_env_file=None, main_agent_provider="streamlake/fp8", main_agent_model="fake-gemini"), tools=tools)
     runner = MainAgentRunner(agent=agent, tools=tools, run_id="run-report", max_replans=0)
     summary = await runner.summarize_report(report)
 
@@ -82,3 +82,34 @@ async def test_final_report_uses_state_facts_and_existing_main_agent_only_summar
     assert summary_event["result"]["summary"] == summary.text
     assert "demo-member" not in json.dumps(report)
     assert "fake-report-secret" not in json.dumps(report)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reply", ["unexpected_tool", "truncated"])
+async def test_final_main_review_has_one_call_and_cannot_mutate_facts(tmp_path: Path, reply: str) -> None:
+    class Client(FunctionInvocationLayer, BaseChatClient):
+        calls = 0
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.calls += 1
+            assert not options.get("tools")
+            if reply == "truncated":
+                return ChatResponse(messages=[Message(role="assistant", contents=["Incomplete summary"])], finish_reason="length")
+            content = Content.from_function_call("unexpected", "create_task", arguments={"task_id": "invented-task", "goal": "Invented", "feature": "Task", "priority": "P1", "dependencies": [], "step_budget": 1, "data_requirements": {}, "scope_targets": ["/"], "required_operations": []})
+            return ChatResponse(messages=[Message(role="assistant", contents=[content])])
+
+    store = create_report_store(tmp_path / "review.db")
+    report = FinalReportBuilder(store).build("run-report")
+    before_tasks = store.list_tasks("run-report")
+    before_findings = store.list_recent_findings("run-report")
+    tools = MainAgentTools(store=store, run_id="run-report", target_url="http://demo.test", focus_features=["Task"], allowed_scope=["/"], denied_operations=["production delete"], max_step_budget=5)
+    client = Client()
+    agent = create_main_agent(client=client, settings=Settings(_env_file=None), tools=tools)
+    planning_tools = agent.default_options["tools"]
+    runner = MainAgentRunner(agent=agent, tools=tools, run_id="run-report", max_replans=0)
+    with pytest.raises(RuntimeError, match="empty or truncated"):
+        await runner.summarize_report(report)
+    assert client.calls == 1
+    assert agent.default_options["tools"] is planning_tools
+    assert store.list_tasks("run-report") == before_tasks
+    assert store.list_recent_findings("run-report") == before_findings

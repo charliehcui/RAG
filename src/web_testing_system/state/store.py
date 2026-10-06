@@ -274,6 +274,9 @@ class StateStore:
                 connection.execute(
                     "ALTER TABLE tasks ADD COLUMN data_requirements_json TEXT NOT NULL DEFAULT '{}'"
                 )
+            for column, definition in {"success_status": "TEXT NOT NULL DEFAULT 'UNKNOWN'", "success_reason": "TEXT", "assertion_results_json": "TEXT NOT NULL DEFAULT '[]'"}.items():
+                if column not in task_columns:
+                    connection.execute(f"ALTER TABLE tasks ADD COLUMN {column} {definition}")
             finding_columns = {
                 row["name"] for row in connection.execute("PRAGMA table_info(findings)")
             }
@@ -419,6 +422,18 @@ class StateStore:
                 (run_id, *open_statuses),
             ).fetchall()
         return [decoded for row in rows if (decoded := decode_row(row)) is not None]
+
+    def record_task_outcome(self, *, task_id: str, success_status: str, reason: str, assertion_results: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """Store deterministic success separately from execution lifecycle status."""
+        if success_status not in {"PASS", "FAIL", "UNKNOWN"}:
+            raise ValueError("unsupported task success status")
+        with self._connect() as connection:
+            cursor = connection.execute("UPDATE tasks SET success_status = ?, success_reason = ?, assertion_results_json = ? WHERE task_id = ?", (success_status, reason, encode_json(assertion_results), task_id))
+            if cursor.rowcount != 1:
+                raise KeyError(f"unknown task: {task_id}")
+        result = self.get_task(task_id)
+        assert result is not None
+        return result
 
     def claim_task(self, *, task_id: str, tester_id: str) -> dict[str, Any]:
         started_at = utc_now()
@@ -682,6 +697,10 @@ class StateStore:
             for limit_name, usage_name in budget_fields.items():
                 if limit_name in global_budget:
                     remaining_budget[limit_name] = max(0, global_budget[limit_name] - totals[usage_name])
+            if "max_runtime_seconds" in global_budget:
+                started_at = connection.execute("SELECT started_at FROM runs WHERE run_id = ?", (run_row["run_id"],)).fetchone()["started_at"]
+                elapsed = (datetime.now(UTC) - datetime.fromisoformat(started_at)).total_seconds()
+                remaining_budget["max_runtime_seconds"] = max(0, global_budget["max_runtime_seconds"] - elapsed)
             connection.execute(
                 "UPDATE runs SET remaining_budget_json = ? WHERE run_id = ?",
                 (json.dumps(remaining_budget), run_row["run_id"]),
@@ -703,9 +722,28 @@ class StateStore:
         assert event is not None
         return event
 
-    def list_events(self, run_id: str) -> list[dict[str, Any]]:
+    def list_events(self, run_id: str, *, event_types: Sequence[str] | None = None, task_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+        conditions = ["run_id = ?"]
+        values: list[Any] = [run_id]
+        if event_types is not None:
+            if not event_types:
+                return []
+            conditions.append(f"event_type IN ({','.join('?' for _ in event_types)})")
+            values.extend(event_types)
+        if task_id is not None:
+            conditions.append("task_id = ?")
+            values.append(task_id)
+        ordering = "DESC" if limit is not None else "ASC"
+        query = f"SELECT * FROM events WHERE {' AND '.join(conditions)} ORDER BY timestamp {ordering}, event_id {ordering}"
+        if limit is not None:
+            if limit <= 0:
+                raise ValueError("event limit must be positive")
+            query += " LIMIT ?"
+            values.append(limit)
         with self._connect() as connection:
-            rows = connection.execute("SELECT * FROM events WHERE run_id = ? ORDER BY timestamp, event_id", (run_id,)).fetchall()
+            rows = connection.execute(query, values).fetchall()
+        if limit is not None:
+            rows.reverse()
         return [decoded for row in rows if (decoded := decode_row(row)) is not None]
 
     def get_latest_checkpoint(self, *, run_id: str, task_id: str) -> dict[str, Any] | None:

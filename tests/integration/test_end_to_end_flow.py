@@ -40,10 +40,14 @@ from web_testing_system.evaluation.runner import (
 )
 from web_testing_system.evidence import EvidenceStore
 from web_testing_system.findings import FindingService, ScreeningSignals
+from web_testing_system.orchestration.runner import run as run_formal
+from web_testing_system.orchestration.scheduler import LocalTesterScheduler
+from web_testing_system.orchestration.scheduler import (
+    TesterInstance as ScheduledInstance,
+)
 from web_testing_system.reporting import FinalReportBuilder
 from web_testing_system.reproduction import ReplayPlanBuilder, ReproductionRunner
 from web_testing_system.reproduction.replay import DeterministicReplay
-from web_testing_system.run import run as run_formal
 from web_testing_system.runtime.browser import BrowserManager
 from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
 from web_testing_system.runtime.candidates import CandidateBuilder, PageStateReader
@@ -52,8 +56,6 @@ from web_testing_system.runtime.models import ActionType, WebAction
 from web_testing_system.runtime.permissions import ExecutionPolicy, PermissionChecker
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
-from web_testing_system.scheduler import LocalTesterScheduler
-from web_testing_system.scheduler import TesterInstance as ScheduledInstance
 from web_testing_system.state import StateStore, build_data_namespace
 from web_testing_system.verification import VerificationRunner
 
@@ -78,6 +80,8 @@ class FakeGeminiMainClient(FunctionInvocationLayer, BaseChatClient):
     async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
         del stream, options, kwargs
         self.received_messages.append("\n".join(message.text for message in messages))
+        if "Final Report: " in messages[-1].text:
+            self.begin_summary()
         self.step += 1
         if self.phase == "initial":
             return self._initial()
@@ -87,7 +91,7 @@ class FakeGeminiMainClient(FunctionInvocationLayer, BaseChatClient):
 
     def _initial(self) -> ChatResponse:
         if self.step == 1:
-            return self._tool("todo-phase5", "todos_add", {"todos": [{"title": "Test Project flow"}, {"title": "Test Task deletion persistence"}]})
+            self.step = 2
         if self.step == 2:
             return self._tool("task-project", "create_task", {"task_id": "task-project", "goal": "Test Project workflow", "feature": "Project", "priority": "P1", "dependencies": [], "step_budget": 20, "data_requirements": {"role": "admin"}, "scope_targets": ["/"], "required_operations": ["read", "create"]})
         if self.step == 3:
@@ -144,7 +148,7 @@ class ModelStepTesterClient(FakeTesterClient):
 class ReplanningMainClient(FakeGeminiMainClient):
     def _initial(self) -> ChatResponse:
         if self.step == 1:
-            return self._tool("todo", "todos_add", {"todos": [{"title": "Test Task deletion"}, {"title": "Test Project flow"}]})
+            self.step = 2
         if self.step == 2:
             return self._tool("delete", "create_task", {"task_id": "task-delete", "goal": "Test Task deletion", "feature": "Task", "priority": "P0", "dependencies": [], "step_budget": 20, "data_requirements": {"role": "member"}, "scope_targets": ["/"], "required_operations": ["read", "delete"]})
         if self.step == 3:
@@ -155,7 +159,7 @@ class ReplanningMainClient(FakeGeminiMainClient):
 class FourTaskMainClient(FakeGeminiMainClient):
     def _initial(self) -> ChatResponse:
         if self.step == 1:
-            return self._tool("todo", "todos_add", {"todos": [{"title": f"Test Project {index}"} for index in range(4)]})
+            self.step = 2
         if 2 <= self.step <= 5:
             index = self.step - 2
             return self._tool(f"task-{index}", "create_task", {"task_id": f"task-{index}", "goal": f"Test Project {index}", "feature": "Project", "priority": "P1", "dependencies": [], "step_budget": 20, "data_requirements": {"role": "admin"}, "scope_targets": ["/"], "required_operations": ["read"]})
@@ -224,7 +228,7 @@ async def test_formal_run_uses_scheduler_with_single_or_concurrent_testers(tmp_p
         config.budget.max_testers = tester_count
         if tester_count == 4:
             config.budget.max_parallel_browser_contexts = 4
-        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="relace", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
         ConcurrentTesterClient.active = 0
         ConcurrentTesterClient.maximum_active = 0
         ConcurrentTesterClient.expected_active = expected_concurrency
@@ -248,7 +252,7 @@ async def test_formal_run_uses_scheduler_with_single_or_concurrent_testers(tmp_p
 async def test_formal_run_replans_pending_task_from_tester_finding(tmp_path: Path) -> None:
     with DemoAppServer() as app:
         config = make_run_config(app.base_url)
-        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="relace", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
         main_client = ReplanningMainClient()
         store = StateStore(settings.state_db_path)
         run_id = "run-formal-replan"
@@ -268,13 +272,13 @@ async def test_formal_run_replans_pending_task_from_tester_finding(tmp_path: Pat
 async def test_model_every_step_route_calls_tester_before_known_navigation(tmp_path: Path) -> None:
     with DemoAppServer() as app:
         config = make_run_config(app.base_url)
-        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="relace", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs")
         route = ExecutionRoute(tester_count=2, candidate_selection="TESTER_LLM_EVERY_DECISION", coordination="SHARED_STATE", finding_after_anomaly="SUSPECTED_ISSUE", known_action="TESTER_LLM_EVERY_STEP", visual_fallback="FAIL_WITHOUT_COMPUTER_USE")
 
         report_path = await run_formal(config, settings, route=route, main_client=FakeGeminiMainClient(), tester_client_factory=ModelStepTesterClient, jev_selector=JevSelector(FakeJevClient()))
 
         budgets = StateStore(settings.state_db_path).list_budgets(report_path.parent.name)
-        assert sum(budget["llm_calls"] for budget in budgets) == 4
+        assert sum(budget["llm_calls"] for budget in budgets) == 5  # Four Tester calls plus the final Manager summary.
 
 
 @pytest.mark.integration
@@ -282,7 +286,7 @@ async def test_model_every_step_route_calls_tester_before_known_navigation(tmp_p
 async def test_fake_evaluation_runner_reuses_formal_run_with_isolated_databases(tmp_path: Path) -> None:
     with DemoAppServer() as app:
         config = make_run_config(app.base_url)
-        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "unused.db", artifacts_dir=tmp_path / "unused-runs")
+        settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="relace", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "unused.db", artifacts_dir=tmp_path / "unused-runs")
         controls = EvaluationControls(demo_version=DEMO_VERSION, seeded_bugs=(), model_configuration=(("main", "fake-gemini-main"), ("tester", "fake-groq-tester")), token_budget=500, time_budget_seconds=60, accounts=("admin", "member"), initial_data=(), test_scope=("Project", "Task"))
         plan = build_evaluation_plan(EvaluationMode.TESTER_COUNT, controls)
         executor = FormalRunExecutor(config, settings, main_client_factory=FakeGeminiMainClient, tester_client_factory=FakeTesterClient, jev_selector_factory=lambda: JevSelector(FakeJevClient()), computer_use_client_factory=lambda: object())  # type: ignore[arg-type]
@@ -339,7 +343,7 @@ async def test_low_cost_two_tester_fake_end_to_end_flow() -> None:
 
             main_client = FakeGeminiMainClient()
             main_tools = MainAgentTools(store=store, run_id="run-phase5", target_url=f"{app.base_url}/", focus_features=run_config.focus_features, allowed_scope=run_config.allowed_scope, denied_operations=run_config.denied_operations, max_step_budget=100)
-            main_agent = create_main_agent(client=main_client, settings=Settings(_env_file=None, main_agent_provider="gemini", main_agent_model="fake-gemini-main", tester_agent_provider="groq", tester_agent_model="fake-groq-tester"), tools=main_tools)
+            main_agent = create_main_agent(client=main_client, settings=Settings(_env_file=None, main_agent_provider="streamlake/fp8", main_agent_model="fake-gemini-main", tester_agent_provider="relace", tester_agent_model="fake-groq-tester"), tools=main_tools)
             main_runner = MainAgentRunner(agent=main_agent, tools=main_tools, run_id="run-phase5", max_replans=1)
             initial = await main_runner.create_initial_plan(run_config)
             assert initial.text == "Initial plan created for two Testers."
@@ -397,7 +401,7 @@ async def test_low_cost_two_tester_fake_end_to_end_flow() -> None:
                 failed = await runner.execute_known(WebAction(action_type=ActionType.ASSERTION, target="#tasks-table tr[data-task-id='task-1']", assertion="hidden"))
                 assert failed["error_type"] == "ASSERTION_FAILURE"
                 boundary_event_id = str(failed["event_id"])
-                finding = tools_b.record_finding(title="Deleted Task reappears after refresh", status="OBSERVATION", expected_result="Deleted Task remains absent after refresh", actual_result="Deleted Task is visible again", severity_hint="HIGH", affected_page="/", action="refresh", error_text="target is visible")
+                finding = await tools_b.record_finding(title="Deleted Task reappears after refresh", status="OBSERVATION", expected_result="Deleted Task remains absent after refresh", actual_result="Deleted Task is visible again", severity_hint="HIGH", affected_page="/", action="refresh", error_text="target is visible")
                 finding_id = str(finding["finding_id"])
                 screened = FindingService(store, "run-phase5").screen(finding_id, ScreeningSignals(assertion_failed=True))
                 assert screened["status"] == "ANOMALY"

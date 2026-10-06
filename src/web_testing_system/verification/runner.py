@@ -47,6 +47,8 @@ class VerificationRunner:
             reason = "NEEDS_AI_ASSISTANCE" if attempt.needs_ai_assistance else attempt.reason or "ENVIRONMENT_ISSUE"
             return self._needs_confirmation(finding, reason, attempt)
         result = "PASS" if attempt.matched else "FAIL"
+        if result == "FAIL" and (not attempt.action_results or attempt.action_results[-1].get("error_type") != "ASSERTION_FAILURE"):
+            return self._needs_confirmation(finding, "VERIFICATION_PATH_FAILED", attempt)
         details = {"reason": attempt.reason, "attempt_id": attempt.attempt_id, "duration_ms": attempt.duration_ms, "evidence_ids": list(attempt.evidence_ids)}
         self.finding_service.finish_verification(finding_id, result, details)
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=plan.run_id, task_id=plan.task_id, tester_id=plan.tester_id, browser_session_id=attempt.browser_session_id, event_type="VERIFICATION_RESULT", tool="VerificationRunner", action="verify_known_steps", result={"finding_id": finding_id, "result": result, **details}, evidence_references=attempt.evidence_ids, latency_ms=attempt.duration_ms)

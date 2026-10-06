@@ -28,42 +28,37 @@ def valid_run_input() -> dict[str, object]:
     }
 
 
-def test_settings_support_configurable_providers_without_model_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    fake_gemini_key = "fake-gemini-key-for-test"
-    fake_groq_key = "fake-groq-key-for-test"
-    monkeypatch.setenv("GEMINI_API_KEY", fake_gemini_key)
-    monkeypatch.setenv("GROQ_API_KEY", fake_groq_key)
-    monkeypatch.setenv("MAIN_AGENT_PROVIDER", "gemini")
-    monkeypatch.setenv("MAIN_AGENT_MODEL", "configured-main-model")
-    monkeypatch.setenv("MAIN_AGENT_FALLBACK_MODEL", "configured-main-fallback-model")
-    monkeypatch.setenv("TESTER_AGENT_PROVIDER", "groq")
-    monkeypatch.setenv("TESTER_AGENT_MODEL", "configured-tester-model")
-    monkeypatch.setenv("COMPUTER_USE_MODEL", "configured-computer-use-model")
-
+def test_settings_pin_paid_models_and_providers_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake_key = "fake-openrouter-key"
+    monkeypatch.setenv("OPENROUTER_API_KEY", fake_key)
+    monkeypatch.setenv("MAIN_AGENT_MODEL", "deepseek/deepseek-v4-flash")
+    monkeypatch.setenv("MAIN_AGENT_PROVIDER", "streamlake/fp8")
+    monkeypatch.setenv("TESTER_AGENT_MODEL", "z-ai/glm-5.3-flash")
+    monkeypatch.setenv("TESTER_AGENT_PROVIDER", "relace")
     settings = Settings(_env_file=None)
-
-    assert settings.main_agent_provider == "gemini"
-    assert settings.main_agent_model == "configured-main-model"
-    assert settings.main_agent_fallback_model == "configured-main-fallback-model"
-    assert settings.tester_agent_provider == "groq"
-    assert settings.computer_use_provider == "gemini"
-    assert settings.computer_use_model == "configured-computer-use-model"
-    assert settings.tester_agent_model == "configured-tester-model"
+    assert settings.main_agent_provider == "streamlake/fp8"
+    assert settings.tester_agent_provider == "relace"
+    assert settings.main_agent_model == "deepseek/deepseek-v4-flash"
+    assert settings.tester_agent_model == "z-ai/glm-5.3-flash"
     assert settings.full_evaluation is False
-    assert fake_gemini_key not in repr(settings)
-    assert fake_groq_key not in repr(settings)
+    assert fake_key not in repr(settings)
+    assert not hasattr(settings, "main_agent_fallback_model")
+    assert not hasattr(settings, "gemini_api_key")
+    assert not hasattr(settings, "groq_api_key")
 
 
-def test_model_names_are_optional_and_not_hardcoded(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("GEMINI_API_KEY", "GROQ_API_KEY", "MAIN_AGENT_MODEL", "MAIN_AGENT_FALLBACK_MODEL", "TESTER_AGENT_MODEL", "COMPUTER_USE_MODEL"):
+def test_verified_paid_defaults_and_manual_backups(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("OPENROUTER_API_KEY", "MAIN_AGENT_MODEL", "MAIN_AGENT_PROVIDER", "TESTER_AGENT_MODEL", "TESTER_AGENT_PROVIDER", "COMPUTER_USE_MODEL"):
         monkeypatch.delenv(name, raising=False)
-
     settings = Settings(_env_file=None)
-
-    assert settings.main_agent_model is None
-    assert settings.main_agent_fallback_model is None
-    assert settings.tester_agent_model is None
+    assert settings.main_agent_model == "deepseek/deepseek-v4-flash"
+    assert settings.main_agent_provider == "streamlake/fp8"
+    assert settings.tester_agent_model == "z-ai/glm-5.3-flash"
+    assert settings.tester_agent_provider == "relace"
+    assert settings.main_agent_backup_model == "deepseek/deepseek-v3.2"
+    assert settings.tester_agent_backup_model == "openai/gpt-oss-20b"
     assert settings.computer_use_model is None
+    assert Settings(_env_file=None, computer_use_model="").computer_use_model is None
 
 
 def test_run_config_validates_required_input_and_expected_behavior() -> None:

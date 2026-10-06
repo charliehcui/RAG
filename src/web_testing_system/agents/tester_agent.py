@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from agent_framework import Agent, AgentResponse, AgentSession
+from agent_framework import (
+    Agent,
+    AgentResponse,
+    AgentSession,
+    FunctionInvocationContext,
+    FunctionMiddleware,
+    MiddlewareTermination,
+)
 
+from web_testing_system.observability import TraceChatMiddleware, TraceToolMiddleware
 from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
 from web_testing_system.runtime.models import (
     ActionCandidate,
@@ -42,6 +51,7 @@ class TesterAgentTools:
         shared_state: bool = True,
         decision_policy: str = "JEV",
         action_policy: str = "PLAYWRIGHT",
+        task_context: dict[str, Any] | None = None,
     ) -> None:
         self.assignment = assignment
         self.runtime = runtime
@@ -52,6 +62,7 @@ class TesterAgentTools:
         self.pending_candidates: dict[str, ActionCandidate] = {}
         self.pending_page_state: PageState | None = None
         self.pending_goal: str | None = None
+        self.task_context = task_context or {}
 
     async def execute_known_action(
         self,
@@ -67,6 +78,8 @@ class TesterAgentTools:
         resource_id: str | None = None,
         requires_resource: bool = False,
         confirmed: bool = False,
+        behavior_id: str | None = None,
+        goal_check: bool = False,
     ) -> dict[str, Any]:
         """Execute one known action through the permission-checked Web Testing Runtime."""
         try:
@@ -77,6 +90,12 @@ class TesterAgentTools:
                 "error_type": "INVALID_ACTION",
                 "error": f"unsupported action: {action_type}",
             }
+        if behavior_id is not None and behavior_id not in self.runtime.expected_behavior_ids:
+            return {"success": False, "error_type": "UNKNOWN_EXPECTED_BEHAVIOR"}
+        if value_reference is not None:
+            if value_reference not in self.runtime.input_values:
+                return {"success": False, "error_type": "INPUT_VALUE_UNAVAILABLE", "reference": value_reference}
+            value = self.runtime.input_values[value_reference]
         action = WebAction(
             action_type=parsed_action,
             target=target,
@@ -90,6 +109,8 @@ class TesterAgentTools:
             resource_id=resource_id,
             requires_resource=requires_resource,
             confirmed=confirmed,
+            behavior_id=behavior_id,
+            goal_check=goal_check,
         )
         return (await self.runtime.execute_known_action(action)).to_dict()
 
@@ -109,6 +130,12 @@ class TesterAgentTools:
 
     async def select_candidate(self, candidate_id: str) -> dict[str, Any]:
         """Execute one LLM-selected Candidate after Runtime revalidation."""
+        async with self.runtime.page_lock:
+            if self.runtime.task_finished:
+                return {"success": False, "error_type": "TASK_ALREADY_FINISHED"}
+            return await self._select_candidate(candidate_id)
+
+    async def _select_candidate(self, candidate_id: str) -> dict[str, Any]:
         if self.decision_policy != "TESTER_LLM_EVERY_DECISION" or self.pending_page_state is None or self.runtime.browser_session_id is None:
             return {"success": False, "error_type": "CANDIDATE_NOT_AVAILABLE"}
         candidate = self.pending_candidates.get(candidate_id)
@@ -126,7 +153,7 @@ class TesterAgentTools:
         if candidate.action == "stop_current_path":
             return {"success": True, "action": "stop_current_path"}
         assert validation.action is not None
-        result = await self.runtime.execute_known_action(validation.action)
+        result = await self.runtime._execute_known_action(validation.action)
         if result.success:
             self.runtime.store.record_path(run_id=self.assignment.run_id, feature=self.pending_goal or "", page=self.pending_page_state.url, page_state_id=self.pending_page_state.state_id, action=candidate.action, result="SUCCESS", last_tester=self.assignment.tester_id)
         return result.to_dict()
@@ -138,11 +165,7 @@ class TesterAgentTools:
 
     def read_shared_facts(self) -> dict[str, Any]:
         """Read structured collaboration facts without another Tester's conversation."""
-        progress = [
-            event
-            for event in self.store.list_events(self.assignment.run_id)
-            if event["event_type"] == "TASK_PROGRESS"
-        ]
+        progress = self.store.list_events(self.assignment.run_id, event_types=("TASK_PROGRESS",), limit=50)
         return {
             "current_task": self.store.get_task(self.assignment.task_id),
             "coverage": self.read_coverage(),
@@ -195,7 +218,7 @@ class TesterAgentTools:
             "reason": "NEW_REASON" if should_explore and existing is not None else "NOT_COVERED" if existing is None else "ALREADY_COVERED",
         }
 
-    def record_finding(
+    async def record_finding(
         self,
         title: str,
         status: str,
@@ -234,6 +257,7 @@ class TesterAgentTools:
             error_text=error_text,
             reproduction_steps=reproduction_steps or [],
         )
+        history = self.store.list_action_history(run_id=self.assignment.run_id, task_id=self.assignment.task_id)
         self.store.append_event(
             event_id=f"event-{uuid4().hex}",
             run_id=self.assignment.run_id,
@@ -249,12 +273,14 @@ class TesterAgentTools:
                 "status": finding["status"],
                 "severity_hint": finding["severity_hint"],
                 "action": finding["action"],
+                "boundary_event_id": history[-1]["event_id"] if history else None,
             },
             latency_ms=0,
         )
+        await self.runtime.capture_finding_evidence(str(finding["finding_id"]))
         return finding
 
-    def record_observation(
+    async def record_observation(
         self,
         title: str,
         expected_result: str,
@@ -264,7 +290,7 @@ class TesterAgentTools:
         error_text: str | None = None,
     ) -> dict[str, Any]:
         """Record an observation without declaring a confirmed bug."""
-        return self.record_finding(
+        return await self.record_finding(
             title=title,
             status="OBSERVATION",
             expected_result=expected_result,
@@ -289,6 +315,24 @@ class TesterAgentTools:
         result = await self.runtime.use_computer_fallback(finding_id=finding_id, goal=goal, component_type=component_type, playwright_failure_reason=playwright_failure_reason, allowed_visual_actions=tuple(allowed_visual_actions))
         return {"status": result.status, "reason": result.reason, "action": result.action, "before_state_id": result.before_state.state_id if result.before_state else None, "after_state_id": result.after_state.state_id if result.after_state else None, "evidence_ids": list(result.evidence_ids)}
 
+    async def finish_task(self) -> dict[str, object]:
+        """Finish execution; Python derives PASS/FAIL/UNKNOWN from recorded goal assertions."""
+        return await self.runtime.record_task_outcome(finish=True)
+
+    def read_test_data(self, reference: str) -> dict[str, Any]:
+        """Read an allowed non-secret input. Secret references can only be filled by Runtime."""
+        value = self.runtime.input_values.get(reference)
+        if reference.startswith("env:"):
+            return {"reference": reference, "available": value is not None, "instruction": "Pass this reference to execute_known_action; secret values are never returned."}
+        return {"reference": reference, "value": value, "available": value is not None}
+
+
+class FinishTaskMiddleware(FunctionMiddleware):
+    async def process(self, context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
+        await call_next()
+        if context.function.name == "finish_task":
+            raise MiddlewareTermination("Task outcome recorded; no final Done model round is needed.", result=context.result)
+
 
 def create_tester_agent(
     *, client: Any, assignment: TesterAssignment, tools: TesterAgentTools
@@ -299,6 +343,9 @@ def create_tester_agent(
         "Check shared Coverage before starting a path and collaborate only through structured Shared State facts. "
         "Never change global scope, bypass permissions, create another Agent, or declare a confirmed bug. "
         "Record uncertain behavior only with record_observation. Request replan when the local path cannot continue."
+        " Mark actual goal assertions with goal_check=true or their supplied behavior_id. "
+        "Use value_reference for configured inputs and account secret references. Never invent unavailable inputs. "
+        "Call finish_task after testing the goal; Python determines success. Do not produce a final Done summary."
     )
     if tools.action_policy == "TESTER_LLM_EVERY_STEP":
         instructions += " For this evaluation route, decide one browser action per model response. Call at most one browser action tool before reasoning again."
@@ -309,6 +356,7 @@ def create_tester_agent(
         name="tester-agent",
         description="Executes one assigned web testing task through the controlled runtime.",
         instructions=instructions,
+        middleware=[TraceChatMiddleware(), TraceToolMiddleware(), FinishTaskMiddleware()],
         tools=[
             tools.execute_known_action,
             tools.explore_unknown_path,
@@ -321,8 +369,10 @@ def create_tester_agent(
             tools.update_task_progress,
             tools.request_replan,
             tools.use_computer_fallback,
+            tools.finish_task,
+            tools.read_test_data,
         ],
-        additional_properties={"assignment": asdict(assignment)},
+        additional_properties={"assignment": asdict(assignment), "task_context": tools.task_context},
     )
 
 

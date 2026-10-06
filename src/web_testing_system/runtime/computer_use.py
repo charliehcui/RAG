@@ -1,19 +1,21 @@
-"""Controlled Gemini Computer Use fallback for one visual action."""
+"""Controlled paid OpenRouter visual fallback for one browser action."""
 
 from __future__ import annotations
 
+import base64
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any, Protocol
 from uuid import uuid4
 
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 from playwright.async_api import Page
 
 from web_testing_system.config import Settings
 from web_testing_system.evidence import EvidenceStore
+from web_testing_system.observability import trace_result, trace_span
 from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
 from web_testing_system.runtime.candidates import PageStateReader
 from web_testing_system.runtime.models import ActionType, PageState, WebAction
@@ -54,98 +56,48 @@ class ComputerUseClient(Protocol):
     async def execute(self, request: ComputerUseRequest) -> ComputerUseDecision: ...
 
 
-class GeminiComputerUseClient:
-    """Request one Gemini browser action and convert it to the runtime boundary."""
+class OpenRouterComputerUseClient:
+    """Request one visual action from one fixed paid model and provider."""
 
     def __init__(self, settings: Settings, client: Any | None = None) -> None:
-        if settings.computer_use_provider != "gemini":
-            raise ValueError("Computer Use provider must be Gemini")
-        if settings.gemini_api_key is None or not settings.gemini_api_key.get_secret_value():
-            raise ValueError("GEMINI_API_KEY is required")
-        if settings.computer_use_model is None or not settings.computer_use_model.strip():
+        from web_testing_system.providers import (
+            OPENROUTER_BASE_URL,
+            provider_preferences,
+        )
+
+        if settings.openrouter_api_key is None or not settings.openrouter_api_key.get_secret_value():
+            raise ValueError("OPENROUTER_API_KEY is required")
+        if settings.computer_use_model is None:
             raise ValueError("COMPUTER_USE_MODEL is required")
         self.model = settings.computer_use_model
-        self.client = client or genai.Client(api_key=settings.gemini_api_key.get_secret_value(), http_options=types.HttpOptions(retry_options=types.HttpRetryOptions(attempts=1)))
+        self.provider = settings.computer_use_provider
+        self.provider_options = provider_preferences(self.provider)
+        self.client: Any = client or AsyncOpenAI(api_key=settings.openrouter_api_key.get_secret_value(), base_url=OPENROUTER_BASE_URL, max_retries=0, timeout=60)
 
     async def execute(self, request: ComputerUseRequest) -> ComputerUseDecision:
-        excluded_actions = self._excluded_actions(request.allowed_visual_actions)
-        prompt = (
-            f"Current URL: {request.url}\nGoal: {request.goal}\n"
-            f"Return exactly one low-risk browser action from: {', '.join(request.allowed_visual_actions)}. "
-            "Do not navigate, type, submit data, or choose any other action."
-        )
-        response = await self.client.aio.models.generate_content(
-            model=self.model,
-            contents=[types.Content(role="user", parts=[types.Part(text=prompt), types.Part.from_bytes(data=request.screenshot, mime_type="image/png")])],
-            config=types.GenerateContentConfig(
-                tools=[types.Tool(computer_use=types.ComputerUse(environment=types.Environment.ENVIRONMENT_BROWSER, excluded_predefined_functions=excluded_actions, enable_prompt_injection_detection=True))]
-            ),
-        )
-        usage = getattr(response, "usage_metadata", None)
-        input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0)
-        output_tokens = int(getattr(usage, "candidates_token_count", 0) or 0)
-        model = str(getattr(response, "model_version", None) or self.model)
-        function_call = self._first_function_call(response)
-        if function_call is None:
-            return ComputerUseDecision(status="REFUSED", error="NO_COMPUTER_USE_ACTION", input_tokens=input_tokens, output_tokens=output_tokens, model=model)
-        arguments = dict(function_call.args or {})
-        safety_error = self._safety_error(arguments)
-        if safety_error is not None:
-            return ComputerUseDecision(status="REFUSED", error=safety_error, input_tokens=input_tokens, output_tokens=output_tokens, model=model)
+        prompt = f"URL: {request.url}\nGoal: {request.goal}\nReturn exactly one visual_action tool call. Use normalized coordinates 0..1000. Only allowed actions: {request.allowed_visual_actions}. Never navigate, type, submit, or request safety confirmation."
+        schema = {"type": "object", "properties": {"action": {"type": "string", "enum": list(request.allowed_visual_actions)}, "x": {"type": "number"}, "y": {"type": "number"}, "to_x": {"type": "number"}, "to_y": {"type": "number"}}, "required": ["action", "x", "y"], "additionalProperties": False}
+        response = await self.client.chat.completions.create(model=self.model, messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(request.screenshot).decode("ascii")}}]}], tools=[{"type": "function", "function": {"name": "visual_action", "description": "One allowed low-risk visual click or drag", "parameters": schema}}], tool_choice="auto", max_tokens=256, extra_body={"provider": self.provider_options})
+        usage = response.usage
+        tokens: dict[str, Any] = {"input_tokens": int(getattr(usage, "prompt_tokens", 0) or 0), "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0), "model": response.model, "cost": float(getattr(usage, "cost", 0) or 0)}
+        calls = response.choices[0].message.tool_calls or []
+        if len(calls) != 1 or calls[0].function.name != "visual_action":
+            return ComputerUseDecision(status="REFUSED", error="NO_SINGLE_VISUAL_ACTION", **tokens)
+        arguments = json.loads(calls[0].function.arguments)
+        if arguments.get("action") not in request.allowed_visual_actions:
+            return ComputerUseDecision(status="REFUSED", error="MODEL_RETURNED_DISALLOWED_ACTION", **tokens)
         width, height = self._png_size(request.screenshot)
-        if function_call.name in {"click", "click_at"} and "click" in request.allowed_visual_actions:
-            return ComputerUseDecision(status="ACTION", action="click", x=self._scale(arguments.get("x"), width), y=self._scale(arguments.get("y"), height), input_tokens=input_tokens, output_tokens=output_tokens, model=model)
-        if function_call.name in {"drag", "drag_and_drop"} and "drag" in request.allowed_visual_actions:
-            return ComputerUseDecision(
-                status="ACTION",
-                action="drag",
-                x=self._scale(arguments.get("start_x", arguments.get("x")), width),
-                y=self._scale(arguments.get("start_y", arguments.get("y")), height),
-                to_x=self._scale(arguments.get("end_x", arguments.get("destination_x")), width),
-                to_y=self._scale(arguments.get("end_y", arguments.get("destination_y")), height),
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                model=model,
-            )
-        return ComputerUseDecision(status="REFUSED", error="MODEL_RETURNED_DISALLOWED_ACTION", input_tokens=input_tokens, output_tokens=output_tokens, model=model)
-
-    @staticmethod
-    def _first_function_call(response: Any) -> Any | None:
-        for candidate in response.candidates or []:
-            if candidate.content is None:
-                continue
-            for part in candidate.content.parts or []:
-                if part.function_call is not None:
-                    return part.function_call
-        return None
-
-    @staticmethod
-    def _safety_error(arguments: dict[str, Any]) -> str | None:
-        safety = arguments.get("safety_decision")
-        if not isinstance(safety, dict):
-            return None
-        decision = str(safety.get("decision", "")).casefold()
-        if decision in {"require_confirmation", "blocked", "deny", "denied"}:
-            return f"COMPUTER_USE_SAFETY_{decision.upper()}"
-        return None
+        return ComputerUseDecision(status="ACTION", action=arguments["action"], x=self._scale(arguments.get("x"), width), y=self._scale(arguments.get("y"), height), to_x=self._scale(arguments.get("to_x"), width), to_y=self._scale(arguments.get("to_y"), height), **tokens)
 
     @staticmethod
     def _png_size(screenshot: bytes) -> tuple[int, int]:
-        if len(screenshot) < 24 or screenshot[:8] != b"\x89PNG\r\n\x1a\n":
-            raise ValueError("Computer Use screenshot must be a PNG")
+        if not screenshot.startswith(b"\x89PNG\r\n\x1a\n") or len(screenshot) < 24:
+            raise ValueError("a PNG screenshot is required")
         return int.from_bytes(screenshot[16:20], "big"), int.from_bytes(screenshot[20:24], "big")
 
     @staticmethod
     def _scale(value: Any, size: int) -> float | None:
-        if not isinstance(value, int | float):
-            return None
-        return float(value) / 1_000 * size
-
-    @staticmethod
-    def _excluded_actions(allowed_actions: tuple[str, ...]) -> list[str]:
-        actions = {"click", "double_click", "triple_click", "middle_click", "right_click", "move", "type", "navigate", "go_back", "go_forward", "wait", "press_key", "key_down", "key_up", "hotkey", "take_screenshot", "scroll", "drag_and_drop"}
-        retained = {"click" if action == "click" else "drag_and_drop" for action in allowed_actions}
-        return sorted(actions - retained)
+        return float(value) * size / 1000 if value is not None else None
 
 
 @dataclass(frozen=True)
@@ -162,8 +114,6 @@ class ComputerUseController:
     """Validate, execute, and resynchronize one visual fallback action."""
 
     def __init__(self, *, client: ComputerUseClient, settings: Settings, store: StateStore, evidence_store: EvidenceStore, page_state_reader: PageStateReader, permission_checker: PermissionChecker, budget: BudgetGuard, budget_id: str, run_id: str, task_id: str, tester_id: str, max_consecutive_failures: int = 2) -> None:
-        if settings.computer_use_provider != "gemini":
-            raise ValueError("Computer Use provider must be Gemini")
         if max_consecutive_failures <= 0:
             raise ValueError("max_consecutive_failures must be positive")
         self.client = client
@@ -213,7 +163,7 @@ class ComputerUseController:
         run = self.store.get_run(self.run_id)
         if run is None:
             raise KeyError(f"unknown run: {self.run_id}")
-        real_provider = isinstance(self.client, GeminiComputerUseClient)
+        real_provider = isinstance(self.client, OpenRouterComputerUseClient)
         if run["remaining_budget"].get("max_computer_use_calls", self.budget.limits.max_computer_use_calls) <= 0 or (real_provider and run["remaining_budget"].get("max_llm_calls", self.budget.limits.max_llm_calls) <= 0):
             self._record_stop(browser_session_id, page.url, "MAX_PROVIDER_CALLS_REACHED")
             return ComputerUseResult("STOPPED", "MAX_PROVIDER_CALLS_REACHED", None, None, None, ())
@@ -221,7 +171,9 @@ class ComputerUseController:
         started = perf_counter()
         started_at = datetime.now(UTC).isoformat()
         try:
-            decision = await self.client.execute(request)
+            with trace_span("VisualLLM", "llm", metadata={"agent_role": "visual", "phase": "visual", "finding_id": finding_id, "model": self.model, "provider": self.provider, "ls_model_name": self.model, "ls_provider": "openrouter"}) as span:
+                decision = await self.client.execute(request)
+                trace_result(span, input_tokens=decision.input_tokens, output_tokens=decision.output_tokens, cost=decision.cost, success=decision.status == "ACTION")
         except Exception as error:
             duration_seconds = perf_counter() - started
             self.budget.record_computer_use_call(runtime_seconds=duration_seconds, cost=0)
@@ -256,7 +208,7 @@ class ComputerUseController:
         return await self._finish(page=page, browser_session_id=browser_session_id, finding_id=finding_id, attempt_id=attempt_id, before_state=before_state, before_evidence_id=before_evidence_id, status="RETURN_TO_PLAYWRIGHT", reason=None, action=decision.action, started_at=started_at, latency_ms=duration_seconds * 1_000, cost=recorded_cost)
 
     def _record_provider_event(self, *, latency_ms: float, success: bool, input_tokens: int, output_tokens: int, model: str | None, error_type: str | None) -> None:
-        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool="gemini", action="computer_use_provider_request", result={"agent": "computer_use", "provider": "gemini", "model": model, "success": success, "error_type": error_type, "input_tokens": input_tokens, "output_tokens": output_tokens, "usage_source": "provider" if success else "unavailable"}, latency_ms=latency_ms)
+        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool="openrouter", action="computer_use_provider_request", result={"agent": "computer_use", "phase": "visual", "provider": "openrouter", "model": model, "success": success, "error_type": error_type, "input_tokens": input_tokens, "output_tokens": output_tokens, "usage_source": "provider" if success else "unavailable"}, latency_ms=latency_ms)
 
     def _validate_decision(self, decision: ComputerUseDecision, allowed_actions: tuple[str, ...]) -> str | None:
         if decision.status == "REFUSED":

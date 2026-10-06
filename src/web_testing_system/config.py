@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import (
     AnyHttpUrl,
@@ -24,22 +24,48 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    gemini_api_key: SecretStr | None = None
-    groq_api_key: SecretStr | None = None
     openrouter_api_key: SecretStr | None = None
-    main_agent_provider: Literal["gemini"] = "gemini"
-    main_agent_model: str | None = None
-    main_agent_fallback_model: str | None = None
-    tester_agent_provider: Literal["gemini", "groq"] = "gemini"
-    tester_agent_model: str | None = None
-    groq_base_url: str = "https://api.groq.com/openai/v1"
+    langsmith_api_key: SecretStr | None = None
+    langsmith_tracing: bool = True
+    langsmith_project: str = "multi-agent-web-testing"
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
+    main_agent_model: str = "deepseek/deepseek-v4-flash"
+    main_agent_provider: str = "streamlake/fp8"
+    main_agent_backup_model: str = "deepseek/deepseek-v3.2"
+    main_agent_backup_provider: str = "deepinfra/fp4"
+    tester_agent_model: str = "z-ai/glm-5.3-flash"
+    tester_agent_provider: str = "relace"
+    tester_agent_backup_model: str = "openai/gpt-oss-20b"
+    tester_agent_backup_provider: str = "darkbloom/fp8"
     jev_model: str = "typesafe/jev-1.13"
-    computer_use_provider: Literal["gemini"] = "gemini"
+    computer_use_provider: str = "relace"
     computer_use_model: str | None = None
     full_evaluation: bool = False
     artifacts_dir: Path = Path("artifacts/runs")
     state_db_path: Path = Path("artifacts/state/shared_state.db")
     temporary_sensitive_dir: Path = Path("artifacts/temporary_sensitive")
+
+    @field_validator("computer_use_model", mode="before")
+    @classmethod
+    def empty_visual_model_disables_gateway(cls, value: str | None) -> str | None:
+        return value or None
+
+    @field_validator("main_agent_model", "tester_agent_model", "main_agent_backup_model", "tester_agent_backup_model", "computer_use_model")
+    @classmethod
+    def reject_free_or_routed_models(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        model = value.strip()
+        if not model or ":" in model or model.startswith(("openrouter/", "~")):
+            raise ValueError("use a fixed paid model ID without free or routing variants")
+        return model
+
+    @field_validator("main_agent_provider", "tester_agent_provider", "main_agent_backup_provider", "tester_agent_backup_provider", "computer_use_provider")
+    @classmethod
+    def require_fixed_provider(cls, value: str) -> str:
+        if not value.strip() or value.casefold() in {"auto", "free", "gemini", "groq"}:
+            raise ValueError("use one fixed paid OpenRouter provider endpoint")
+        return value.strip()
 
 
 class ExpectedBehaviorSource(StrEnum):
@@ -89,11 +115,12 @@ class BudgetConfig(BaseModel):
     max_output_tokens: int = Field(default=20_000, ge=0)
     max_jev_calls: int = Field(default=50, ge=0)
     max_computer_use_calls: int = Field(default=0, ge=0)
-    max_testers: int = Field(default=2, ge=1, le=4)
+    max_testers: int = Field(default=3, ge=1, le=4)
     max_browser_steps_per_task: int = Field(default=50, ge=1)
     max_replans_per_task: int = Field(default=2, ge=0)
     max_reproductions_per_finding: int = Field(default=3, ge=1)
-    max_parallel_browser_contexts: int = Field(default=2, ge=1, le=4)
+    max_replay_steps_per_finding: int = Field(default=200, ge=1)
+    max_parallel_browser_contexts: int = Field(default=3, ge=1, le=4)
 
 
 class RunConfig(BaseModel):

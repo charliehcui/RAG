@@ -58,7 +58,7 @@ async def test_computer_use_is_visual_only_and_returns_to_playwright(phase2_stor
     budget = computer_budget()
     checker = PermissionChecker(store=phase2_store, policy=ExecutionPolicy(allowed_url_prefixes=("http://app.test/",)), run_id="run-1", task_id="task-1", tester_id="tester-1")
     test_root = phase2_store.database_path.parent
-    controller = ComputerUseController(client=client, settings=Settings(_env_file=None, computer_use_provider="gemini", computer_use_model="fake-gemini-computer"), store=phase2_store, evidence_store=EvidenceStore(store=phase2_store, artifacts_root=test_root / "artifacts" / "runs", temporary_sensitive_root=test_root / "temporary-sensitive"), page_state_reader=PageStateReader(), permission_checker=checker, budget=budget, budget_id="budget-1", run_id="run-1", task_id="task-1", tester_id="tester-1", max_consecutive_failures=2)
+    controller = ComputerUseController(client=client, settings=Settings(_env_file=None, computer_use_provider="relace", computer_use_model="fake-gemini-computer"), store=phase2_store, evidence_store=EvidenceStore(store=phase2_store, artifacts_root=test_root / "artifacts" / "runs", temporary_sensitive_root=test_root / "temporary-sensitive"), page_state_reader=PageStateReader(), permission_checker=checker, budget=budget, budget_id="budget-1", run_id="run-1", task_id="task-1", tester_id="tester-1", max_consecutive_failures=2)
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=True)
         page = await browser.new_page()
@@ -75,7 +75,7 @@ async def test_computer_use_is_visual_only_and_returns_to_playwright(phase2_stor
         stopped = await controller.run(page=page, browser_session_id="browser-visual", finding_id="finding-visual", goal="Try again", component_type="canvas", playwright_failure_reason="NO_STABLE_DOM_TARGET", allowed_visual_actions=("click",))
         await browser.close()
 
-    assert controller.provider == "gemini"
+    assert controller.provider == "relace"
     assert controller.model == "fake-gemini-computer"
     assert ordinary.status == "REFUSED"
     assert ordinary.reason == "COMPONENT_MUST_USE_PLAYWRIGHT"

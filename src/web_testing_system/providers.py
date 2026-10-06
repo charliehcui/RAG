@@ -1,46 +1,91 @@
-"""Create the configured real MAF chat clients without exposing API keys."""
+"""Fixed paid OpenRouter clients and actual request accounting. No automatic fallback."""
 
-import asyncio
-import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-from agent_framework import BaseChatClient, ChatContext, ChatMiddleware, ChatResponse
-from agent_framework.gemini import GeminiChatClient
+from agent_framework import (
+    BaseChatClient,
+    ChatContext,
+    ChatMiddleware,
+    ChatResponse,
+    Message,
+)
 from agent_framework.openai import OpenAIChatCompletionClient
-from google import genai
-from google.genai import types as genai_types
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletion
 
 from web_testing_system.config import Settings
 from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
 from web_testing_system.state import StateStore
 
-TEMPORARY_PROVIDER_STATUS_CODES = {429, 500, 502, 503, 504}
-logger = logging.getLogger(__name__)
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+def provider_preferences(provider: str) -> dict[str, Any]:
+    """Pin exactly one endpoint; never switch provider during an experiment."""
+    return {"only": [provider], "order": [provider], "allow_fallbacks": False, "require_parameters": True}
+
+
+class OpenRouterChatClient(OpenAIChatCompletionClient):
+    """Keep OpenRouter's billed cost and served provider when parsing MAF responses."""
+
+    def _prepare_options(self, messages: Sequence[Message], options: Mapping[str, Any]) -> dict[str, Any]:
+        prepared = super()._prepare_options(messages, options)
+        if "max_completion_tokens" in prepared:
+            prepared["max_tokens"] = prepared.pop("max_completion_tokens")
+        return prepared
+
+    def _parse_response_from_openai(self, response: ChatCompletion, options: Mapping[str, Any]) -> ChatResponse:
+        parsed = super()._parse_response_from_openai(response, options)
+        properties = dict(parsed.additional_properties or {})
+        properties["cost"] = getattr(response.usage, "cost", None)
+        properties["served_provider"] = getattr(response, "provider", None)
+        parsed.additional_properties = properties
+        return parsed
+
+
+class FixedProviderMiddleware(ChatMiddleware):
+    def __init__(self, provider: str) -> None:
+        self.provider = provider
+
+    async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
+        options = dict(context.options or {})
+        options["extra_body"] = {**options.get("extra_body", {}), "provider": provider_preferences(self.provider)}
+        context.options = options
+        await call_next()
 
 
 class ProviderUsageMiddleware(ChatMiddleware):
-    """Record one actual Gemini or Groq request, including failed attempts."""
+    """Record one actual OpenRouter request, including failed attempts."""
 
-    def __init__(self, *, store: StateStore, run_id: str, budget_id: str, provider: str, model: str, agent: str, task_id: str | None = None, tester_id: str | None = None, budget: BudgetGuard | None = None) -> None:
+    def __init__(self, *, store: StateStore, run_id: str, budget_id: str, provider: str, model: str, agent: str, fixed_provider: str | None = None, task_id: str | None = None, tester_id: str | None = None, budget: BudgetGuard | None = None) -> None:
         self.store = store
         self.run_id = run_id
         self.budget_id = budget_id
         self.provider = provider
         self.model = model
+        self.fixed_provider = fixed_provider
         self.agent = agent
         self.task_id = task_id
         self.tester_id = tester_id
         self.budget = budget
+        self.phase = "main_planning" if agent == "main" else "tester"
 
     async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
+        options = dict(context.options or {})
+        if self.fixed_provider is not None:
+            options["extra_body"] = {**options.get("extra_body", {}), "provider": provider_preferences(self.fixed_provider)}
+            context.options = options
         run = self.store.get_run(self.run_id)
         if run is None:
             raise KeyError(f"unknown run: {self.run_id}")
         remaining = run["remaining_budget"]
+        if self.budget is not None:
+            self.budget.ensure_can_start("llm")
+        if remaining.get("max_runtime_seconds", 1) <= 0:
+            raise BudgetExceededError("MAX_RUNTIME_REACHED")
         if remaining["max_llm_calls"] <= 0:
             raise BudgetExceededError("MAX_LLM_CALLS_REACHED")
         if remaining["max_input_tokens"] <= 0 or remaining["max_output_tokens"] <= 0:
@@ -59,151 +104,35 @@ class ProviderUsageMiddleware(ChatMiddleware):
             usage = response.usage_details if response is not None else None
             input_tokens = int((usage or {}).get("input_token_count") or 0)
             output_tokens = int((usage or {}).get("output_token_count") or 0)
-            cost = max(float((response.additional_properties or {}).get("cost", 0) or 0), 0) if response is not None else 0
+            properties = response.additional_properties or {} if response is not None else {}
+            cost_known = properties.get("cost") is not None
+            cost = max(float(properties.get("cost") or 0), 0)
+            served_provider = properties.get("served_provider")
             model = str(response.model or (context.options or {}).get("model") or self.model) if response is not None else str((context.options or {}).get("model") or self.model)
             if self.budget is not None:
                 self.budget.record_llm_call(input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, cost=cost)
             self.store.update_budget(budget_id=self.budget_id, input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, estimated_cost=cost)
-            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool=self.provider, action="provider_request", result={"agent": self.agent, "provider": self.provider, "model": model, "success": error_name is None, "error_type": error_name, "input_tokens": input_tokens, "output_tokens": output_tokens, "usage_source": "provider" if usage is not None else "unavailable"}, latency_ms=latency_seconds * 1_000, cost=cost)
+            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool=self.provider, action="provider_request", result={"agent": self.agent, "phase": self.phase, "provider": self.provider, "model": model, "success": error_name is None, "error_type": error_name, "input_tokens": input_tokens, "output_tokens": output_tokens, "usage_source": "provider" if usage is not None else "unavailable", "requested_provider": self.fixed_provider, "served_provider": served_provider, "cost_known": cost_known}, latency_ms=latency_seconds * 1_000, cost=cost)
 
 
-class MainAgentFallbackMiddleware(ChatMiddleware):
-    """Retry the primary Gemini model once, then use the configured fallback."""
-
-    def __init__(self, primary_model: str, fallback_model: str, stats: dict[str, Any]) -> None:
-        self.primary_model = primary_model
-        self.fallback_model = fallback_model
-        self.stats = stats
-
-    async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
-        active_model = str(self.stats["active_model"])
-        self._set_model(context, active_model)
-        if active_model == self.fallback_model:
-            self._record_attempt(active_model)
-            await call_next()
-            self.stats["final_model"] = active_model
-            return
-
-        started_at = perf_counter()
-        primary_error: Exception | None = None
-        for attempt in range(2):
-            self._record_attempt(self.primary_model)
-            try:
-                await call_next()
-                self.stats["final_model"] = self.primary_model
-                return
-            except Exception as error:
-                status_code = _provider_status_code(error)
-                if status_code not in TEMPORARY_PROVIDER_STATUS_CODES:
-                    raise
-                primary_error = error
-                if attempt == 1:
-                    break
-                self.stats["retry_count"] += 1
-                context.result = None
-                await asyncio.sleep(1)
-
-        assert primary_error is not None
-        self.stats["fallback_count"] += 1
-        self.stats["active_model"] = self.fallback_model
-        self._set_model(context, self.fallback_model)
-        context.result = None
-        self._record_attempt(self.fallback_model)
-        outcome = "PASS"
-        try:
-            await call_next()
-        except Exception:
-            outcome = "FAIL"
-            raise
-        finally:
-            self.stats["final_model"] = self.fallback_model
-            event = {
-                "original_model": self.primary_model,
-                "error": _provider_error_summary(primary_error),
-                "retry_count": 1,
-                "fallback_model": self.fallback_model,
-                "final_model": self.fallback_model,
-                "latency_ms": round((perf_counter() - started_at) * 1_000, 1),
-                "outcome": outcome,
-            }
-            self.stats["events"].append(event)
-            logger.warning("Main Agent model fallback: %s", event)
-
-    def _record_attempt(self, model: str) -> None:
-        self.stats["attempts"] += 1
-        self.stats["attempts_by_model"][model] += 1
-
-    @staticmethod
-    def _set_model(context: ChatContext, model: str) -> None:
-        options = dict(context.options or {})
-        options["model"] = model
-        context.options = options
+def _create_chat_client(settings: Settings, *, model: str, provider: str, usage: ProviderUsageMiddleware | None) -> BaseChatClient:
+    if settings.openrouter_api_key is None or not settings.openrouter_api_key.get_secret_value():
+        raise ValueError("OPENROUTER_API_KEY is required")
+    if "/" not in model or ":" in model or model.startswith(("openrouter/", "~")):
+        raise ValueError("a fixed paid OpenRouter model ID is required")
+    client = AsyncOpenAI(api_key=settings.openrouter_api_key.get_secret_value(), base_url=OPENROUTER_BASE_URL, max_retries=0, timeout=60)
+    middleware: list[ChatMiddleware] = [FixedProviderMiddleware(provider)]
+    if usage is not None:
+        usage.fixed_provider = provider
+        middleware.append(usage)
+    chat_client = OpenRouterChatClient(model=model, async_client=client, middleware=middleware)
+    chat_client.additional_properties.update({"provider": "openrouter", "fixed_provider": provider})
+    return chat_client
 
 
 def create_main_chat_client(settings: Settings, *, usage: ProviderUsageMiddleware | None = None) -> BaseChatClient:
-    if settings.main_agent_provider != "gemini":
-        raise ValueError("Main Agent provider must be Gemini")
-    if settings.gemini_api_key is None or not settings.gemini_api_key.get_secret_value():
-        raise ValueError("GEMINI_API_KEY is required")
-    if settings.main_agent_model is None or not settings.main_agent_model.strip():
-        raise ValueError("MAIN_AGENT_MODEL is required")
-    if settings.main_agent_fallback_model is None or not settings.main_agent_fallback_model.strip():
-        raise ValueError("MAIN_AGENT_FALLBACK_MODEL is required")
-    stats: dict[str, Any] = {
-        "primary_model": settings.main_agent_model,
-        "fallback_model": settings.main_agent_fallback_model,
-        "active_model": settings.main_agent_model,
-        "final_model": settings.main_agent_model,
-        "attempts": 0,
-        "retry_count": 0,
-        "fallback_count": 0,
-        "attempts_by_model": {settings.main_agent_model: 0, settings.main_agent_fallback_model: 0},
-        "events": [],
-    }
-    fallback = MainAgentFallbackMiddleware(settings.main_agent_model, settings.main_agent_fallback_model, stats)
-    google_client = genai.Client(api_key=settings.gemini_api_key.get_secret_value(), http_options=genai_types.HttpOptions(retry_options=genai_types.HttpRetryOptions(attempts=1)))
-    return GeminiChatClient(client=google_client, model=settings.main_agent_model, middleware=[fallback, usage] if usage is not None else [fallback], additional_properties={"model_fallback_stats": stats})
+    return _create_chat_client(settings, model=settings.main_agent_model, provider=settings.main_agent_provider, usage=usage)
 
 
 def create_tester_chat_client(settings: Settings, *, usage: ProviderUsageMiddleware | None = None) -> BaseChatClient:
-    if settings.tester_agent_provider == "gemini":
-        return _create_gemini_client(settings, settings.tester_agent_model, usage=usage)
-    if settings.groq_api_key is None or not settings.groq_api_key.get_secret_value():
-        raise ValueError("GROQ_API_KEY is required")
-    if settings.tester_agent_model is None or not settings.tester_agent_model.strip():
-        raise ValueError("TESTER_AGENT_MODEL is required")
-    groq_client = AsyncOpenAI(api_key=settings.groq_api_key.get_secret_value(), base_url=settings.groq_base_url, max_retries=0)
-    return OpenAIChatCompletionClient(model=settings.tester_agent_model, async_client=groq_client, middleware=[usage] if usage is not None else None)
-
-
-def _create_gemini_client(settings: Settings, model: str | None, *, usage: ProviderUsageMiddleware | None = None) -> BaseChatClient:
-    if settings.gemini_api_key is None or not settings.gemini_api_key.get_secret_value():
-        raise ValueError("GEMINI_API_KEY is required")
-    if model is None or not model.strip():
-        raise ValueError("a Gemini model name is required")
-    google_client = genai.Client(api_key=settings.gemini_api_key.get_secret_value(), http_options=genai_types.HttpOptions(retry_options=genai_types.HttpRetryOptions(attempts=1)))
-    return GeminiChatClient(client=google_client, model=model, middleware=[usage] if usage is not None else None)
-
-
-def _provider_status_code(error: Exception) -> int | None:
-    current: BaseException | None = error
-    while current is not None:
-        for name in ("status_code", "code"):
-            value: Any = getattr(current, name, None)
-            if isinstance(value, int):
-                return value
-        response = getattr(current, "response", None)
-        response_status = getattr(response, "status_code", None)
-        if isinstance(response_status, int):
-            return response_status
-        current = current.__cause__ or current.__context__
-    return None
-
-
-def _provider_error_summary(error: Exception) -> str:
-    status_code = _provider_status_code(error)
-    current: BaseException = error
-    while current.__cause__ is not None:
-        current = current.__cause__
-    message = str(current).replace("\n", " ")[:300]
-    return f"{status_code or 'UNKNOWN'} {type(current).__name__}: {message}"
+    return _create_chat_client(settings, model=settings.tester_agent_model, provider=settings.tester_agent_provider, usage=usage)

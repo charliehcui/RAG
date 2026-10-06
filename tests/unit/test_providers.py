@@ -1,190 +1,113 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, cast
-from unittest.mock import AsyncMock, call
 
+import httpx
 import pytest
-from agent_framework import ChatResponse
-from agent_framework.gemini import GeminiChatClient
+from agent_framework import Agent
 from agent_framework.openai import OpenAIChatCompletionClient
+from openai import AsyncOpenAI
 
 from web_testing_system.config import BudgetConfig, Settings
-from web_testing_system.evaluation.metrics import MetricsCalculator
 from web_testing_system.providers import (
-    MainAgentFallbackMiddleware,
     ProviderUsageMiddleware,
     create_main_chat_client,
     create_tester_chat_client,
 )
 from web_testing_system.reporting import FinalReportBuilder
-from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
 from web_testing_system.runtime.computer_use import (
     ComputerUseRequest,
-    GeminiComputerUseClient,
+    OpenRouterComputerUseClient,
 )
 from web_testing_system.state import StateStore
 
 
-def test_real_provider_factories_use_configured_models_without_calling_network() -> None:
-    settings = Settings(_env_file=None, gemini_api_key="fake-gemini-key", groq_api_key="fake-groq-key", main_agent_model="gemini-primary-model", main_agent_fallback_model="gemini-fallback-model", tester_agent_provider="groq", tester_agent_model="groq-test-model")
-
-    main_client = create_main_chat_client(settings)
-
-    assert isinstance(main_client, GeminiChatClient)
-    stats = main_client.additional_properties["model_fallback_stats"]
-    assert stats["primary_model"] == "gemini-primary-model"
-    assert stats["fallback_model"] == "gemini-fallback-model"
-    assert stats["attempts"] == 0
-    assert main_client._genai_client._api_client._http_options.retry_options.attempts == 1
-    tester_client = create_tester_chat_client(settings)
-    assert isinstance(tester_client, OpenAIChatCompletionClient)
-    assert tester_client.client.max_retries == 0
+def test_provider_module_imports_in_a_fresh_process() -> None:
+    result = subprocess.run([sys.executable, "-c", "import web_testing_system.providers; import web_testing_system.orchestration.runner"], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
 
 
-def test_real_provider_factories_require_keys_and_model_names() -> None:
-    with pytest.raises(ValueError, match="GEMINI_API_KEY"):
-        create_main_chat_client(Settings(_env_file=None, main_agent_model="gemini-test-model", main_agent_fallback_model="gemini-fallback-model"))
-    with pytest.raises(ValueError, match="MAIN_AGENT_FALLBACK_MODEL"):
-        create_main_chat_client(Settings(_env_file=None, gemini_api_key="fake-gemini-key", main_agent_model="gemini-test-model"))
-    with pytest.raises(ValueError, match="TESTER_AGENT_MODEL"):
-        create_tester_chat_client(Settings(_env_file=None, tester_agent_provider="groq", groq_api_key="fake-groq-key"))
+def test_fixed_openrouter_clients_without_network() -> None:
+    settings = Settings(_env_file=None, openrouter_api_key="fake-key")
+    for factory, model, provider in ((create_main_chat_client, settings.main_agent_model, settings.main_agent_provider), (create_tester_chat_client, settings.tester_agent_model, settings.tester_agent_provider)):
+        client = factory(settings)
+        assert isinstance(client, OpenAIChatCompletionClient)
+        assert client.model == model
+        assert str(client.client.base_url) == "https://openrouter.ai/api/v1/"
+        assert client.client.max_retries == 0
+        assert client.additional_properties["fixed_provider"] == provider
+        assert "model_fallback_stats" not in client.additional_properties
 
 
-@pytest.mark.asyncio
-async def test_gemini_computer_use_client_maps_normalized_click_to_pixels() -> None:
-    class FakeModels:
-        async def generate_content(self, **kwargs: object) -> object:
-            del kwargs
-            function_call = SimpleNamespace(name="click", args={"x": 750, "y": 500})
-            part = SimpleNamespace(function_call=function_call)
-            return SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))], usage_metadata=SimpleNamespace(prompt_token_count=13, candidates_token_count=2), model_version="gemini-provider-model")
-
-    fake_client = SimpleNamespace(aio=SimpleNamespace(models=FakeModels()))
-    settings = Settings(_env_file=None, gemini_api_key="fake-gemini-key", computer_use_model="gemini-test-model")
-    client = GeminiComputerUseClient(settings, client=fake_client)
-    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + (800).to_bytes(4, "big") + (600).to_bytes(4, "big")
-
-    result = await client.execute(ComputerUseRequest(screenshot=png, goal="Click Project B", url="http://demo.test", allowed_visual_actions=("click",), remaining_budget=1))
-
-    assert result.status == "ACTION"
-    assert result.action == "click"
-    assert result.x == 600
-    assert result.y == 300
-    assert (result.input_tokens, result.output_tokens, result.model) == (13, 2, "gemini-provider-model")
+def test_missing_key_and_free_routing_variants_are_rejected() -> None:
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        create_main_chat_client(Settings(_env_file=None))
+    for model in ("openrouter/free", "openrouter/auto", "model:free", "model:floor", "~latest"):
+        with pytest.raises(ValueError, match="fixed paid"):
+            Settings(_env_file=None, main_agent_model=model)
 
 
 @pytest.mark.asyncio
-async def test_main_agent_fallback_is_bounded_and_only_handles_temporary_statuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    class ProviderError(Exception):
-        def __init__(self, status_code: int) -> None:
-            self.status_code = status_code
+async def test_provider_pin_usage_and_no_automatic_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    requests: list[dict[str, object]] = []
+    fail = False
 
-    sleep = AsyncMock()
-    monkeypatch.setattr("web_testing_system.providers.asyncio.sleep", sleep)
-    stats: dict[str, Any] = {
-        "primary_model": "primary",
-        "fallback_model": "fallback",
-        "active_model": "primary",
-        "final_model": "primary",
-        "attempts": 0,
-        "retry_count": 0,
-        "fallback_count": 0,
-        "attempts_by_model": {"primary": 0, "fallback": 0},
-        "events": [],
-    }
-    middleware = MainAgentFallbackMiddleware("primary", "fallback", stats)
-    context = cast(Any, SimpleNamespace(result="stale", options={}))
-    models: list[str] = []
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if fail:
+            return httpx.Response(503, json={"error": {"message": "endpoint unavailable", "code": 503}})
+        return httpx.Response(200, json={"id": "response-1", "object": "chat.completion", "created": 1, "model": "deepseek/deepseek-v4-flash", "provider": "StreamLake", "choices": [{"index": 0, "message": {"role": "assistant", "content": "ready"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 17, "completion_tokens": 5, "total_tokens": 22, "cost": 0.00023}})
 
-    async def temporary_then_fallback() -> None:
-        model = str(context.options["model"])
-        models.append(model)
-        if model == "primary":
-            raise ProviderError(503)
-        context.result = "fallback-response"
-
-    await middleware.process(context, temporary_then_fallback)
-
-    assert models == ["primary", "primary", "fallback"]
-    assert context.result == "fallback-response"
-    assert stats["attempts"] == 3
-    assert stats["retry_count"] == 1
-    assert stats["fallback_count"] == 1
-    assert stats["final_model"] == "fallback"
-    assert stats["attempts_by_model"] == {"primary": 2, "fallback": 1}
-    assert stats["events"][0]["original_model"] == "primary"
-    assert stats["events"][0]["fallback_model"] == "fallback"
-    assert stats["events"][0]["outcome"] == "PASS"
-    assert sleep.await_args_list == [call(1)]
-
-    async def permanent_failure() -> None:
-        raise ProviderError(400)
-
-    sleep.reset_mock()
-    permanent_stats = {
-        "primary_model": "primary",
-        "fallback_model": "fallback",
-        "active_model": "primary",
-        "final_model": "primary",
-        "attempts": 0,
-        "retry_count": 0,
-        "fallback_count": 0,
-        "attempts_by_model": {"primary": 0, "fallback": 0},
-        "events": [],
-    }
-    permanent_middleware = MainAgentFallbackMiddleware("primary", "fallback", permanent_stats)
-    with pytest.raises(ProviderError):
-        await permanent_middleware.process(context, permanent_failure)
-    assert permanent_stats["attempts"] == 1
-    assert permanent_stats["fallback_count"] == 0
-    sleep.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_provider_attempts_use_returned_usage_and_reach_metrics_and_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    class TemporaryError(Exception):
-        status_code = 503
-
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    real_constructor = AsyncOpenAI
+    monkeypatch.setattr("web_testing_system.providers.AsyncOpenAI", lambda **kwargs: real_constructor(**kwargs, http_client=http_client))
     store = StateStore(tmp_path / "state.db")
     store.initialize()
     budget = BudgetConfig().model_dump()
     store.create_run(run_id="provider-run", application="http://app.test", application_version="test", test_goal="usage", scope={}, status="RUNNING", global_budget=budget, remaining_budget=budget)
     store.create_budget(budget_id="main-budget", run_id="provider-run")
-    local_budget = BudgetGuard(BudgetLimits(max_runtime_seconds=60, max_llm_calls=20, max_input_tokens=100, max_output_tokens=100, max_jev_calls=0, max_computer_use_calls=0, max_task_steps=1, max_task_replans=0, max_browser_contexts=1))
-    usage = ProviderUsageMiddleware(store=store, run_id="provider-run", budget_id="main-budget", provider="gemini", model="primary", agent="main", budget=local_budget)
-    stats: dict[str, Any] = {"active_model": "primary", "final_model": "primary", "attempts": 0, "retry_count": 0, "fallback_count": 0, "attempts_by_model": {"primary": 0, "fallback": 0}, "events": []}
-    fallback = MainAgentFallbackMiddleware("primary", "fallback", stats)
-    context = cast(Any, SimpleNamespace(result=None, options={}))
-    attempted_models: list[str] = []
-    monkeypatch.setattr("web_testing_system.providers.asyncio.sleep", AsyncMock())
-
-    async def provider_request() -> None:
-        model = str(context.options["model"])
-        attempted_models.append(model)
-        if model == "primary":
-            raise TemporaryError("temporary")
-        context.result = ChatResponse(model="provider-fallback-model", usage_details={"input_token_count": 17, "output_token_count": 5})
-
-    async def recorded_request() -> None:
-        await usage.process(context, provider_request)
-
-    await fallback.process(context, recorded_request)
-
-    assert attempted_models == ["primary", "primary", "fallback"]
-    recorded = store.get_budget("main-budget")
-    assert recorded is not None
-    assert (recorded["llm_calls"], recorded["input_tokens"], recorded["output_tokens"]) == (3, 17, 5)
-    assert (local_budget.usage.llm_calls, local_budget.usage.input_tokens, local_budget.usage.output_tokens) == (3, 17, 5)
-    run = store.get_run("provider-run")
-    assert run is not None and run["remaining_budget"]["max_llm_calls"] == budget["max_llm_calls"] - 3
-    events = [event for event in store.list_events("provider-run") if event["event_type"] == "LLM_CALL"]
-    assert sum(event["result"]["success"] is False for event in events) == 2
-    assert sum(event["result"]["success"] is True for event in events) == 1
-    assert any(event["result"]["model"] == "provider-fallback-model" for event in events)
-    metrics = MetricsCalculator(store).calculate("provider-run")
+    settings = Settings(_env_file=None, openrouter_api_key="fake-key")
+    usage = ProviderUsageMiddleware(store=store, run_id="provider-run", budget_id="main-budget", provider="openrouter", model=settings.main_agent_model, agent="main")
+    client = create_main_chat_client(settings, usage=usage)
+    agent = Agent(client=client, default_options={"max_tokens": 64})
+    assert (await agent.run("ready?")).text == "ready"
+    fail = True
+    with pytest.raises(Exception, match="endpoint unavailable"):
+        await agent.run("ready?")
+    assert len(requests) == 2
+    assert all(body["model"] == settings.main_agent_model for body in requests)
+    assert all(body["max_tokens"] == 64 and "max_completion_tokens" not in body for body in requests)
+    assert all(body["provider"] == {"only": ["streamlake/fp8"], "order": ["streamlake/fp8"], "allow_fallbacks": False, "require_parameters": True} for body in requests)
+    events = store.list_events("provider-run", event_types=("LLM_CALL",))
+    assert [event["result"]["success"] for event in events] == [True, False]
+    assert events[0]["cost"] == 0.00023
+    assert events[0]["result"]["served_provider"] == "StreamLake"
     report = FinalReportBuilder(store).build("provider-run")
-    assert (metrics["llm_request_count"], metrics["llm_input_tokens"], metrics["llm_output_tokens"]) == (3, 17, 5)
-    assert report["cost_and_performance"]["llm_models"] == ["primary", "provider-fallback-model"]
-    assert report["cost_and_performance"]["llm_failure_count"] == 2
+    assert report["cost_and_performance"]["llm_input_tokens"] == 17
+    assert report["cost_and_performance"]["cost_status"] == "INCOMPLETE"
+    await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_openrouter_visual_action_maps_coordinates_and_pins_provider() -> None:
+    requests = []
+
+    async def complete(**kwargs: object) -> object:
+        requests.append(kwargs)
+        call = SimpleNamespace(function=SimpleNamespace(name="visual_action", arguments=json.dumps({"action": "click", "x": 750, "y": 500})))
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=[call]))], usage=SimpleNamespace(prompt_tokens=13, completion_tokens=2, cost=0.001), model="z-ai/glm-5.3-flash")
+
+    settings = Settings(_env_file=None, openrouter_api_key="fake-key", computer_use_model="z-ai/glm-5.3-flash")
+    fake = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete)))
+    client = OpenRouterComputerUseClient(settings, client=fake)
+    png = bytes.fromhex("89504e470d0a1a0a") + bytes(8) + (800).to_bytes(4, "big") + (600).to_bytes(4, "big")
+    result = await client.execute(ComputerUseRequest(screenshot=png, goal="Click Project B", url="http://demo.test", allowed_visual_actions=("click",), remaining_budget=1))
+    assert (result.action, result.x, result.y) == ("click", 600, 300)
+    assert (result.input_tokens, result.output_tokens, result.cost) == (13, 2, 0.001)
+    assert requests[0]["extra_body"]["provider"]["only"] == ["relace"]
+    assert requests[0]["tool_choice"] == "auto"

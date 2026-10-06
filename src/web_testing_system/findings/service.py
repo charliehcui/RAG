@@ -69,6 +69,8 @@ class FindingService:
         for existing in self.store.list_recent_findings(self.run_id):
             if existing["finding_id"] == finding_id or existing["status"] == "DUPLICATE":
                 continue
+            if existing["created_at"] >= candidate["created_at"]:
+                continue
             if not self.shared_state and existing["first_seen_by"] != candidate["first_seen_by"]:
                 continue
             same_context = self._normalize(existing["affected_page"]) == self._normalize(candidate["affected_page"]) and self._normalize(existing["action"]) == self._normalize(candidate["action"])
@@ -102,7 +104,7 @@ class FindingService:
         if result == "FAIL" and finding["status"] == "REPRODUCED" and finding["expected_result"].strip():
             status = "CONFIRMED_BUG"
         elif result == "PASS":
-            status = "NEEDS_CONFIRMATION"
+            status = "CLOSED"
         else:
             status = "NEEDS_CONFIRMATION"
         return self.store.update_finding_verification(finding_id=finding_id, status=status, verification_result=result, details=details)

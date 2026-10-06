@@ -10,6 +10,7 @@ from uuid import uuid4
 from playwright.async_api import Locator, Page
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+from web_testing_system.observability import trace_result, trace_span
 from web_testing_system.runtime.models import ActionResult, ActionType, WebAction
 from web_testing_system.runtime.permissions import PermissionChecker
 from web_testing_system.state import StateStore
@@ -38,53 +39,55 @@ class PlaywrightExecutor:
     async def execute(
         self, *, page: Page, browser_session_id: str, action: WebAction
     ) -> ActionResult:
-        started_at = utc_now()
-        started_timer = perf_counter()
-        success = False
-        error: str | None = None
-        error_type: str | None = None
-        data: dict[str, Any] = {}
-        permission = self.permission_checker.check(action, current_url=page.url)
-        try:
-            if not permission.allowed:
-                error = permission.reason
-                error_type = permission.code
-            else:
-                locator = await self._validate_target(page, action)
-                data = await self._execute_action(page, locator, action)
-                success = True
-        except PlaywrightTimeoutError as caught_error:
-            error = str(caught_error)
-            error_type = "PAGE_TIMEOUT"
-        except AssertionError as caught_error:
-            error = str(caught_error)
-            error_type = "ASSERTION_FAILURE"
-        except (KeyError, TypeError, ValueError) as caught_error:
-            error = str(caught_error)
-            error_type = "INVALID_ACTION"
-        except Exception as caught_error:
-            error = str(caught_error)
-            error_type = "ACTION_ERROR"
-        ended_at = utc_now()
-        latency_ms = (perf_counter() - started_timer) * 1_000
-        event_id = f"event-{uuid4().hex}"
-        result = ActionResult(
-            started_at=started_at,
-            ended_at=ended_at,
-            latency_ms=latency_ms,
-            success=success,
-            error=error,
-            error_type=error_type,
-            data=data,
-            event_id=event_id,
-        )
-        self._record_action(
-            page=page,
-            browser_session_id=browser_session_id,
-            action=action,
-            result=result,
-        )
-        return result
+        with trace_span("BrowserAction", "tool", metadata={"task_id": self.task_id, "tester_id": self.tester_id, "action": action.action_type.value}) as span:
+            started_at = utc_now()
+            started_timer = perf_counter()
+            success = False
+            error: str | None = None
+            error_type: str | None = None
+            data: dict[str, Any] = {}
+            permission = self.permission_checker.check(action, current_url=page.url)
+            try:
+                if not permission.allowed:
+                    error = permission.reason
+                    error_type = permission.code
+                else:
+                    locator = await self._validate_target(page, action)
+                    data = await self._execute_action(page, locator, action)
+                    success = True
+            except PlaywrightTimeoutError as caught_error:
+                error = str(caught_error)
+                error_type = "PAGE_TIMEOUT"
+            except AssertionError as caught_error:
+                error = str(caught_error)
+                error_type = "ASSERTION_FAILURE"
+            except (KeyError, TypeError, ValueError) as caught_error:
+                error = str(caught_error)
+                error_type = "INVALID_ACTION"
+            except Exception as caught_error:
+                error = str(caught_error)
+                error_type = "ACTION_ERROR"
+            ended_at = utc_now()
+            latency_ms = (perf_counter() - started_timer) * 1_000
+            event_id = f"event-{uuid4().hex}"
+            result = ActionResult(
+                started_at=started_at,
+                ended_at=ended_at,
+                latency_ms=latency_ms,
+                success=success,
+                error=error,
+                error_type=error_type,
+                data=data,
+                event_id=event_id,
+            )
+            self._record_action(
+                page=page,
+                browser_session_id=browser_session_id,
+                action=action,
+                result=result,
+            )
+            trace_result(span, success=result.success, error_type=result.error_type)
+            return result
 
     async def _validate_target(self, page: Page, action: WebAction) -> Locator | None:
         target_actions = {
@@ -280,6 +283,8 @@ class PlaywrightExecutor:
                 "requires_resource": action.requires_resource,
                 "confirmed": action.confirmed,
                 "timeout_ms": action.timeout_ms,
+                "behavior_id": action.behavior_id,
+                "goal_check": action.goal_check,
             },
         )
         if result.error_type is not None and result.error_type.startswith("RESOURCE_"):

@@ -52,8 +52,14 @@ class BrowserManager:
         self.budget.ensure_can_start("browser_context")
         await self.start()
         assert self.browser is not None
-        context = await self.browser.new_context()
-        page = await context.new_page()
+        self.budget.ensure_can_start("browser_context")
+        self.budget.record_context_opened()
+        try:
+            context = await self.browser.new_context()
+            page = await context.new_page()
+        except BaseException:
+            self.budget.record_context_closed()
+            raise
         session = BrowserSession(
             session_id=f"browser-{uuid4().hex}",
             tester_id=tester_id,
@@ -62,7 +68,6 @@ class BrowserManager:
             page=page,
         )
         self.sessions[session.session_id] = session
-        self.budget.record_context_opened()
         return session
 
     def get_session(self, session_id: str) -> BrowserSession:

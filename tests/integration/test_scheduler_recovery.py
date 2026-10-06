@@ -13,9 +13,11 @@ from web_testing_system.agents.tester_agent import TesterAgentTools as AgentTool
 from web_testing_system.agents.tester_agent import TesterAssignment as Assignment
 from web_testing_system.agents.tester_agent import TesterRunner as Runner
 from web_testing_system.agents.tester_agent import create_tester_agent
+from web_testing_system.orchestration.scheduler import LocalTesterScheduler
+from web_testing_system.orchestration.scheduler import (
+    TesterInstance as ScheduledInstance,
+)
 from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
-from web_testing_system.scheduler import LocalTesterScheduler
-from web_testing_system.scheduler import TesterInstance as ScheduledInstance
 from web_testing_system.state import StateStore, build_data_namespace
 
 
@@ -38,6 +40,9 @@ class FakeBrowserManager:
 
 
 class FakeRuntime:
+    async def capture_finding_evidence(self, finding_id: str) -> None:
+        pass
+
     def __init__(self, tester_id: str) -> None:
         self.browser_session_id: str | None = None
         self.browser_manager = FakeBrowserManager()
@@ -168,7 +173,7 @@ async def test_tester_failure_preserves_facts_for_a_new_session() -> None:
 
         async def execute_task(runner: Runner, task: Mapping[str, Any]) -> str:
             if runner.assignment.tester_id == "tester-a":
-                tools_by_tester["tester-a"].record_finding(
+                await tools_by_tester["tester-a"].record_finding(
                     title="Saved before Tester failure",
                     status="OBSERVATION",
                     expected_result="Tester completes",

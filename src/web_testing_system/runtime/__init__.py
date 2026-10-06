@@ -11,7 +11,7 @@ from web_testing_system.runtime.computer_use import (
     ComputerUseDecision,
     ComputerUseRequest,
     ComputerUseResult,
-    GeminiComputerUseClient,
+    OpenRouterComputerUseClient,
 )
 from web_testing_system.runtime.models import (
     ActionCandidate,
@@ -38,7 +38,7 @@ __all__ = [
     "ComputerUseDecision",
     "ComputerUseRequest",
     "ComputerUseResult",
-    "GeminiComputerUseClient",
+    "OpenRouterComputerUseClient",
     "PageState",
     "PermissionDecision",
     "WebAction",

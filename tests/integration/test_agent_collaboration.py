@@ -32,6 +32,10 @@ from web_testing_system.config import (
     RunConfig,
     Settings,
 )
+from web_testing_system.orchestration.scheduler import LocalTesterScheduler
+from web_testing_system.orchestration.scheduler import (
+    TesterInstance as ScheduledInstance,
+)
 from web_testing_system.runtime.browser import BrowserManager
 from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
 from web_testing_system.runtime.candidates import CandidateBuilder, PageStateReader
@@ -39,8 +43,6 @@ from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.runtime.permissions import ExecutionPolicy, PermissionChecker
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
-from web_testing_system.scheduler import LocalTesterScheduler
-from web_testing_system.scheduler import TesterInstance as ScheduledInstance
 from web_testing_system.state import StateStore, build_data_namespace
 
 
@@ -74,18 +76,7 @@ class ScriptedMainClient(FunctionInvocationLayer, BaseChatClient):
 
     def _initial_response(self) -> ChatResponse:
         if self.step == 1:
-            return self._tool_response(
-                "initial-todos",
-                "todos_add",
-                {
-                    "todos": [
-                        {"title": "Test Project workflows"},
-                        {"title": "Test Task workflows"},
-                        {"title": "Test Member workflows"},
-                        {"title": "Test Permission boundaries"},
-                    ]
-                },
-            )
+            self.step = 2
         task_arguments = {
             2: {
                 "task_id": "task-project",
@@ -372,7 +363,7 @@ async def test_two_testers_share_finding_and_main_agent_replans_running_task() -
         main_client = ScriptedMainClient()
         settings = Settings(
             _env_file=None,
-            main_agent_provider="gemini",
+            main_agent_provider="streamlake/fp8",
             main_agent_model="fake-strong-gemini",
         )
         main_agent = create_main_agent(
@@ -400,8 +391,8 @@ async def test_two_testers_share_finding_and_main_agent_replans_running_task() -
         assert initial_tasks["task-permission"]["data_requirements"][
             "expected_behavior_ids"
         ] == ["EB-PERMISSION-1"]
-        assert len(main_runner.session.state["todo"]["items"]) == 4
-        assert main_agent.additional_properties["provider"] == "gemini"
+        assert "todo" not in main_runner.session.state
+        assert main_agent.additional_properties["provider"] == "streamlake/fp8"
         assert main_agent.additional_properties["model"] == "fake-strong-gemini"
 
         for suffix in ("a", "b"):
@@ -471,7 +462,7 @@ async def test_two_testers_share_finding_and_main_agent_replans_running_task() -
                 both_started.set()
             await asyncio.wait_for(both_started.wait(), timeout=5)
             if runner.assignment.tester_id == "tester-b":
-                finding = tools_b.record_finding(
+                finding = await tools_b.record_finding(
                     title="Member can delete another user's Project",
                     status="ANOMALY",
                     expected_result="A Member cannot delete another user's Project",
