@@ -101,7 +101,7 @@ async def test_three_workers_share_sqlite_and_tracing_is_nonfatal(tmp_path: Path
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call(f"worker-{self.calls}", name, arguments=arguments)])], usage_details={"input_token_count": 3, "output_token_count": 1})
 
     main_client = PlanningClient([task(f"task-{number}") for number in range(3)])
-    settings = Settings(_env_file=None, langsmith_api_key="trace-api-secret", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs", temporary_sensitive_dir=tmp_path / "temporary")
+    settings = Settings(_env_file=None, langsmith_tracing=True, langsmith_api_key="trace-api-secret", state_db_path=tmp_path / "state.db", artifacts_dir=tmp_path / "runs", temporary_sensitive_dir=tmp_path / "temporary")
     with DemoAppServer() as app:
         run_config = config(app.base_url)
         run_config.budget = BudgetConfig()
@@ -146,7 +146,7 @@ async def test_trace_error_contains_only_exception_type(monkeypatch: pytest.Monk
     backend = RecordingTraceClient()
     monkeypatch.setattr(observability, "Client", lambda **kwargs: backend)
     with pytest.raises(ValueError):
-        async with observability.trace_run(Settings(_env_file=None, langsmith_api_key="trace-api-secret"), "safe-run"):
+        async with observability.trace_run(Settings(_env_file=None, langsmith_tracing=True, langsmith_api_key="trace-api-secret"), "safe-run"):
             with observability.trace_span("BrowserAction", "tool"):
                 raise ValueError("password=do-not-upload-this-value")
     assert [span["error"] for span in backend.updated] == ["ValueError", "ValueError"]
@@ -159,7 +159,7 @@ async def test_trace_covers_jev_evidence_reproduction_and_verification(tmp_path:
     backend = RecordingTraceClient()
     monkeypatch.setattr(observability, "Client", lambda **kwargs: backend)
     original_settings = test_architecture_fixes.settings
-    monkeypatch.setattr(test_architecture_fixes, "settings", lambda path: original_settings(path).model_copy(update={"langsmith_api_key": Settings(_env_file=None, langsmith_api_key="trace-api-secret").langsmith_api_key}))
+    monkeypatch.setattr(test_architecture_fixes, "settings", lambda path: original_settings(path).model_copy(update={"langsmith_tracing": True, "langsmith_api_key": Settings(_env_file=None, langsmith_api_key="trace-api-secret").langsmith_api_key}))
     await test_architecture_fixes.test_formal_entry_reproduces_verifies_and_reports_seeded_bug(tmp_path, monkeypatch)
     names = {span["name"] for span in backend.created}
     assert {"MainPlanning", "Tester", "Jev", "Evidence", "Reproduction", "Verification", "MainFinalSummary"} <= names

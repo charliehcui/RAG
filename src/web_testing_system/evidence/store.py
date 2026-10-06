@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import zipfile
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -27,6 +29,8 @@ MASK_SELECTOR = "input[type='password'], input[name*='password' i], input[name*=
 class EvidenceBuffer:
     network_records: list[dict[str, Any]] = field(default_factory=list)
     console_errors: list[dict[str, Any]] = field(default_factory=list)
+    identity_reference: str | None = None
+    pending: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
 
     def attach(self, page: Page) -> None:
         page.on("response", self._on_response)
@@ -36,7 +40,36 @@ class EvidenceBuffer:
         return len(self.network_records), len(self.console_errors)
 
     def _on_response(self, response: Response) -> None:
-        self.network_records.append({"url": EvidenceStore.safe_url(response.url), "method": response.request.method, "status": response.status})
+        record: dict[str, Any] = {"url": EvidenceStore.safe_url(response.url), "method": response.request.method, "status": response.status, "captured_at": datetime.now(UTC).isoformat(), "identity_reference": self.identity_reference}
+        self.network_records.append(record)
+        if urlsplit(response.url).path.startswith("/api/"):
+            task = asyncio.create_task(self._read_api_data(response, record))
+            self.pending.add(task)
+            task.add_done_callback(self.pending.discard)
+
+    async def flush(self) -> None:
+        if self.pending:
+            await asyncio.gather(*tuple(self.pending))
+
+    async def _read_api_data(self, response: Response, record: dict[str, Any]) -> None:
+        # 只保存业务字段，永不保存密码、Cookie、请求头或任意响应内容。
+        try:
+            if response.request.post_data:
+                record["request_data"] = self._business_data(response.request.post_data_json)
+            record["response_data"] = self._business_data(await response.json())
+        except Exception:
+            record["body_available"] = False
+
+    @classmethod
+    def _business_data(cls, value: Any) -> Any:
+        allowed = {"project", "projects", "task", "tasks", "member", "members", "user", "username", "role", "project_id", "task_id", "name", "owner", "title", "status", "display_name", "submission_id", "ok", "error"}
+        if isinstance(value, dict):
+            return {key: cls._business_data(item) for key, item in value.items() if key in allowed}
+        if isinstance(value, list):
+            return [cls._business_data(item) for item in value]
+        if isinstance(value, str | int | float | bool) or value is None:
+            return value
+        return None
 
     def _on_console(self, message: ConsoleMessage) -> None:
         if message.type == "error":

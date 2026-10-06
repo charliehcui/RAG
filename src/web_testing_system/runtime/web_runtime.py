@@ -71,6 +71,7 @@ class WebTestingRuntime:
         self.expected_behavior_ids = expected_behavior_ids
         self.evidence_store = evidence_store
         self.evidence_buffer = EvidenceBuffer()
+        self.evidence_buffer.identity_reference = getattr(executor, "identity_reference", None)
         self.evidence_marker = (0, 0)
         self.task_finished = False
 
@@ -296,6 +297,7 @@ class WebTestingRuntime:
             if self.store.list_evidence(run_id=self.run_id, finding_id=finding_id):
                 return
             session = self.browser_manager.get_session(self.browser_session_id)
+            await self.evidence_buffer.flush()
             identifiers = {"run_id": self.run_id, "task_id": self.task_id, "finding_id": finding_id, "attempt_id": f"observation-{uuid4().hex}", "browser_session_id": session.session_id}
             with trace_span("Evidence", "tool", metadata={"finding_id": finding_id}):
                 await self.evidence_store.capture_screenshot(page=session.page, name="observed", **identifiers)
@@ -316,21 +318,39 @@ class WebTestingRuntime:
                 behavior_id = action.get("behavior_id")
                 if not action.get("goal_check") and behavior_id not in self.expected_behavior_ids:
                     continue
-                key = str(behavior_id or (action.get("target"), action.get("assertion"), action.get("expected")))
+                key = str(history["event_id"])
                 latest[key] = {"event_id": history["event_id"], "behavior_id": behavior_id, "success": bool(history["success"]), "error_type": history["result"].get("error_type")}
             results = list(latest.values())
             covered = {item["behavior_id"] for item in results}
-            if any(not item["success"] for item in results):
-                status, reason = "FAIL", "GOAL_ASSERTION_FAILED"
+            execution_failed = any(not history["success"] and history["result"].get("error_type") != "ASSERTION_FAILURE" for history in histories if history["browser_session_id"] == self.browser_session_id)
+            failed_assertions = [item for item in results if not item["success"]]
+            deviations: set[str] = set()
+            reported_behaviors: set[str] = set()
+            for event in self.store.list_events(self.run_id, event_types=("FINDING_CREATED",), task_id=self.task_id):
+                finding = self.store.get_finding(str(event["result"].get("finding_id")))
+                if finding is not None and finding["expected_result"].strip() and finding["actual_result"].strip():
+                    deviations.add(str(event["result"].get("boundary_event_id")))
+                    behavior = event["result"].get("behavior_id")
+                    if behavior is None:
+                        behavior = next((history["action_data"].get("behavior_id") for history in histories if history["event_id"] == event["result"].get("boundary_event_id")), None)
+                    if behavior is not None:
+                        reported_behaviors.add(str(behavior))
+            if execution_failed:
+                status, reason = "FAIL", "AGENT_EXECUTION_FAILURE"
             elif not results or not set(self.expected_behavior_ids).issubset(covered):
                 status, reason = "UNKNOWN", "GOAL_ASSERTION_MISSING"
+            elif failed_assertions and not all(item["event_id"] in deviations or item["behavior_id"] in reported_behaviors for item in failed_assertions):
+                status, reason = "UNKNOWN", "APPLICATION_DEVIATION_UNREPORTED"
+            elif failed_assertions:
+                status, reason = "PASS", "APPLICATION_BUG_DETECTED"
             else:
                 status, reason = "PASS", "GOAL_ASSERTIONS_PASSED"
+            application_behavior = "UNKNOWN" if execution_failed else "FAIL" if failed_assertions else "PASS" if status == "PASS" else "UNKNOWN"
             self.store.record_task_outcome(task_id=self.task_id, success_status=status, reason=reason, assertion_results=results)
-            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="TASK_OUTCOME", tool="Python", action="evaluate_goal_assertions", result={"success_status": status, "reason": reason, "assertions": results}, latency_ms=0)
+            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="TASK_OUTCOME", tool="Python", action="evaluate_goal_assertions", result={"success_status": status, "reason": reason, "application_behavior": application_behavior, "assertions": results}, latency_ms=0)
             if finish:
                 self.task_finished = True
-            return {"success_status": status, "reason": reason, "assertions": results}
+            return {"success_status": status, "reason": reason, "application_behavior": application_behavior, "assertions": results}
 
     def save_checkpoint(self, *, url: str, last_action: str) -> dict[str, object]:
         if self.browser_session_id is None:

@@ -14,6 +14,7 @@ from uuid import uuid4
 from agent_framework import BaseChatClient
 
 from web_testing_system.config import RunConfig, Settings
+from web_testing_system.evaluation.matching import match_ground_truth
 from web_testing_system.evaluation.metrics import MetricsCalculator
 from web_testing_system.runtime.computer_use import ComputerUseClient
 from web_testing_system.runtime.jev_selector import JevSelector
@@ -204,13 +205,17 @@ def build_execution_route(config: EvaluationVariant, *, full_evaluation_enabled:
 class FormalRunExecutor:
     """Run an Evaluation variant through the same entry point as the CLI."""
 
-    def __init__(self, run_config: RunConfig, settings: Settings, *, main_client_factory: Callable[[], BaseChatClient] | None = None, tester_client_factory: Callable[[], BaseChatClient] | None = None, jev_selector_factory: Callable[[], JevSelector] | None = None, computer_use_client_factory: Callable[[], ComputerUseClient] | None = None) -> None:
+    def __init__(self, run_config: RunConfig, settings: Settings, *, main_client_factory: Callable[[], BaseChatClient] | None = None, tester_client_factory: Callable[[], BaseChatClient] | None = None, jev_selector_factory: Callable[[], JevSelector] | None = None, computer_use_client_factory: Callable[[], ComputerUseClient] | None = None, scenario_id: str | None = None, ground_truth_path: Path | None = None) -> None:
+        if (scenario_id is None) != (ground_truth_path is None):
+            raise ValueError("scenario_id and the post-run answer path must be configured together")
         self.run_config = run_config
         self.settings = settings
         self.main_client_factory = main_client_factory
         self.tester_client_factory = tester_client_factory
         self.jev_selector_factory = jev_selector_factory
         self.computer_use_client_factory = computer_use_client_factory
+        self.scenario_id = scenario_id
+        self.ground_truth_path = ground_truth_path
         self.is_fake = all(factory is not None for factory in (main_client_factory, tester_client_factory, jev_selector_factory, computer_use_client_factory))
 
     async def execute(self, *, config: EvaluationVariant, route: ExecutionRoute, run_number: int, run_id: str, evidence_directory: Path) -> EvaluationExecution:
@@ -221,11 +226,25 @@ class FormalRunExecutor:
         jev_selector = self.jev_selector_factory() if self.jev_selector_factory is not None else None
         run_directory = evidence_directory.parent.parent
         run_settings = self.settings.model_copy(update={"artifacts_dir": run_directory, "state_db_path": run_directory / "state.db", "temporary_sensitive_dir": run_directory / "temporary_sensitive"})
-        report_path = await run(self.run_config, run_settings, route=route, run_id=run_id, main_client=main_client, tester_client_factory=self.tester_client_factory, computer_use_client_factory=self.computer_use_client_factory, jev_selector=jev_selector)
+        execution_error: str | None = None
+        try:
+            report_path = await run(self.run_config, run_settings, route=route, run_id=run_id, scenario_id=self.scenario_id, main_client=main_client, tester_client_factory=self.tester_client_factory, computer_use_client_factory=self.computer_use_client_factory, jev_selector=jev_selector)
+        except Exception as error:
+            report_path = run_settings.artifacts_dir / run_id / "report.json"
+            if self.ground_truth_path is None or not report_path.is_file():
+                raise
+            execution_error = f"{type(error).__name__}: {error}"
         report = json.loads(report_path.read_text(encoding="utf-8"))
-        metrics = MetricsCalculator(StateStore(run_settings.state_db_path)).calculate(run_id, final_report=report)
+        store = StateStore(run_settings.state_db_path)
+        calculator = MetricsCalculator(store)
+        comparison = None
+        if self.ground_truth_path is not None and self.scenario_id is not None:
+            comparison, matching = match_ground_truth(self.ground_truth_path, scenario_id=self.scenario_id, run_id=run_id, store=store, artifacts_root=run_settings.artifacts_dir, test_data=self.run_config.test_data)
+            matching["task_outcomes"] = calculator.task_outcomes(run_id, ground_truth=comparison)
+            report_path.with_name("ground_truth_matching.json").write_text(json.dumps(matching, ensure_ascii=False, indent=2), encoding="utf-8")
+        metrics = calculator.calculate(run_id, ground_truth=comparison, final_report=report)
         status = str(report["test_summary"]["run_status"])
-        return EvaluationExecution(status="INTERRUPTED" if status == "STOPPED" else status, metrics=metrics)
+        return EvaluationExecution(status="INTERRUPTED" if status in {"STOPPED", "CANCELLED"} else status, metrics=metrics, error=execution_error)
 
 
 class EvaluationRunner:
@@ -263,7 +282,7 @@ class EvaluationRunner:
                     if execution.status not in {"COMPLETED", "FAILED", "INTERRUPTED"}:
                         raise ValueError(f"unsupported evaluation status: {execution.status}")
                     status = execution.status
-                    metrics = dict(execution.metrics) if status == "COMPLETED" else {}
+                    metrics = dict(execution.metrics)
                     error = execution.error
                 except Exception as caught_error:
                     status = "FAILED"
@@ -309,6 +328,12 @@ def summarize_evaluation_runs(records: Sequence[EvaluationRunRecord]) -> dict[st
             "runs": [{"run": record.run_number, "run_id": record.run_id, "status": record.status, "error": record.error} for record in ordered],
             "metrics": metric_summary,
         }
+        quality_fields = ("true_positive_count", "false_positive_count", "detected_bug_count", "enabled_bug_count")
+        if all(isinstance(record.metrics.get(field), int | float) for record in ordered for field in quality_fields):
+            totals = {field: sum(float(record.metrics[field]) for record in ordered) for field in quality_fields}
+            precision_total = totals["true_positive_count"] + totals["false_positive_count"]
+            enabled_total = totals["enabled_bug_count"]
+            summary[variant_id]["bug_quality"] = {"tp": totals["true_positive_count"], "fp": totals["false_positive_count"], "missed_bug_count": enabled_total - totals["detected_bug_count"], "bug_precision": round(totals["true_positive_count"] / precision_total, 6) if precision_total else N_A, "bug_recall": round(totals["detected_bug_count"] / enabled_total, 6) if enabled_total else N_A}
     return summary
 
 

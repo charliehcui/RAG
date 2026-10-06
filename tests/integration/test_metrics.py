@@ -62,7 +62,12 @@ def test_metrics_are_calculated_from_state_and_post_run_ground_truth(tmp_path: P
 
     assert metrics["confirmed_bug_recall"] == pytest.approx(2 / 3)
     assert metrics["false_positive_rate"] == pytest.approx(1 / 3)
-    assert metrics["reproduction_success_rate"] == 0.75
+    assert metrics["reproduction_success_rate"] == 0.5
+    assert metrics["reproduction_attempt_success_rate"] == 0.75
+    assert metrics["bug_precision"] == pytest.approx(2 / 3)
+    assert metrics["true_positive_count"] == 2
+    assert metrics["false_positive_count"] == 1
+    assert metrics["missed_bug_count"] == 1
     assert metrics["duplicate_finding_rate"] == 0.25
     assert metrics["exploration_duplication"] == pytest.approx(1 / 3)
     assert metrics["task_completion_rate"] == pytest.approx(2 / 3)

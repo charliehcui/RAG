@@ -144,8 +144,20 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
         selector = jev_selector or JevSelector.openrouter(settings)
         finding_service = FindingService(store, run_id, shared_state=shared_coordination)
         account_by_reference = {account.identity_reference: account for account in config.account_references}
+        identity_values: dict[str, dict[str, str]] = {}
+        identity_references: dict[str, str] = {}
         for account in config.account_references:
-            store.create_identity(identity_id=f"{run_id}-{account.identity_reference}", run_id=run_id, role=account.role, secret_reference=account.secret_reference, permissions=account.permissions)
+            identity_id = f"{run_id}-{account.identity_reference}"
+            store.create_identity(identity_id=identity_id, run_id=run_id, role=account.role, secret_reference=account.secret_reference, permissions=account.permissions)
+            identity_references[identity_id] = account.identity_reference
+            values = {key: value for key, value in config.test_data.items() if isinstance(value, str)}
+            if account.secret_reference is not None:
+                if not account.secret_reference.startswith("env:"):
+                    raise ValueError("only env: account secret references are supported")
+                secret = os.environ.get(account.secret_reference[4:])
+                if secret is not None:
+                    values[account.secret_reference] = secret
+            identity_values[account.identity_reference] = values
 
         def create_tester(task: Mapping[str, Any]) -> TesterInstance:
             task_id = str(task["task_id"])
@@ -161,14 +173,7 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
             behaviors = [behavior for behavior in config.expected_behaviors if behavior.behavior_id in requested_ids] if requested_ids is not None else [behavior for behavior in config.expected_behaviors if behavior.applies_to.split("/")[0].casefold() == feature.casefold()]
             if requested_ids is not None and set(requested_ids) != {behavior.behavior_id for behavior in behaviors}:
                 raise ValueError(f"Task {task_id} references unknown expected behaviors")
-            values = {key: value for key, value in config.test_data.items() if isinstance(value, str)}
-            if selected_account.secret_reference is not None:
-                secret_reference = selected_account.secret_reference
-                if not secret_reference.startswith("env:"):
-                    raise ValueError("only env: account secret references are supported")
-                secret = os.environ.get(secret_reference[4:])
-                if secret is not None:
-                    values[secret_reference] = secret
+            values = dict(identity_values[selected_account.identity_reference])
             selected_keys = requirements.get("test_data_keys", [])
             if any(key not in config.test_data for key in selected_keys):
                 raise ValueError(f"Task {task_id} references unavailable test data")
@@ -185,7 +190,7 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
             budget = BudgetGuard(_budget_limits(config, task_steps=int(task["step_budget"]), remaining=current_run["remaining_budget"]))
             checker = PermissionChecker(store=store, policy=ExecutionPolicy(allowed_url_prefixes=tuple(urljoin(str(config.target_url), scope) for scope in config.allowed_scope), denied_operations=frozenset(config.denied_operations)), run_id=run_id, task_id=task_id, tester_id=tester_id)
             reader = PageStateReader()
-            executor = PlaywrightExecutor(store=store, permission_checker=checker, run_id=run_id, task_id=task_id, tester_id=tester_id)
+            executor = PlaywrightExecutor(store=store, permission_checker=checker, run_id=run_id, task_id=task_id, tester_id=tester_id, identity_reference=selected_account.identity_reference)
             secrets = tuple(value for key, value in values.items() if key.startswith("env:"))
             evidence = EvidenceStore(store=store, artifacts_root=settings.artifacts_dir, temporary_sensitive_root=settings.temporary_sensitive_dir, secrets=secrets)
             computer_controller = None
@@ -263,11 +268,12 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
                 store.update_finding_status(finding_id=finding_id, status="NEEDS_CONFIRMATION" if auto_reproduction else "SUSPECTED_ISSUE", screening_reason="REPRODUCTION_NOT_RUN", needs_confirmation=True)
                 continue
             values = replay_values[owner.assignment.tester_id]
-            plan_result = ReplayPlanBuilder(store).from_finding(finding_id=finding_id, input_values=values)
+            plan_result = ReplayPlanBuilder(store).from_finding(finding_id=finding_id, input_values=values, identity_values=identity_values, identity_references=identity_references)
             if plan_result.plan is None:
                 created_events = store.list_events(run_id, event_types=("FINDING_CREATED",), task_id=str(finding["task_id"]))
                 boundary = next((event["result"].get("boundary_event_id") for event in created_events if event["result"].get("finding_id") == finding_id), None)
-                plan_result = ReplayPlanBuilder(store).from_action_history(run_id=run_id, task_id=str(finding["task_id"]), input_values=values, through_event_id=boundary)
+                related: list[str] = next((event["result"].get("related_task_ids", []) for event in created_events if event["result"].get("finding_id") == finding_id), [])
+                plan_result = ReplayPlanBuilder(store).from_action_history(run_id=run_id, task_id=str(finding["task_id"]), input_values=values, through_event_id=boundary, related_task_ids=related, identity_values=identity_values, identity_references=identity_references)
             if plan_result.plan is None or not plan_result.plan.assertion_positions:
                 store.update_finding_status(finding_id=finding_id, status="NEEDS_CONFIRMATION", screening_reason=plan_result.reason or "DETERMINISTIC_ASSERTION_MISSING", needs_confirmation=True)
                 continue
@@ -278,7 +284,7 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
             limits = _budget_limits(config, task_steps=config.budget.max_replay_steps_per_finding, remaining=current_run["remaining_budget"])
             limits = replace(limits, max_task_steps=config.budget.max_replay_steps_per_finding)
             replay_budget = BudgetGuard(limits)
-            evidence = EvidenceStore(store=store, artifacts_root=settings.artifacts_dir, temporary_sensitive_root=settings.temporary_sensitive_dir, secrets=tuple(value for key, value in values.items() if key.startswith("env:")))
+            evidence = EvidenceStore(store=store, artifacts_root=settings.artifacts_dir, temporary_sensitive_root=settings.temporary_sensitive_dir, secrets=tuple(value for inputs in identity_values.values() for key, value in inputs.items() if key.startswith("env:")))
             replay = DeterministicReplay(store=store, browser_manager=manager, executor=owner.runtime.executor, evidence_store=evidence, budget=replay_budget, budget_id=replay_budget_id)
             reset_hook = (lambda: _reset_before_replay(config)) if config.reset_hook is not None else None
             replay_metadata = {"task_id": str(finding["task_id"]), "finding_id": finding_id, "tester_id": owner.assignment.tester_id, "agent_role": "runtime"}
@@ -286,7 +292,7 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
                 reproduced = await ReproductionRunner(store=store, finding_service=finding_service, replay=replay).run(finding_id=finding_id, plan=plan_result.plan, max_attempts=config.budget.max_reproductions_per_finding, stable_successes=min(2, config.budget.max_reproductions_per_finding), max_minimization_attempts=0, reset_hook=reset_hook)
                 trace_result(span, status=reproduced.status)
             if reproduced.status == "REPRODUCED":
-                verified_plan = ReplayPlanBuilder(store).from_finding(finding_id=finding_id, input_values=values)
+                verified_plan = ReplayPlanBuilder(store).from_finding(finding_id=finding_id, input_values=values, identity_values=identity_values, identity_references=identity_references)
                 if verified_plan.plan is not None:
                     with trace_span("Verification", metadata={**replay_metadata, "phase": "verification"}) as span:
                         verified = await VerificationRunner(store=store, finding_service=finding_service, replay=replay).run(finding_id=finding_id, plan=verified_plan.plan, reset_hook=reset_hook)

@@ -229,10 +229,19 @@ class TesterAgentTools:
         action: str | None = None,
         error_text: str | None = None,
         reproduction_steps: list[dict[str, Any]] | None = None,
+        behavior_id: str | None = None,
+        related_task_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         """Record an early Finding without declaring a confirmed bug."""
         if status not in {"OBSERVATION", "ANOMALY", "SUSPECTED_ISSUE"}:
             raise ValueError("Tester may only create an early Finding status")
+        if behavior_id is not None and behavior_id not in self.runtime.expected_behavior_ids:
+            raise ValueError("Finding must reference an assigned expected behavior")
+        related = sorted(set(related_task_ids or []))
+        for task_id in related:
+            task = self.store.get_task(task_id)
+            if task is None or task["run_id"] != self.assignment.run_id:
+                raise ValueError("Related replay tasks must belong to this Run")
         if severity_hint is not None and severity_hint not in {
             "LOW",
             "MEDIUM",
@@ -274,6 +283,8 @@ class TesterAgentTools:
                 "severity_hint": finding["severity_hint"],
                 "action": finding["action"],
                 "boundary_event_id": history[-1]["event_id"] if history else None,
+                "behavior_id": behavior_id,
+                "related_task_ids": related,
             },
             latency_ms=0,
         )
@@ -345,6 +356,8 @@ def create_tester_agent(
         "Record uncertain behavior only with record_observation. Request replan when the local path cannot continue."
         " Mark actual goal assertions with goal_check=true or their supplied behavior_id. "
         "Use value_reference for configured inputs and account secret references. Never invent unavailable inputs. "
+        "Use repeat_submit with the same-origin request URL and submit-button target to check one pending repeated form operation. "
+        "When recording a deviation, identify its assigned behavior_id and related_task_ids for another Task's necessary setup or membership change. Read shared facts for those task references. "
         "Call finish_task after testing the goal; Python determines success. Do not produce a final Done summary."
     )
     if tools.action_policy == "TESTER_LLM_EVERY_STEP":

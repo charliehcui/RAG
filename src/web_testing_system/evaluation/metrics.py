@@ -48,15 +48,30 @@ class MetricsCalculator:
         repeated_visits = sum(max(int(path["visited_count"]) - 1, 0) for path in paths)
         total_visits = sum(int(path["visited_count"]) for path in paths)
         estimated_cost = sum(float(budget["estimated_cost"]) for budget in budgets)
+        task_outcomes = self.task_outcomes(run_id, ground_truth=ground_truth)
+        attempted_tasks = [task for task in tasks if task["assigned_tester"] is not None or task["status"] in {"RUNNING", "COMPLETED", "FAILED"}]
+        true_positives = sum(ground_truth.finding_to_bug.get(str(finding["finding_id"])) in ground_truth.enabled_bug_ids for finding in confirmed) if ground_truth is not None else 0
+        detected = {ground_truth.finding_to_bug.get(str(finding["finding_id"]), "unmatched") for finding in confirmed} & ground_truth.enabled_bug_ids if ground_truth is not None else set()
+        attempted_reproductions = [finding for finding in findings if int(finding["reproduction_count"]) > 0]
         metrics: dict[str, MetricValue] = {
             "confirmed_bug_recall": self._confirmed_bug_recall(confirmed, ground_truth),
             "false_positive_rate": self._false_positive_rate(confirmed, ground_truth),
-            "reproduction_success_rate": self._ratio(reproduction_successes, reproduction_count),
+            "bug_precision": self._ratio(true_positives, len(confirmed)) if ground_truth is not None else N_A,
+            "bug_recall": self._confirmed_bug_recall(confirmed, ground_truth),
+            "true_positive_count": true_positives if ground_truth is not None else N_A,
+            "false_positive_count": len(confirmed) - true_positives if ground_truth is not None else N_A,
+            "detected_bug_count": len(detected) if ground_truth is not None else N_A,
+            "enabled_bug_count": len(ground_truth.enabled_bug_ids) if ground_truth is not None else N_A,
+            "missed_bug_count": len(ground_truth.enabled_bug_ids - detected) if ground_truth is not None else N_A,
+            "reproduction_success_rate": self._ratio(sum(int(finding["reproduction_success_count"]) >= 2 and finding["status"] in {"REPRODUCED", "CONFIRMED_BUG"} for finding in attempted_reproductions), len(attempted_reproductions)),
+            "reproduction_attempt_success_rate": self._ratio(reproduction_successes, reproduction_count),
             "duplicate_finding_rate": self._ratio(sum(finding["status"] == "DUPLICATE" for finding in findings), len(findings)),
             "exploration_duplication": self._ratio(repeated_visits, total_visits),
             "task_completion_rate": self._ratio(sum(task["status"] == "COMPLETED" for task in tasks), len(tasks)),
-            "task_success_rate": self._ratio(sum(task["success_status"] == "PASS" for task in tasks), len(tasks)),
-            "task_success_unknown_count": sum(task["success_status"] == "UNKNOWN" for task in tasks),
+            "task_success_rate": self._ratio(sum(task_outcomes[str(task["task_id"])] in {"NORMAL_APPLICATION_BEHAVIOR", "APPLICATION_BUG_DETECTED"} for task in attempted_tasks), len(attempted_tasks)),
+            "task_success_unknown_count": sum(value == "UNKNOWN_INCOMPLETE" for value in task_outcomes.values()),
+            "agent_execution_failure_count": sum(value == "AGENT_EXECUTION_FAILURE" for value in task_outcomes.values()),
+            "application_bug_detected_task_count": sum(value == "APPLICATION_BUG_DETECTED" for value in task_outcomes.values()),
             "browser_action_success_rate": self._ratio(sum(bool(event["result"].get("success")) for event in browser_actions), len(browser_actions)),
             "average_jev_latency_ms": self._average_latency(jev_calls),
             "average_llm_latency_ms": self._average_latency(llm_calls),
@@ -76,6 +91,50 @@ class MetricsCalculator:
             "developer_usable_report_rate": self._report_rate(final_report),
         }
         return metrics
+
+    def task_outcomes(self, run_id: str, *, ground_truth: GroundTruthComparison | None = None) -> dict[str, str]:
+        outcomes: dict[str, str] = {}
+        findings = {str(item["finding_id"]): item for item in self.store.list_recent_findings(run_id, limit=1000)}
+        for task in self.store.list_tasks(run_id):
+            task_id = str(task["task_id"])
+            if task["status"] in {"FAILED", "STOPPED", "CANCELLED"} or task["success_reason"] == "AGENT_EXECUTION_FAILURE":
+                outcomes[task_id] = "AGENT_EXECUTION_FAILURE"
+                continue
+            if task["status"] != "COMPLETED" or task["success_status"] == "UNKNOWN":
+                outcomes[task_id] = "UNKNOWN_INCOMPLETE"
+                continue
+            assertions = task["assertion_results"]
+            if not assertions:
+                outcomes[task_id] = "UNKNOWN_INCOMPLETE"
+                continue
+            confirmed = [finding for finding in findings.values() if finding["task_id"] == task_id and finding["status"] == "CONFIRMED_BUG"]
+            if ground_truth is not None and any(ground_truth.finding_to_bug.get(str(finding["finding_id"])) not in ground_truth.enabled_bug_ids for finding in confirmed):
+                outcomes[task_id] = "AGENT_EXECUTION_FAILURE"
+                continue
+            failed = [item for item in assertions if not item["success"]]
+            if not failed:
+                outcomes[task_id] = "NORMAL_APPLICATION_BEHAVIOR" if task["success_status"] == "PASS" else "AGENT_EXECUTION_FAILURE"
+                continue
+            reported: set[str] = set()
+            reported_behaviors: set[str] = set()
+            for event in self.store.list_events(run_id, event_types=("FINDING_CREATED",), task_id=task_id):
+                finding = findings.get(str(event["result"].get("finding_id")))
+                if finding is None:
+                    continue
+                canonical_id = str(finding["duplicate_of"] or finding["finding_id"])
+                if ground_truth is None:
+                    correct = finding["status"] in {"REPRODUCED", "CONFIRMED_BUG", "DUPLICATE"}
+                else:
+                    correct = ground_truth.finding_to_bug.get(canonical_id) in ground_truth.enabled_bug_ids
+                if correct:
+                    reported.add(str(event["result"].get("boundary_event_id")))
+                    behavior = event["result"].get("behavior_id")
+                    if behavior is None:
+                        behavior = next((step.get("behavior_id") for step in finding["reproduction_steps"] if step.get("behavior_id") is not None and not step.get("expected_success", True)), None)
+                    if behavior is not None:
+                        reported_behaviors.add(str(behavior))
+            outcomes[task_id] = "APPLICATION_BUG_DETECTED" if all(str(item["event_id"]) in reported or item.get("behavior_id") in reported_behaviors for item in failed) else "UNKNOWN_INCOMPLETE"
+        return outcomes
 
     @staticmethod
     def _confirmed_bug_recall(confirmed: list[dict[str, Any]], ground_truth: GroundTruthComparison | None) -> MetricValue:

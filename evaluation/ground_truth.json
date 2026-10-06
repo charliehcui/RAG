@@ -2,7 +2,7 @@
   "demo_version": "phase5-demo-1.0",
   "access_policy": "Evaluation only. Open this file only after the persisted run is terminal and finished_at is set. It is not a RunConfig, Agent tool input, Shared State seed, or Jev input.",
   "matching_policy": {
-    "method": "Deterministic evidence checks or explicit post-run human review using the recorded criteria; never an LLM Judge, title similarity, or a claimed bug ID.",
+    "method": "Deterministic post-run rules use assigned behavior IDs, actual verified assertions, acting identities/roles, scoped entity paths and sanitized API evidence. Ambiguous or unsupported records remain unmatched. No model, embedding or fuzzy matching.",
     "required_dimensions": [
       "behavior",
       "feature/view",
@@ -25,7 +25,7 @@
     "tester_metrics": "Use LLM_CALL events with result.agent=tester grouped by task_id for requests/tokens/cost and JEV_CALL events grouped by task_id for Jev requests. Task latency uses TASK_STARTED and TASK_FINISHED or TESTER_FAILED, with terminal task.finished_at as a fallback. Count attempted tasks including failed/interrupted tasks, keep task latency distinct from summed LLM latency, and mark unavailable data explicitly.",
     "parallelism": "Only compare cases with expected_parallelism.compare_1_vs_3=true. Change both tester/browser-context capacity from 1 to 3, keeping scenario, switches, reset, data, model/provider, tracing and every other budget unchanged. Wall clock includes planning through final summary. Peak uses TASK_STARTED and TASK_FINISHED/TESTER_FAILED or terminal task.finished_at; utilization is active Tester time divided by capacity times the exploration window. Failed and interrupted intervals are not discarded.",
     "resume_metrics": "Design/static/local checks are not measured Baseline or resume results. Main planning/summary latencies and provider efficiency come from phase-tagged LLM_CALL events; judge plan and summary correctness only against completed-run evidence.",
-    "current_metric_gap": "FormalRunExecutor currently calls MetricsCalculator without GroundTruthComparison, so recall/false-positive metrics remain N/A unless a post-run evidence mapping is supplied. MetricsCalculator task_success_rate treats only raw PASS as success and its reproduction_success_rate is per attempt; planning/E2E/precision and concurrency targets need the post-run definitions above. No metric or Agent code is changed in this task."
+    "current_metric_gap": "Resolved: FormalRunExecutor performs post-run evidence matching and supplies GroundTruthComparison. Task evaluation distinguishes execution failure, correctly detected application defects, normal behavior and incomplete checks. Reproduction success is per finding; the attempt rate remains separately named. Failed/interrupted runs retain matching counts."
   },
   "seeded_bug_audit": [
     {
@@ -40,7 +40,7 @@
         "D15",
         "H07"
       ],
-      "local_reproduction": "Checked using existing deterministic local tests; see scenario_notes.md for the scope of validation.",
+      "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
       "formal_limitation": null
     },
     {
@@ -55,7 +55,7 @@
         "H03",
         "H07"
       ],
-      "local_reproduction": "Checked using existing deterministic local tests; see scenario_notes.md for the scope of validation.",
+      "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
       "formal_limitation": null
     },
     {
@@ -70,7 +70,7 @@
         "D16",
         "H05"
       ],
-      "local_reproduction": "Checked using existing deterministic local tests; see scenario_notes.md for the scope of validation.",
+      "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
       "formal_limitation": null
     },
     {
@@ -85,7 +85,7 @@
         "D16",
         "H08"
       ],
-      "local_reproduction": "Checked using existing deterministic local tests; see scenario_notes.md for the scope of validation.",
+      "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
       "formal_limitation": null
     },
     {
@@ -100,8 +100,8 @@
         "H06",
         "H08"
       ],
-      "local_reproduction": "Checked using existing deterministic local tests; see scenario_notes.md for the scope of validation.",
-      "formal_limitation": "Current WebAction/PlaywrightExecutor supports single clicks and keyboard presses, but no controlled double-submit primitive or first-response hold. The same submission_id precondition is not guaranteed by ordinary sequential clicks. Existing network evidence omits request bodies and sanitized traces discard them, so same-operation proof is also missing. API determinism does not establish formal Agent/browser readiness."
+      "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
+      "formal_limitation": null
     },
     {
       "bug_id": "B6",
@@ -114,8 +114,8 @@
         "H04",
         "H06"
       ],
-      "local_reproduction": "Checked using existing deterministic local tests; see scenario_notes.md for the scope of validation.",
-      "formal_limitation": "Exploration can use read_shared_facts/update_task_progress readiness barriers across two live identities, but DeterministicReplay replays only the finding owner task in one fresh context. It does not recreate the other identity removal after login; HTTP reset clears sessions and memberships. Stable reproduction and verification of the full workflow are not supported by the current formal entry point."
+      "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
+      "formal_limitation": null
     }
   ],
   "scenarios": [
@@ -133,7 +133,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -150,7 +150,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -169,7 +169,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -215,7 +215,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -261,7 +261,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -308,7 +308,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -354,7 +354,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -400,10 +400,8 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Current WebAction/PlaywrightExecutor supports single clicks and keyboard presses, but no controlled double-submit primitive or first-response hold. The same submission_id precondition is not guaranteed by ordinary sequential clicks. Existing network evidence omits request bodies and sanitized traces discard them, so same-operation proof is also missing. API determinism does not establish formal Agent/browser readiness."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     },
     {
       "scenario_id": "D09",
@@ -451,10 +449,8 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Exploration can use read_shared_facts/update_task_progress readiness barriers across two live identities, but DeterministicReplay replays only the finding owner task in one fresh context. It does not recreate the other identity removal after login; HTTP reset clears sessions and memberships. Stable reproduction and verification of the full workflow are not supported by the current formal entry point."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     },
     {
       "scenario_id": "D10",
@@ -527,7 +523,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -600,7 +596,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -676,10 +672,8 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Exploration can use read_shared_facts/update_task_progress readiness barriers across two live identities, but DeterministicReplay replays only the finding owner task in one fresh context. It does not recreate the other identity removal after login; HTTP reset clears sessions and memberships. Stable reproduction and verification of the full workflow are not supported by the current formal entry point."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     },
     {
       "scenario_id": "D13",
@@ -754,10 +748,8 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Current WebAction/PlaywrightExecutor supports single clicks and keyboard presses, but no controlled double-submit primitive or first-response hold. The same submission_id precondition is not guaranteed by ordinary sequential clicks. Existing network evidence omits request bodies and sanitized traces discard them, so same-operation proof is also missing. API determinism does not establish formal Agent/browser readiness."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     },
     {
       "scenario_id": "D14",
@@ -830,7 +822,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -905,10 +897,8 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Current WebAction/PlaywrightExecutor supports single clicks and keyboard presses, but no controlled double-submit primitive or first-response hold. The same submission_id precondition is not guaranteed by ordinary sequential clicks. Existing network evidence omits request bodies and sanitized traces discard them, so same-operation proof is also missing. API determinism does not establish formal Agent/browser readiness."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     },
     {
       "scenario_id": "D16",
@@ -983,7 +973,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -1000,7 +990,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -1018,7 +1008,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -1064,7 +1054,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -1113,10 +1103,8 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Exploration can use read_shared_facts/update_task_progress readiness barriers across two live identities, but DeterministicReplay replays only the finding owner task in one fresh context. It does not recreate the other identity removal after login; HTTP reset clears sessions and memberships. Stable reproduction and verification of the full workflow are not supported by the current formal entry point."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     },
     {
       "scenario_id": "H05",
@@ -1162,7 +1150,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -1239,11 +1227,8 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Current WebAction/PlaywrightExecutor supports single clicks and keyboard presses, but no controlled double-submit primitive or first-response hold. The same submission_id precondition is not guaranteed by ordinary sequential clicks. Existing network evidence omits request bodies and sanitized traces discard them, so same-operation proof is also missing. API determinism does not establish formal Agent/browser readiness.",
-        "Exploration can use read_shared_facts/update_task_progress readiness barriers across two live identities, but DeterministicReplay replays only the finding owner task in one fresh context. It does not recreate the other identity removal after login; HTTP reset clears sessions and memberships. Stable reproduction and verification of the full workflow are not supported by the current formal entry point."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     },
     {
       "scenario_id": "H07",
@@ -1317,7 +1302,7 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "not_blocked_by_dataset_review",
+      "current_formal_readiness": "ready",
       "readiness_issues": []
     },
     {
@@ -1392,13 +1377,11 @@
         "reset_before_each_attempt": true,
         "fresh_verification_required": true
       },
-      "current_formal_readiness": "blocked",
-      "readiness_issues": [
-        "Current WebAction/PlaywrightExecutor supports single clicks and keyboard presses, but no controlled double-submit primitive or first-response hold. The same submission_id precondition is not guaranteed by ordinary sequential clicks. Existing network evidence omits request bodies and sanitized traces discard them, so same-operation proof is also missing. API determinism does not establish formal Agent/browser readiness."
-      ]
+      "current_formal_readiness": "ready",
+      "readiness_issues": []
     }
   ],
   "observed_unseeded_limitations": [
-    "During local browser diagnostics, triggering a Members navigation and another member-project selection before the first load completed produced duplicate member rows. APP_HTML:loadMembers clears its table before awaiting each request, so overlapping completions can append twice. This dataset uses settled sequential view navigation, not overlapping view-load stress. A credible report of this behavior in a formal run requires independent review and must not automatically be called an Agent false positive."
+    "Resolved: Task and Member view loaders discard stale overlapping responses using per-view request sequence counters. Seeded defect semantics remain unchanged."
   ]
 }

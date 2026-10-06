@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from web_testing_system.findings import FindingService
 from web_testing_system.reproduction.replay import (
@@ -77,7 +77,7 @@ class ReproductionRunner:
         index = 0
         while index < len(candidate_steps) - 1 and tested < max_attempts:
             shortened = candidate_steps[:index] + candidate_steps[index + 1:]
-            candidate_plan = ReplayPlan(run_id=plan.run_id, task_id=plan.task_id, tester_id=plan.tester_id, identity_id=plan.identity_id, data_requirements=plan.data_requirements, steps=tuple(shortened), input_values=plan.input_values)
+            candidate_plan = replace(plan, steps=tuple(shortened))
             attempt = await self.replay.run_attempt(finding_id=finding_id, plan=candidate_plan, purpose="MINIMIZATION", reset_hook=reset_hook, prepare_page=prepare_page)
             attempts.append(attempt)
             tested += 1

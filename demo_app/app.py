@@ -548,6 +548,8 @@ let projects = [];
 let currentProjectId = null;
 let editAction = null;
 let projectSubmissionId = crypto.randomUUID();
+let taskLoadSequence = 0;
+let memberLoadSequence = 0;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {headers: {'Content-Type': 'application/json'}, ...options});
@@ -587,11 +589,13 @@ function fillProjectSelects() {
   }
 }
 async function loadTasks() {
+  const loadSequence = ++taskLoadSequence;
   const projectId = document.querySelector('#task-project').value || currentProjectId;
   const rows = document.querySelector('#tasks-table tbody');
   rows.innerHTML = '';
   if (!projectId) return;
   const data = await api(`/api/projects/${projectId}/tasks`);
+  if (loadSequence !== taskLoadSequence) return;
   for (const task of data.tasks) {
     const row = document.createElement('tr');
     row.dataset.taskId = task.task_id;
@@ -604,11 +608,13 @@ async function loadTasks() {
   }
 }
 async function loadMembers() {
+  const loadSequence = ++memberLoadSequence;
   const projectId = document.querySelector('#member-project').value || currentProjectId;
   const rows = document.querySelector('#members-table tbody');
   rows.innerHTML = '';
   if (!projectId) return;
   const data = await api(`/api/projects/${projectId}/members`);
+  if (loadSequence !== memberLoadSequence) return;
   for (const member of data.members) {
     const row = document.createElement('tr');
     row.dataset.username = member.username;

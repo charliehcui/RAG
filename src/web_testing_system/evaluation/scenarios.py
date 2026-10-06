@@ -1,17 +1,12 @@
-"""Trusted dataset projection and post-run-only access to evaluation answers."""
+"""Convert scenario requirements into the existing RunConfig."""
 
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import Any
 
 from web_testing_system.config import RunConfig
-from web_testing_system.state import StateStore
-
-FINAL_STATUSES = {"COMPLETED", "FAILED", "STOPPED", "CANCELLED"}
-ANSWER_MARKERS = re.compile(r"\bB[1-6]\b|ground[_ -]?truth|enabled[_ -]?(?:seeded[_ -]?)?bugs|expected[_ -]?bug[_ -]?count|DEMO_BUG_", re.IGNORECASE)
 
 
 def load_run_config(path: Path, *, scenario_id: str, target_url: str, tester_count: int = 3) -> RunConfig:
@@ -43,22 +38,4 @@ def load_run_config(path: Path, *, scenario_id: str, target_url: str, tester_cou
         "reset_hook": {key: case["reset_requirements"][key] for key in ("hook_type", "target")},
         "budget": budget,
     }
-    if ANSWER_MARKERS.search(json.dumps(payload, ensure_ascii=False)):
-        raise ValueError("evaluation answer metadata is forbidden in Agent input")
     return RunConfig.model_validate(payload)
-
-
-def read_ground_truth(path: Path, *, scenario_id: str, run_id: str, store: StateStore) -> dict[str, Any]:
-    """Check persisted Run state before opening the answer file, including for failed Runs."""
-    run = store.get_run(run_id)
-    if run is None:
-        raise KeyError(f"unknown run: {run_id}")
-    if run["status"] not in FINAL_STATUSES or run["finished_at"] is None:
-        raise PermissionError("evaluation answers are unavailable while the Run is active")
-    dataset = json.loads(path.read_text(encoding="utf-8"))
-    if run["application_version"] != dataset["demo_version"]:
-        raise ValueError("Run and evaluation answers use different application versions")
-    matches: list[dict[str, Any]] = [case for case in dataset["scenarios"] if case["scenario_id"] == scenario_id]
-    if len(matches) != 1:
-        raise ValueError("scenario_id must identify exactly one answer record")
-    return matches[0]

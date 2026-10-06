@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import uuid4
 
 from playwright.async_api import Page
 
 from web_testing_system.evidence import EvidenceBuffer, EvidenceStore
-from web_testing_system.runtime.browser import BrowserManager
+from web_testing_system.runtime.browser import BrowserManager, BrowserSession
 from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
 from web_testing_system.runtime.models import ActionType, WebAction
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
@@ -38,6 +40,10 @@ class ReplayStep:
     timeout_ms: int = 2_000
     expected_success: bool = True
     expected_error_type: str | None = None
+    identity_reference: str | None = None
+    behavior_id: str | None = None
+    goal_check: bool = False
+    session_reference: str | None = None
 
     def to_action(self, input_values: Mapping[str, str]) -> WebAction:
         value = None
@@ -46,10 +52,10 @@ class ReplayStep:
                 value = input_values[self.value_reference]
             except KeyError as error:
                 raise ValueError(f"missing replay input reference: {self.value_reference}") from error
-        return WebAction(action_type=self.action_type, target=self.target, value=value, value_reference=self.value_reference, url=self.url, expected=self.expected, assertion=self.assertion, key=self.key, wait_ms=self.wait_ms, resource_id=self.resource_id, requires_resource=self.requires_resource, confirmed=self.confirmed, timeout_ms=self.timeout_ms)
+        return WebAction(action_type=self.action_type, target=self.target, value=value, value_reference=self.value_reference, url=self.url, expected=self.expected, assertion=self.assertion, key=self.key, wait_ms=self.wait_ms, resource_id=self.resource_id, requires_resource=self.requires_resource, confirmed=self.confirmed, timeout_ms=self.timeout_ms, identity_reference=self.identity_reference, behavior_id=self.behavior_id, goal_check=self.goal_check)
 
     def to_record(self) -> dict[str, Any]:
-        return {"action_type": self.action_type.value, "target": self.target, "value_reference": self.value_reference, "url": self.url, "expected": self.expected, "assertion": self.assertion, "key": self.key, "wait_ms": self.wait_ms, "resource_id": self.resource_id, "requires_resource": self.requires_resource, "confirmed": self.confirmed, "timeout_ms": self.timeout_ms, "expected_success": self.expected_success, "expected_error_type": self.expected_error_type}
+        return {"action_type": self.action_type.value, "target": self.target, "value_reference": self.value_reference, "url": self.url, "expected": self.expected, "assertion": self.assertion, "key": self.key, "wait_ms": self.wait_ms, "resource_id": self.resource_id, "requires_resource": self.requires_resource, "confirmed": self.confirmed, "timeout_ms": self.timeout_ms, "expected_success": self.expected_success, "expected_error_type": self.expected_error_type, "identity_reference": self.identity_reference, "behavior_id": self.behavior_id, "goal_check": self.goal_check, "session_reference": self.session_reference}
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,8 @@ class ReplayPlan:
     data_requirements: dict[str, Any]
     steps: tuple[ReplayStep, ...]
     input_values: Mapping[str, str] = field(default_factory=dict, repr=False)
+    identity_values: Mapping[str, Mapping[str, str]] = field(default_factory=dict, repr=False)
+    identities: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def assertion_positions(self) -> tuple[int, ...]:
@@ -94,29 +102,55 @@ class ReplayPlanBuilder:
     def __init__(self, store: StateStore) -> None:
         self.store = store
 
-    def from_action_history(self, *, run_id: str, task_id: str, input_values: Mapping[str, str], through_event_id: str | None = None) -> ReplayBuildResult:
+    def from_action_history(self, *, run_id: str, task_id: str, input_values: Mapping[str, str], through_event_id: str | None = None, related_task_ids: Sequence[str] = (), identity_values: Mapping[str, Mapping[str, str]] | None = None, identity_references: Mapping[str, str] | None = None) -> ReplayBuildResult:
         task = self.store.get_task(task_id)
         if task is None or task["run_id"] != run_id:
             return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "TASK_MISSING")
         histories = self.store.list_action_history(run_id=run_id, task_id=task_id)
+        if through_event_id is not None:
+            boundary = next((index for index, item in enumerate(histories) if item["event_id"] == through_event_id), None)
+            if boundary is None:
+                return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "REPLAY_BOUNDARY_NOT_FOUND")
+            histories = histories[:boundary + 1]
+        if not histories:
+            return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "REPLAY_BOUNDARY_NOT_FOUND")
+        owner_tester_id = str(histories[-1]["tester_id"])
+        owner_session_reference = str(histories[-1]["browser_session_id"])
+        cutoff = histories[-1]["ended_at"]
+        related = set(related_task_ids) | set(task["dependencies"])
+        checked = {task_id}
+        while related:
+            reference = related.pop()
+            if reference in checked:
+                continue
+            checked.add(reference)
+            prerequisite = self.store.get_task(reference)
+            if prerequisite is None or prerequisite["run_id"] != run_id:
+                return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "REPLAY_TASK_UNAVAILABLE")
+            related.update(prerequisite["dependencies"])
+            histories.extend(item for item in self.store.list_action_history(run_id=run_id, task_id=reference) if item["ended_at"] <= cutoff)
+        histories.sort(key=lambda item: item["ended_at"])
         steps: list[ReplayStep] = []
         boundary_found = through_event_id is None
-        replay_tester_id: str | None = None
+        replay_tester_id: str | None = owner_tester_id
         for history in histories:
-            replay_tester_id = str(history["tester_id"])
             action_data = history["action_data"]
+            actor = self.store.get_tester(str(history["tester_id"]))
+            if actor is None:
+                return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "TESTER_IDENTITY_MISSING")
+            identity_reference = action_data.get("identity_reference") or (identity_references or {}).get(str(actor["identity_id"]))
+            actor_values = (identity_values or {}).get(str(identity_reference), input_values)
             action_name = str(action_data.get("action_type", ""))
             if action_name not in SUPPORTED_REPLAY_ACTIONS:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, f"UNSUPPORTED_RECORDED_ACTION:{action_name or history['action']}")
             value_reference = action_data.get("value_reference")
             if action_name in {ActionType.INPUT.value, ActionType.SELECT.value} and value_reference is None:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "RECORDED_INPUT_REFERENCE_MISSING")
-            if value_reference is not None and value_reference not in input_values:
+            if value_reference is not None and value_reference not in actor_values:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, f"INPUT_VALUE_UNAVAILABLE:{value_reference}")
-            steps.append(ReplayStep(action_type=ActionType(action_name), target=action_data.get("target"), value_reference=value_reference, url=action_data.get("url"), expected=action_data.get("expected"), assertion=str(action_data.get("assertion", "contains")), key=action_data.get("key"), wait_ms=int(action_data.get("wait_ms", 0)), resource_id=action_data.get("resource_id"), requires_resource=bool(action_data.get("requires_resource", False)), confirmed=bool(action_data.get("confirmed", False)), timeout_ms=int(action_data.get("timeout_ms", 2_000)), expected_success=bool(history["success"]), expected_error_type=history["result"].get("error_type")))
+            steps.append(ReplayStep(action_type=ActionType(action_name), target=action_data.get("target"), value_reference=value_reference, url=action_data.get("url"), expected=action_data.get("expected"), assertion=str(action_data.get("assertion", "contains")), key=action_data.get("key"), wait_ms=int(action_data.get("wait_ms", 0)), resource_id=action_data.get("resource_id"), requires_resource=bool(action_data.get("requires_resource", False)), confirmed=bool(action_data.get("confirmed", False)), timeout_ms=int(action_data.get("timeout_ms", 2_000)), expected_success=bool(history["success"]), expected_error_type=history["result"].get("error_type"), identity_reference=identity_reference, behavior_id=action_data.get("behavior_id"), goal_check=bool(action_data.get("goal_check", False)), session_reference=str(history["browser_session_id"])))
             if through_event_id is not None and history["event_id"] == through_event_id:
                 boundary_found = True
-                break
         if not steps or not boundary_found:
             return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "REPLAY_BOUNDARY_NOT_FOUND")
         assert replay_tester_id is not None
@@ -125,10 +159,11 @@ class ReplayPlanBuilder:
             return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "TESTER_IDENTITY_MISSING")
         data_requirements = dict(task["data_requirements"])
         data_requirements.setdefault("data_namespace", tester["data_namespace"])
-        plan = ReplayPlan(run_id=run_id, task_id=task_id, tester_id=replay_tester_id, identity_id=str(tester["identity_id"]), data_requirements=data_requirements, steps=tuple(steps), input_values=dict(input_values))
+        data_requirements["session_reference"] = owner_session_reference
+        plan = ReplayPlan(run_id=run_id, task_id=task_id, tester_id=replay_tester_id, identity_id=str(tester["identity_id"]), data_requirements=data_requirements, steps=tuple(steps), input_values=dict(input_values), identity_values=identity_values or {}, identities={reference: identity_id for identity_id, reference in (identity_references or {}).items()})
         return ReplayBuildResult("READY", plan)
 
-    def from_finding(self, *, finding_id: str, input_values: Mapping[str, str]) -> ReplayBuildResult:
+    def from_finding(self, *, finding_id: str, input_values: Mapping[str, str], identity_values: Mapping[str, Mapping[str, str]] | None = None, identity_references: Mapping[str, str] | None = None) -> ReplayBuildResult:
         finding = self.store.get_finding(finding_id)
         if finding is None:
             return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "FINDING_MISSING")
@@ -136,20 +171,25 @@ class ReplayPlanBuilder:
         tester = self.store.get_tester(str(finding["first_seen_by"]))
         if task is None or tester is None:
             return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "TASK_OR_TESTER_MISSING")
+        creation: dict[str, Any] = next((event["result"] for event in self.store.list_events(str(finding["run_id"]), event_types=("FINDING_CREATED",), task_id=str(finding["task_id"])) if event["result"].get("finding_id") == finding_id), {})
+        if not finding["reproduction_steps"] or (creation.get("related_task_ids") and finding["status"] not in {"REPRODUCED", "CONFIRMED_BUG"}):
+            return self.from_action_history(run_id=str(finding["run_id"]), task_id=str(finding["task_id"]), input_values=input_values, through_event_id=creation.get("boundary_event_id"), related_task_ids=creation.get("related_task_ids", []), identity_values=identity_values, identity_references=identity_references)
         steps: list[ReplayStep] = []
         for step_data in finding["reproduction_steps"]:
             action_name = str(step_data.get("action_type", ""))
             if action_name not in SUPPORTED_REPLAY_ACTIONS:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, f"UNSUPPORTED_RECORDED_ACTION:{action_name}")
             value_reference = step_data.get("value_reference")
-            if value_reference is not None and value_reference not in input_values:
+            identity_reference = step_data.get("identity_reference")
+            actor_values = (identity_values or {}).get(str(identity_reference), input_values)
+            if value_reference is not None and value_reference not in actor_values:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, f"INPUT_VALUE_UNAVAILABLE:{value_reference}")
-            steps.append(ReplayStep(action_type=ActionType(action_name), target=step_data.get("target"), value_reference=value_reference, url=step_data.get("url"), expected=step_data.get("expected"), assertion=str(step_data.get("assertion", "contains")), key=step_data.get("key"), wait_ms=int(step_data.get("wait_ms", 0)), resource_id=step_data.get("resource_id"), requires_resource=bool(step_data.get("requires_resource", False)), confirmed=bool(step_data.get("confirmed", False)), timeout_ms=int(step_data.get("timeout_ms", 2_000)), expected_success=bool(step_data.get("expected_success", True)), expected_error_type=step_data.get("expected_error_type")))
+            steps.append(ReplayStep(action_type=ActionType(action_name), target=step_data.get("target"), value_reference=value_reference, url=step_data.get("url"), expected=step_data.get("expected"), assertion=str(step_data.get("assertion", "contains")), key=step_data.get("key"), wait_ms=int(step_data.get("wait_ms", 0)), resource_id=step_data.get("resource_id"), requires_resource=bool(step_data.get("requires_resource", False)), confirmed=bool(step_data.get("confirmed", False)), timeout_ms=int(step_data.get("timeout_ms", 2_000)), expected_success=bool(step_data.get("expected_success", True)), expected_error_type=step_data.get("expected_error_type"), identity_reference=identity_reference, behavior_id=step_data.get("behavior_id"), goal_check=bool(step_data.get("goal_check", False)), session_reference=step_data.get("session_reference")))
         if not steps:
             return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "STABLE_REPRODUCTION_STEPS_MISSING")
         data_requirements = dict(task["data_requirements"])
         data_requirements.setdefault("data_namespace", tester["data_namespace"])
-        plan = ReplayPlan(run_id=str(finding["run_id"]), task_id=str(finding["task_id"]), tester_id=str(finding["first_seen_by"]), identity_id=str(tester["identity_id"]), data_requirements=data_requirements, steps=tuple(steps), input_values=dict(input_values))
+        plan = ReplayPlan(run_id=str(finding["run_id"]), task_id=str(finding["task_id"]), tester_id=str(finding["first_seen_by"]), identity_id=str(tester["identity_id"]), data_requirements=data_requirements, steps=tuple(steps), input_values=dict(input_values), identity_values=identity_values or {}, identities={reference: identity_id for identity_id, reference in (identity_references or {}).items()})
         return ReplayBuildResult("READY", plan)
 
 
@@ -177,14 +217,18 @@ class DeterministicReplay:
         environment_issue = False
         needs_ai_assistance = False
         reason: str | None = None
+        sessions: dict[tuple[str, str], tuple[BrowserSession, EvidenceBuffer]] = {}
+        default_reference = str(plan.data_requirements.get("identity_reference") or next((reference for reference, identity in plan.identities.items() if identity == plan.identity_id), ""))
+        default_session_reference = str(plan.data_requirements.get("session_reference") or next((step.session_reference for step in plan.steps if (step.identity_reference or default_reference) == default_reference and step.session_reference), ""))
         if reset_hook is not None:
             await reset_hook()
             fresh_data_mode = "RESET_AND_FRESH_DATA"
         try:
             session = await self.browser_manager.create_session(tester_id=plan.tester_id, identity_id=plan.identity_id)
             browser_session_id = session.session_id
-            buffer = EvidenceBuffer()
+            buffer = EvidenceBuffer(identity_reference=default_reference or None)
             buffer.attach(session.page)
+            sessions[default_reference, default_session_reference] = (session, buffer)
             marker = buffer.mark()
             await self.evidence_store.start_trace(session.context)
             if prepare_page is not None:
@@ -192,7 +236,21 @@ class DeterministicReplay:
             matched = True
             for step in plan.steps:
                 try:
-                    action = step.to_action(plan.input_values)
+                    reference = step.identity_reference or default_reference
+                    session_key = (reference, step.session_reference or (default_session_reference if reference == default_reference else ""))
+                    if session_key not in sessions:
+                        identity_id = plan.identity_id if reference == default_reference else plan.identities.get(reference)
+                        identity = self.store.get_identity(identity_id) if identity_id is not None else None
+                        if identity_id is None or identity is None or identity["run_id"] != plan.run_id:
+                            raise ValueError("REPLAY_IDENTITY_UNAVAILABLE")
+                        actor_session = await self.browser_manager.create_session(tester_id=plan.tester_id, identity_id=identity_id)
+                        actor_buffer = EvidenceBuffer(identity_reference=reference)
+                        actor_buffer.attach(actor_session.page)
+                        sessions[session_key] = (actor_session, actor_buffer)
+                        await self.evidence_store.start_trace(actor_session.context)
+                    session, buffer = sessions[session_key]
+                    values = plan.identity_values.get(reference, plan.input_values if reference == default_reference else {})
+                    action = step.to_action(values)
                 except ValueError as error:
                     matched = False
                     needs_ai_assistance = True
@@ -218,16 +276,24 @@ class DeterministicReplay:
                     matched = False
                     reason = "RECORDED_OUTCOME_MISMATCH"
                     break
-            screenshot, _ = await self.evidence_store.capture_screenshot(page=session.page, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=attempt_id, browser_session_id=session.session_id, name=f"{purpose.lower()}-screenshot")
-            evidence_ids.append(str(screenshot["evidence_id"]))
-            dom = await self.evidence_store.capture_dom(page=session.page, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=attempt_id, browser_session_id=session.session_id)
-            evidence_ids.append(str(dom["evidence_id"]))
-            network = self.evidence_store.capture_network(buffer=buffer, marker=marker, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=attempt_id, browser_session_id=session.session_id, url=session.page.url)
-            evidence_ids.append(str(network["evidence_id"]))
-            console = self.evidence_store.capture_console(buffer=buffer, marker=marker, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=attempt_id, browser_session_id=session.session_id, url=session.page.url)
-            evidence_ids.append(str(console["evidence_id"]))
-            trace = await self.evidence_store.capture_trace(context=session.context, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=attempt_id, browser_session_id=session.session_id, url=session.page.url)
-            evidence_ids.append(str(trace["evidence_id"]))
+            for number, ((reference, _), (session, buffer)) in enumerate(sessions.items()):
+                await buffer.flush()
+                # 对已经观察到的项目保存补取持久化读数，不读取预置缺陷或答案。
+                for observed in tuple(buffer.network_records):
+                    if observed["method"] == "PATCH" and observed["status"] == 200 and urlsplit(observed["url"]).path.startswith("/api/projects/") and len(urlsplit(observed["url"]).path.strip("/").split("/")) == 3 and self.executor.permission_checker.url_allowed(observed["url"]):
+                        response = await session.context.request.get(observed["url"])
+                        buffer.network_records.append({"url": observed["url"], "method": "GET", "status": response.status, "captured_at": datetime.now(UTC).isoformat(), "identity_reference": reference or None, "response_data": EvidenceBuffer._business_data(await response.json())})
+                evidence_attempt_id = f"{attempt_id}-{reference}-{number}" if reference else attempt_id
+                screenshot, _ = await self.evidence_store.capture_screenshot(page=session.page, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=evidence_attempt_id, browser_session_id=session.session_id, name=f"{purpose.lower()}-screenshot")
+                evidence_ids.append(str(screenshot["evidence_id"]))
+                dom = await self.evidence_store.capture_dom(page=session.page, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=evidence_attempt_id, browser_session_id=session.session_id)
+                evidence_ids.append(str(dom["evidence_id"]))
+                network = self.evidence_store.capture_network(buffer=buffer, marker=marker, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=evidence_attempt_id, browser_session_id=session.session_id, url=session.page.url)
+                evidence_ids.append(str(network["evidence_id"]))
+                console = self.evidence_store.capture_console(buffer=buffer, marker=marker, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=evidence_attempt_id, browser_session_id=session.session_id, url=session.page.url)
+                evidence_ids.append(str(console["evidence_id"]))
+                trace = await self.evidence_store.capture_trace(context=session.context, run_id=plan.run_id, task_id=plan.task_id, finding_id=finding_id, attempt_id=evidence_attempt_id, browser_session_id=session.session_id, url=session.page.url)
+                evidence_ids.append(str(trace["evidence_id"]))
         except BudgetExceededError as error:
             matched = False
             environment_issue = False
@@ -239,8 +305,8 @@ class DeterministicReplay:
             needs_ai_assistance = False
             reason = f"{type(error).__name__}: {error}"
         finally:
-            if browser_session_id is not None:
-                await self.browser_manager.close_session(browser_session_id)
+            for session, _ in sessions.values():
+                await self.browser_manager.close_session(session.session_id)
         duration_ms = (perf_counter() - started) * 1_000
         attempt = ReplayAttempt(attempt_id=attempt_id, purpose=purpose, fresh_data_mode=fresh_data_mode, browser_session_id=browser_session_id, matched=matched, environment_issue=environment_issue, needs_ai_assistance=needs_ai_assistance, duration_ms=duration_ms, action_results=tuple(results), evidence_ids=tuple(evidence_ids), data_namespace=data_namespace, reason=reason)
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=plan.run_id, task_id=plan.task_id, tester_id=plan.tester_id, browser_session_id=browser_session_id, event_type=f"{purpose}_ATTEMPT", tool="DeterministicReplay", action="replay_known_steps", result={"finding_id": finding_id, "attempt_id": attempt_id, "fresh_data_mode": fresh_data_mode, "matched": matched, "environment_issue": environment_issue, "needs_ai_assistance": needs_ai_assistance, "duration_ms": duration_ms, "reason": reason, "action_results": results, "identity_id": plan.identity_id, "data_namespace": data_namespace, "data_requirements": plan.data_requirements, "assertion_positions": plan.assertion_positions}, evidence_references=evidence_ids, latency_ms=duration_ms)

@@ -151,7 +151,8 @@ async def test_formal_entry_reproduces_verifies_and_reports_seeded_bug(tmp_path:
     assert report["confirmed_bugs"][0]["verification"] == "FAIL"
     assert report["confirmed_bugs"][0]["stable_reproduction_steps"]
     assert report["task_outcomes"][0]["execution_status"] == "COMPLETED"
-    assert report["task_outcomes"][0]["success_status"] == "FAIL"
+    assert report["task_outcomes"][0]["success_status"] == "PASS"
+    assert report["task_outcomes"][0]["application_behavior"] == "FAIL"
     assert TestingClient.calls == len(actions)
     assert all("demo-member" not in prompt for prompt in TestingClient.prompts)
     assert "EB-delete" in TestingClient.prompts[0] and "member_username" in TestingClient.prompts[0]

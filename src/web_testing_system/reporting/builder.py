@@ -42,7 +42,7 @@ class FinalReportBuilder:
             "needs_confirmation": needs_confirmation,
             "environment_issues": environment_issues,
             "findings": [{"finding_id": item["finding_id"], "status": item["status"], "title": item["title"], "expected": item["expected_result"], "actual": item["actual_result"], "screening_reason": item["screening_reason"], "verification": item["verification_result"], "reproduction_steps": item["reproduction_steps"], "reproduction_rate": item["reproduction_rate"], "evidence": self._evidence_references(item, evidence_by_finding)} for item in findings],
-            "task_outcomes": [{"task_id": task["task_id"], "goal": task["goal"], "feature": task["data_requirements"].get("feature"), "execution_status": task["status"], "success_status": task["success_status"], "reason": task["success_reason"], "assertions": task["assertion_results"]} for task in tasks],
+            "task_outcomes": [{"task_id": task["task_id"], "goal": task["goal"], "feature": task["data_requirements"].get("feature"), "execution_status": task["status"], "success_status": task["success_status"], "reason": task["success_reason"], "application_behavior": "UNKNOWN" if task["success_reason"] == "AGENT_EXECUTION_FAILURE" else "FAIL" if any(not item["success"] for item in task["assertion_results"]) else "PASS" if task["success_status"] == "PASS" else "UNKNOWN", "assertions": task["assertion_results"]} for task in tasks],
             "model_configuration": run["scope"].get("model_configuration", {}),
             "cost_and_performance": self._cost_and_performance(run, budgets, events, len(confirmed)),
             "main_final_summary": self._final_summary(events),

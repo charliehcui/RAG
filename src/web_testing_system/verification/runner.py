@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from typing import Any
 from uuid import uuid4
 
 from web_testing_system.findings import FindingService
@@ -40,8 +41,11 @@ class VerificationRunner:
             return self._needs_confirmation(finding, "NEEDS_AI_ASSISTANCE", None)
         if not any(step.action_type in {ActionType.ASSERTION, ActionType.URL_CHECK} for step in plan.steps):
             return self._needs_confirmation(finding, "DETERMINISTIC_ASSERTION_MISSING", None)
-        verification_steps = tuple(replace(step, expected_success=True, expected_error_type=None) if step.action_type in {ActionType.ASSERTION, ActionType.URL_CHECK} else step for step in plan.steps)
-        verification_plan = ReplayPlan(run_id=plan.run_id, task_id=plan.task_id, tester_id=plan.tester_id, identity_id=plan.identity_id, data_requirements=plan.data_requirements, steps=verification_steps, input_values=plan.input_values)
+        creation: dict[str, Any] = next((event["result"] for event in self.store.list_events(plan.run_id, event_types=("FINDING_CREATED",), task_id=plan.task_id) if event["result"].get("finding_id") == finding_id), {})
+        behavior_id = creation.get("behavior_id")
+        target = next((index for index in reversed(plan.assertion_positions) if not plan.steps[index].expected_success and (behavior_id is None or plan.steps[index].behavior_id == behavior_id)), None)
+        verification_steps = tuple(replace(step, expected_success=True, expected_error_type=None) if index == target else step for index, step in enumerate(plan.steps))
+        verification_plan = replace(plan, steps=verification_steps)
         attempt = await self.replay.run_attempt(finding_id=finding_id, plan=verification_plan, purpose="VERIFICATION", reset_hook=reset_hook, prepare_page=prepare_page)
         if attempt.needs_ai_assistance or attempt.environment_issue or attempt.reason in {"MAX_RUNTIME_REACHED", "MAX_TASK_STEPS_REACHED", "MAX_BROWSER_CONTEXTS_REACHED"}:
             reason = "NEEDS_AI_ASSISTANCE" if attempt.needs_ai_assistance else attempt.reason or "ENVIRONMENT_ISSUE"

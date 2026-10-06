@@ -10,6 +10,7 @@ from typing import Any
 class ActionType(StrEnum):
     NAVIGATION = "navigation"
     CLICK = "click"
+    REPEAT_SUBMIT = "repeat_submit"
     INPUT = "input"
     SELECT = "select"
     KEYBOARD = "keyboard"
@@ -95,6 +96,7 @@ class WebAction:
     timeout_ms: int = 2_000
     behavior_id: str | None = None
     goal_check: bool = False
+    identity_reference: str | None = None
 
 
 @dataclass(frozen=True)
