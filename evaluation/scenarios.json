@@ -1,0 +1,2967 @@
+{
+  "demo_version": "phase5-demo-1.0",
+  "budget": {
+    "max_runtime_seconds": 900,
+    "max_llm_calls": 120,
+    "max_input_tokens": 100000,
+    "max_output_tokens": 20000,
+    "max_jev_calls": 120,
+    "max_computer_use_calls": 0,
+    "max_testers": 3,
+    "max_browser_steps_per_task": 90,
+    "max_replans_per_task": 2,
+    "max_reproductions_per_finding": 3,
+    "max_replay_steps_per_finding": 250,
+    "max_parallel_browser_contexts": 3
+  },
+  "denied_operations": [
+    "access external origins",
+    "modify production data",
+    "read local files or source code",
+    "read server environment or evaluation metadata",
+    "reset the application during exploration"
+  ],
+  "scenarios": [
+    {
+      "scenario_id": "D01",
+      "split": "development",
+      "name": "Joined-member task lifecycle",
+      "difficulty": "Medium",
+      "user_goal": "Check that a joined member can manage a task in Seed Project and retains the correct identity across navigation and logout.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Task"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "task-workflow",
+          "description": "Log in as member, discover Tasks for Seed Project, reject an empty title, create and edit the named task, refresh, delete it, refresh and reopen Tasks, then log out.",
+          "feature": "Task",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-AUTH-SESSION",
+            "EB-TASK-LIFECYCLE",
+            "EB-TASK-DELETE"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "seed_project_name",
+            "task_title",
+            "edited_task_title",
+            "empty_task_title"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-AUTH-SESSION",
+          "description": "Login accepts valid credentials, restores the same identity after refresh, rejects invalid credentials, and logout returns to the login screen.",
+          "applies_to": "Auth/all/session",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "task_title": "d01-member-draft",
+        "edited_task_title": "d01-member-ready",
+        "empty_task_title": "",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": true,
+      "scenario_types": [
+        "no_bug_control",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D02",
+      "split": "development",
+      "name": "New-member onboarding and ownership",
+      "difficulty": "Medium",
+      "user_goal": "Register a new member and check the first owned project through logout and a later login.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "onboard",
+          "description": "Use the new_member identity and its configured secret reference to register and log in. Confirm its initially empty project list, create an owned project, rename it, log out and log in again, then verify persistence and delete the owned project.",
+          "feature": "Project",
+          "identity_reference": "new_member",
+          "expected_behavior_ids": [
+            "EB-AUTH-REGISTER",
+            "EB-AUTH-SESSION",
+            "EB-PROJECT-VISIBILITY",
+            "EB-PROJECT-LIFECYCLE",
+            "EB-PROJECT-SAVE"
+          ],
+          "test_data_keys": [
+            "new_member_username",
+            "new_member_display_name",
+            "project_name",
+            "edited_project_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-AUTH-SESSION",
+          "description": "Login accepts valid credentials, restores the same identity after refresh, rejects invalid credentials, and logout returns to the login screen.",
+          "applies_to": "Auth/all/session",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-AUTH-REGISTER",
+          "description": "Registration creates one member account with the supplied display name. The new account can log in and retain its identity after logout and login.",
+          "applies_to": "Auth/member/register",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "description": "Admins see all projects; members see only owned or currently joined projects. An unassigned member has an empty project list.",
+          "applies_to": "Permission/all/project_visibility",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "description": "A nonempty project can be created, opened in the project list, renamed by its owner or Admin, and deleted by its owner or Admin. Changes persist after refresh.",
+          "applies_to": "Project/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SAVE",
+          "description": "After Save succeeds and the edit dialog closes, the renamed project row immediately shows the new name. Refresh and reopened views show the same saved name.",
+          "applies_to": "Project/all/save",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "new_member",
+          "role": "member",
+          "permissions": [
+            "register",
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_NEW_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "new_member_display_name": "D02 New Member",
+        "project_name": "d02-first-project",
+        "edited_project_name": "d02-renamed-project",
+        "new_member_username": "d02-new-member"
+      },
+      "enabled_seeded_bugs": [],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "no_bug_control",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D03",
+      "split": "development",
+      "name": "Independent project task and member workflows",
+      "difficulty": "Complex",
+      "user_goal": "Audit three independent business workflows using separate browser contexts and separate projects.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project",
+        "Task",
+        "Member"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "project-workflow",
+          "description": "Create, rename, refresh and delete project_branch_name without modifying either other workflow project.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-LIFECYCLE",
+            "EB-PROJECT-SAVE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "project_branch_name",
+            "project_branch_rename"
+          ],
+          "independent_group": "project"
+        },
+        {
+          "goal_id": "task-workflow",
+          "description": "Create task_branch_name, navigate to its Tasks, create, edit, refresh and delete the named task; refresh again before deleting this branch project.",
+          "feature": "Task",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-TASK-LIFECYCLE",
+            "EB-TASK-DELETE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "task_branch_name",
+            "task_title",
+            "edited_task_title"
+          ],
+          "independent_group": "task"
+        },
+        {
+          "goal_id": "member-workflow",
+          "description": "Create member_branch_name, add member2, edit its display name, refresh, remove membership and refresh. Mutate membership only in this branch project.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "member_branch_name",
+            "invited_username",
+            "member_display_name"
+          ],
+          "independent_group": "member"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "description": "A nonempty project can be created, opened in the project list, renamed by its owner or Admin, and deleted by its owner or Admin. Changes persist after refresh.",
+          "applies_to": "Project/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SAVE",
+          "description": "After Save succeeds and the edit dialog closes, the renamed project row immediately shows the new name. Refresh and reopened views show the same saved name.",
+          "applies_to": "Project/all/save",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "project_branch_name": "d03-project-branch",
+        "project_branch_rename": "d03-project-saved",
+        "task_branch_name": "d03-task-branch",
+        "task_title": "d03-draft",
+        "edited_task_title": "d03-ready",
+        "member_branch_name": "d03-member-branch",
+        "invited_username": "member2",
+        "member_display_name": "D03 Invited Member",
+        "admin_username": "admin"
+      },
+      "enabled_seeded_bugs": [],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 3,
+        "independent_goal_groups": 3,
+        "compare_1_vs_3": true,
+        "coordination": "Three independent projects. No global reset or shared member-profile mutation by other branches. Use shared coverage and evidence to avoid duplicated checks."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "no_bug_control",
+        "multi_step_e2e",
+        "parallel_multi_agent"
+      ]
+    },
+    {
+      "scenario_id": "D04",
+      "split": "development",
+      "name": "Seed task deletion persistence",
+      "difficulty": "Easy",
+      "user_goal": "Delete Seed Task as a joined member and check that it stays absent after refresh and reopening Tasks.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Task"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "delete-task",
+          "description": "Log in as member, open Seed Project Tasks, delete the seeded task, assert absence immediately, refresh and reopen Tasks, and assert absence again.",
+          "feature": "Task",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-TASK-DELETE"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "seed_project_name",
+            "seed_task_id",
+            "seed_task_title"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "seed_task_id": "task-1",
+        "seed_task_title": "Seed Task",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B1"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": true,
+      "scenario_types": [
+        "single_bug"
+      ]
+    },
+    {
+      "scenario_id": "D05",
+      "split": "development",
+      "name": "Joined-member project deletion boundary",
+      "difficulty": "Easy",
+      "user_goal": "Check that a joined member cannot delete the Admin-owned Seed Project.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Permission"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "reject-delete",
+          "description": "As member, attempt Delete on Seed Project, then refresh and verify that the project and Seed Task still exist. A rejected request is an expected test result.",
+          "feature": "Permission",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-PROJECT-DELETE-AUTH"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "seed_project_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "description": "Only the Project owner or Admin may delete a project. A joined member who is not its owner is denied, and the project and its tasks remain intact.",
+          "applies_to": "Permission/member/delete",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B2"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "single_bug"
+      ]
+    },
+    {
+      "scenario_id": "D06",
+      "split": "development",
+      "name": "Empty project creation validation",
+      "difficulty": "Easy",
+      "user_goal": "Check that an empty name cannot create a project, then verify a normal nonempty submission.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "create-validation",
+          "description": "As member submit an empty project name, verify the validation message and unchanged row count, then create valid_project_name once and confirm it exists.",
+          "feature": "Project",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-PROJECT-NAME"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "empty_project_name",
+            "valid_project_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-NAME",
+          "description": "Create and Edit both trim project names and reject an empty or whitespace-only name with project name is required. Rejection leaves existing project names and row counts unchanged.",
+          "applies_to": "Project/all/name_validation",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "empty_project_name": "",
+        "valid_project_name": "d06-valid-project",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B3"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "single_bug"
+      ]
+    },
+    {
+      "scenario_id": "D07",
+      "split": "development",
+      "name": "Immediate rename display consistency",
+      "difficulty": "Easy",
+      "user_goal": "Rename Admin Private Project and check the saved name before any reload and after refresh.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "rename-project",
+          "description": "Open Edit for Admin Private Project, Save edited_project_name, inspect the row immediately after the dialog closes, then refresh and compare the same project row.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SAVE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "seed_project_id",
+            "seed_project_name",
+            "edited_project_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-SAVE",
+          "description": "After Save succeeds and the edit dialog closes, the renamed project row immediately shows the new name. Refresh and reopened views show the same saved name.",
+          "applies_to": "Project/all/save",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-2",
+        "seed_project_name": "Admin Private Project",
+        "edited_project_name": "d07-private-saved",
+        "admin_username": "admin"
+      },
+      "enabled_seeded_bugs": [
+        "B4"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": true,
+      "scenario_types": [
+        "single_bug"
+      ]
+    },
+    {
+      "scenario_id": "D08",
+      "split": "development",
+      "name": "In-flight project submission protection",
+      "difficulty": "Medium",
+      "user_goal": "Check repeated submission of one pending project creation and distinguish it from two deliberate completed creations.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "repeat-create",
+          "description": "As member2, submit project_name twice while the first creation is still pending. Capture evidence that both requests belong to the same pending operation, then inspect the settled project rows and refresh. Separately create intentional_project_name twice only after each previous operation has finished; these are distinct operations.",
+          "feature": "Project",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SUBMIT"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "project_name",
+            "intentional_project_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "description": "Repeated submission of the same in-flight project-create operation creates one project. Two intentional completed submissions are separate operations and may create two projects.",
+          "applies_to": "Project/all/repeated_submission",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "project_name": "d08-pending-project",
+        "intentional_project_name": "d08-intentional-project",
+        "member2_username": "member2"
+      },
+      "enabled_seeded_bugs": [
+        "B5"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "single_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D09",
+      "split": "development",
+      "name": "Revocation in an active member session",
+      "difficulty": "Medium",
+      "user_goal": "Check that removing a joined member revokes project access without requiring the member to log out.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Permission",
+        "Member"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "observe-revocation",
+          "description": "As member, log in and verify Seed Project task access. Publish member-session-ready and keep this browser context alive. After membership-removed is published by the Admin, refresh Projects and reopen Tasks using this same session; check that project data is unavailable and record evidence before finishing.",
+          "feature": "Permission",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-MEMBER-ACCESS"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "seed_project_name",
+            "removed_username"
+          ],
+          "independent_group": "revocation"
+        },
+        {
+          "goal_id": "remove-membership",
+          "description": "As admin, wait for member-session-ready through shared task progress, remove member from Seed Project, refresh Members to prove removal, then publish membership-removed. Do not delete the project.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "seed_project_id",
+            "seed_project_name",
+            "removed_username"
+          ],
+          "independent_group": "revocation"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "description": "After an owner or Admin removes a member, the removed member loses project visibility and task/member access in an already logged-in session. Logout is not required; an untouched project remains accessible.",
+          "applies_to": "Permission/member/access_revocation",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        },
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "removed_username": "member",
+        "member_username": "member",
+        "admin_username": "admin"
+      },
+      "enabled_seeded_bugs": [
+        "B6"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 2,
+        "independent_goal_groups": 0,
+        "compare_1_vs_3": false,
+        "coordination": "Two live contexts with readiness and removal barriers. They are one coupled workflow, not independent speedup work. Single-Tester execution must not be compared or allowed to deadlock."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "single_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D10",
+      "split": "development",
+      "name": "Owner task cleanup with name validation",
+      "difficulty": "Medium",
+      "user_goal": "Check a member-owned project from name validation through task cleanup and final project deletion.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Task"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "owner-lifecycle",
+          "description": "Reject a whitespace-only project creation, create the nonempty owned workspace, create and edit its task, refresh, delete the task and refresh again. Record the task result before deleting the owned project; project cascade deletion must not conceal a task persistence result.",
+          "feature": "Task",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-PROJECT-NAME",
+            "EB-TASK-LIFECYCLE",
+            "EB-TASK-DELETE",
+            "EB-PROJECT-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "whitespace_project_name",
+            "project_name",
+            "task_title",
+            "edited_task_title"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "description": "A nonempty project can be created, opened in the project list, renamed by its owner or Admin, and deleted by its owner or Admin. Changes persist after refresh.",
+          "applies_to": "Project/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-NAME",
+          "description": "Create and Edit both trim project names and reject an empty or whitespace-only name with project name is required. Rejection leaves existing project names and row counts unchanged.",
+          "applies_to": "Project/all/name_validation",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "whitespace_project_name": "   ",
+        "project_name": "d10-owner-workspace",
+        "task_title": "d10-own-task",
+        "edited_task_title": "d10-own-task-edited",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B1",
+        "B3"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": true,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D11",
+      "split": "development",
+      "name": "Private-project rename and task persistence",
+      "difficulty": "Medium",
+      "user_goal": "Check that saved project naming and task deletion stay consistent across Projects and Tasks navigation.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Task"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "private-lifecycle",
+          "description": "Rename project-2, inspect the row immediately, then navigate through Tasks using its selected project, create and edit the named task, delete it, refresh and reopen Tasks. Retain evidence from each checkpoint.",
+          "feature": "Task",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SAVE",
+            "EB-TASK-LIFECYCLE",
+            "EB-TASK-DELETE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "seed_project_id",
+            "seed_project_name",
+            "edited_project_name",
+            "task_title",
+            "edited_task_title"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SAVE",
+          "description": "After Save succeeds and the edit dialog closes, the renamed project row immediately shows the new name. Refresh and reopened views show the same saved name.",
+          "applies_to": "Project/all/save",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-2",
+        "seed_project_name": "Admin Private Project",
+        "edited_project_name": "d11-private-release",
+        "task_title": "d11-release-task",
+        "edited_task_title": "d11-release-ready",
+        "admin_username": "admin"
+      },
+      "enabled_seeded_bugs": [
+        "B1",
+        "B4"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D12",
+      "split": "development",
+      "name": "Offboarding read and delete boundaries",
+      "difficulty": "Complex",
+      "user_goal": "Offboard a member and check read access and destructive access separately in the retained member session.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Permission",
+        "Member"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "offboarded-access",
+          "description": "As member, log in and confirm access, publish member-session-ready, and retain this context until the Admin confirms membership removal. First inspect Projects and task data after removal; preserve this checkpoint before attempting Delete on the formerly joined project. Refresh and record the project-delete outcome separately.",
+          "feature": "Permission",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-MEMBER-ACCESS",
+            "EB-PROJECT-DELETE-AUTH"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "seed_project_name",
+            "removed_username"
+          ],
+          "independent_group": "offboarding"
+        },
+        {
+          "goal_id": "offboard-member",
+          "description": "As admin, wait for member-session-ready, remove member from project-1 and verify the Members list, then publish membership-removed. Keep the project intact until the member has recorded the read-access checkpoint.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "seed_project_id",
+            "seed_project_name",
+            "removed_username"
+          ],
+          "independent_group": "offboarding"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "description": "Only the Project owner or Admin may delete a project. A joined member who is not its owner is denied, and the project and its tasks remain intact.",
+          "applies_to": "Permission/member/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "description": "After an owner or Admin removes a member, the removed member loses project visibility and task/member access in an already logged-in session. Logout is not required; an untouched project remains accessible.",
+          "applies_to": "Permission/member/access_revocation",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        },
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "removed_username": "member",
+        "member_username": "member",
+        "admin_username": "admin"
+      },
+      "enabled_seeded_bugs": [
+        "B2",
+        "B6"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 2,
+        "independent_goal_groups": 0,
+        "compare_1_vs_3": false,
+        "coordination": "One coupled offboarding workflow; removal follows live-session readiness, read evidence precedes destructive testing. Exclude from 1-vs-3 speedup comparisons."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D13",
+      "split": "development",
+      "name": "Creation validation submission and task audit",
+      "difficulty": "Complex",
+      "user_goal": "Audit project input validation, pending submission protection, and a separate task workflow in parallel.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project",
+        "Task"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "name-validation",
+          "description": "As admin check empty and whitespace-only Create Project inputs. Correlate each response with its affected empty-name project rows; concurrent valid creations by other workflows must not be counted as validation failures.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-NAME"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "empty_project_name",
+            "whitespace_project_name"
+          ],
+          "independent_group": "validation"
+        },
+        {
+          "goal_id": "pending-submission",
+          "description": "As member2 test two submissions of submission_project_name while the first remains pending, establish that this is one operation, and inspect settled rows after refresh.",
+          "feature": "Project",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SUBMIT"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "submission_project_name"
+          ],
+          "independent_group": "submission"
+        },
+        {
+          "goal_id": "task-workflow",
+          "description": "As admin create task_project_name and check task creation, title editing, persistence, deletion and refresh within that separate project.",
+          "feature": "Task",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-TASK-LIFECYCLE",
+            "EB-TASK-DELETE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "task_project_name",
+            "task_title",
+            "edited_task_title"
+          ],
+          "independent_group": "task"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-NAME",
+          "description": "Create and Edit both trim project names and reject an empty or whitespace-only name with project name is required. Rejection leaves existing project names and row counts unchanged.",
+          "applies_to": "Project/all/name_validation",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "description": "Repeated submission of the same in-flight project-create operation creates one project. Two intentional completed submissions are separate operations and may create two projects.",
+          "applies_to": "Project/all/repeated_submission",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "empty_project_name": "",
+        "whitespace_project_name": "  ",
+        "submission_project_name": "d13-pending-creation",
+        "task_project_name": "d13-task-workspace",
+        "task_title": "d13-draft",
+        "edited_task_title": "d13-accepted",
+        "admin_username": "admin",
+        "member2_username": "member2"
+      },
+      "enabled_seeded_bugs": [
+        "B3",
+        "B5"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 3,
+        "independent_goal_groups": 3,
+        "compare_1_vs_3": true,
+        "coordination": "Three independent workflows with separate create names and no shared destructive target. Deduplicate repeated validation findings; no reset during exploration."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e",
+        "parallel_multi_agent"
+      ]
+    },
+    {
+      "scenario_id": "D14",
+      "split": "development",
+      "name": "Owner save followed by non-owner deletion",
+      "difficulty": "Medium",
+      "user_goal": "Check immediate save consistency as project owner and then validate a joined member deletion boundary.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project",
+        "Permission"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "owner-save",
+          "description": "As admin rename Seed Project and inspect its row before refresh. Publish owner-save-observed with the project reference and then finish this check.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SAVE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "seed_project_id",
+            "seed_project_name",
+            "edited_project_name"
+          ],
+          "independent_group": "save"
+        },
+        {
+          "goal_id": "joined-delete",
+          "description": "After the owner-save check finishes, log in as member, locate project-1 using its stable project reference rather than depending on the renamed row text, attempt Delete, and verify project and task preservation after refresh. Do not run destructive testing before the save evidence exists.",
+          "feature": "Permission",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-PROJECT-DELETE-AUTH"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "edited_project_name"
+          ],
+          "independent_group": "permission"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "description": "Only the Project owner or Admin may delete a project. A joined member who is not its owner is denied, and the project and its tasks remain intact.",
+          "applies_to": "Permission/member/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SAVE",
+          "description": "After Save succeeds and the edit dialog closes, the renamed project row immediately shows the new name. Refresh and reopened views show the same saved name.",
+          "applies_to": "Project/all/save",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "edited_project_name": "d14-review-workspace",
+        "admin_username": "admin",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B2",
+        "B4"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "The permission check depends on completion of the owner-save checkpoint; this is not an independent speedup workload."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": true,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "D15",
+      "split": "development",
+      "name": "Task cleanup submission and membership audit",
+      "difficulty": "Complex",
+      "user_goal": "Check three independent workflows: joined-member task cleanup, pending project submission, and owner member administration.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Task",
+        "Project",
+        "Member"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "task-cleanup",
+          "description": "As member create and edit the named task in Seed Project, delete it, then refresh and revisit its task list. Do not delete project-1.",
+          "feature": "Task",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-TASK-LIFECYCLE",
+            "EB-TASK-DELETE"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "seed_project_name",
+            "task_title",
+            "edited_task_title"
+          ],
+          "independent_group": "task"
+        },
+        {
+          "goal_id": "pending-submission",
+          "description": "As admin test repeated creation of submission_project_name before the first operation finishes, capture operation identity, inspect settled rows and refresh.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SUBMIT"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "submission_project_name"
+          ],
+          "independent_group": "submission"
+        },
+        {
+          "goal_id": "owner-members",
+          "description": "As member2 create member_project_name, add member, edit its display name and remove only this membership, refreshing each checkpoint. The owned team project is distinct from project-1.",
+          "feature": "Member",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "member_project_name",
+            "invited_username",
+            "member_display_name"
+          ],
+          "independent_group": "member"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "description": "Repeated submission of the same in-flight project-create operation creates one project. Two intentional completed submissions are separate operations and may create two projects.",
+          "applies_to": "Project/all/repeated_submission",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        },
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "task_title": "d15-member-task",
+        "edited_task_title": "d15-member-task-edited",
+        "submission_project_name": "d15-admin-pending",
+        "member_project_name": "d15-owned-team",
+        "invited_username": "member",
+        "member_display_name": "D15 Team Member",
+        "member_username": "member",
+        "admin_username": "admin",
+        "member2_username": "member2"
+      },
+      "enabled_seeded_bugs": [
+        "B1",
+        "B5"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 3,
+        "independent_goal_groups": 3,
+        "compare_1_vs_3": true,
+        "coordination": "Separate project names and task target. Member display-name editing does not change credentials or project-1 membership. Share coverage/finding facts without resetting."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e",
+        "parallel_multi_agent"
+      ]
+    },
+    {
+      "scenario_id": "D16",
+      "split": "development",
+      "name": "Save validation and member administration",
+      "difficulty": "Complex",
+      "user_goal": "Audit immediate save display, invalid project names, and an independent membership lifecycle.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project",
+        "Member"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "private-save",
+          "description": "As admin rename project-2, inspect the immediate row, refresh, navigate away and back, and check persisted naming. Do not delete project-2.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SAVE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "private_project_id",
+            "private_project_name",
+            "edited_project_name"
+          ],
+          "independent_group": "save"
+        },
+        {
+          "goal_id": "invalid-name",
+          "description": "As member attempt whitespace-only creation, observe validation and check that no project is added by this rejected operation.",
+          "feature": "Project",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-PROJECT-NAME"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "whitespace_project_name"
+          ],
+          "independent_group": "validation"
+        },
+        {
+          "goal_id": "member-management",
+          "description": "As admin create member_project_name and check member2 invitation, display-name editing, refresh, removal and a final Members refresh only in that separate project.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "member_project_name",
+            "invited_username",
+            "member_display_name"
+          ],
+          "independent_group": "member"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-NAME",
+          "description": "Create and Edit both trim project names and reject an empty or whitespace-only name with project name is required. Rejection leaves existing project names and row counts unchanged.",
+          "applies_to": "Project/all/name_validation",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SAVE",
+          "description": "After Save succeeds and the edit dialog closes, the renamed project row immediately shows the new name. Refresh and reopened views show the same saved name.",
+          "applies_to": "Project/all/save",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "private_project_id": "project-2",
+        "private_project_name": "Admin Private Project",
+        "edited_project_name": "d16-private-saved",
+        "whitespace_project_name": " \t ",
+        "member_project_name": "d16-members-workspace",
+        "invited_username": "member2",
+        "member_display_name": "D16 Reviewed Member",
+        "admin_username": "admin",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B3",
+        "B4"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 3,
+        "independent_goal_groups": 3,
+        "compare_1_vs_3": true,
+        "coordination": "Three independent targets; only the member branch edits member2 display name. Use per-operation evidence instead of global project-count deltas across identities."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": true,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e",
+        "parallel_multi_agent"
+      ]
+    },
+    {
+      "scenario_id": "H01",
+      "split": "holdout",
+      "name": "Unassigned-member sign-in visibility",
+      "difficulty": "Easy",
+      "user_goal": "Check a second member with no assignments through login, refresh, logout, and a rejected login.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Permission"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "unassigned-session",
+          "description": "Log in as member2, verify the identity and empty Projects table, refresh and check the same state, log out, then try invalid_login_name with the configured secret and verify invalid login while remaining logged out.",
+          "feature": "Permission",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-AUTH-SESSION",
+            "EB-PROJECT-VISIBILITY"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "invalid_login_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-AUTH-SESSION",
+          "description": "Login accepts valid credentials, restores the same identity after refresh, rejects invalid credentials, and logout returns to the login screen.",
+          "applies_to": "Auth/all/session",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "description": "Admins see all projects; members see only owned or currently joined projects. An unassigned member has an empty project list.",
+          "applies_to": "Permission/all/project_visibility",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "invalid_login_name": "h01-no-such-user",
+        "member2_username": "member2"
+      },
+      "enabled_seeded_bugs": [],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "no_bug_control"
+      ]
+    },
+    {
+      "scenario_id": "H02",
+      "split": "holdout",
+      "name": "Invitation removed before first member login",
+      "difficulty": "Medium",
+      "user_goal": "Check Admin membership editing and the access seen by a second member who first logs in after invitation removal.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Member",
+        "Permission"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "temporary-invitation",
+          "description": "As admin add member2 to project-2, edit its display name, refresh, remove the membership and refresh. Complete this workflow before the member2 session begins.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "private_project_id",
+            "private_project_name",
+            "invited_username",
+            "member_display_name"
+          ],
+          "independent_group": "invitation"
+        },
+        {
+          "goal_id": "first-login-access",
+          "description": "Only after temporary-invitation is complete, log in as member2 in a fresh context. Confirm no access to Admin Private Project and an empty Projects list, then log out.",
+          "feature": "Permission",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-PROJECT-VISIBILITY",
+            "EB-AUTH-SESSION"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "private_project_id",
+            "private_project_name"
+          ],
+          "independent_group": "visibility"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-AUTH-SESSION",
+          "description": "Login accepts valid credentials, restores the same identity after refresh, rejects invalid credentials, and logout returns to the login screen.",
+          "applies_to": "Auth/all/session",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "description": "Admins see all projects; members see only owned or currently joined projects. An unassigned member has an empty project list.",
+          "applies_to": "Permission/all/project_visibility",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "private_project_id": "project-2",
+        "private_project_name": "Admin Private Project",
+        "invited_username": "member2",
+        "member_display_name": "H02 Temporary Reviewer",
+        "admin_username": "admin",
+        "member2_username": "member2"
+      },
+      "enabled_seeded_bugs": [],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "Two sequential tasks. A fresh login occurs after removal; this intentionally differs from active-session revocation."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "no_bug_control",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "H03",
+      "split": "holdout",
+      "name": "Owned versus joined project cleanup",
+      "difficulty": "Medium",
+      "user_goal": "Distinguish owner deletion rights from joined-member deletion rights during a cleanup session.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Permission"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "cleanup-boundaries",
+          "description": "As member create owned_project_name, delete it and confirm owner cleanup succeeds. Then attempt Delete on joined Seed Project and refresh to verify that the Admin-owned project and its Seed Task remain.",
+          "feature": "Permission",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-PROJECT-LIFECYCLE",
+            "EB-PROJECT-DELETE-AUTH"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "owned_project_name",
+            "joined_project_id",
+            "joined_project_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "description": "A nonempty project can be created, opened in the project list, renamed by its owner or Admin, and deleted by its owner or Admin. Changes persist after refresh.",
+          "applies_to": "Project/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "description": "Only the Project owner or Admin may delete a project. A joined member who is not its owner is denied, and the project and its tasks remain intact.",
+          "applies_to": "Permission/member/delete",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "owned_project_name": "h03-owned-cleanup",
+        "joined_project_id": "project-1",
+        "joined_project_name": "Seed Project",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B2"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "single_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "H04",
+      "split": "holdout",
+      "name": "New invitee private-project revocation",
+      "difficulty": "Medium",
+      "user_goal": "Invite a second member to the private project, then revoke access in that newly established member session.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Member",
+        "Permission"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "invite-and-remove",
+          "description": "As admin add member2 to project-2 and publish invitation-ready. Wait for invitee-session-ready from the member2 task, then remove that membership, prove removal in Members and publish membership-removed.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "private_project_id",
+            "private_project_name",
+            "invited_username"
+          ],
+          "independent_group": "revocation"
+        },
+        {
+          "goal_id": "invitee-access",
+          "description": "Wait for invitation-ready before logging in as member2. Confirm private-project access, publish invitee-session-ready, retain this context until membership-removed, then refresh Projects and revisit project task data without logging out; access must be denied.",
+          "feature": "Permission",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-MEMBER-ACCESS"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "private_project_id",
+            "private_project_name"
+          ],
+          "independent_group": "revocation"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "description": "After an owner or Admin removes a member, the removed member loses project visibility and task/member access in an already logged-in session. Logout is not required; an untouched project remains accessible.",
+          "applies_to": "Permission/member/access_revocation",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "private_project_id": "project-2",
+        "private_project_name": "Admin Private Project",
+        "invited_username": "member2",
+        "admin_username": "admin",
+        "member2_username": "member2"
+      },
+      "enabled_seeded_bugs": [
+        "B6"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 2,
+        "independent_goal_groups": 0,
+        "compare_1_vs_3": false,
+        "coordination": "Two live contexts, with invitation -> invitee login -> removal barriers. One coupled workflow; not comparable with one Tester."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "single_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "H05",
+      "split": "holdout",
+      "name": "Whitespace edit validation on existing project",
+      "difficulty": "Easy",
+      "user_goal": "Check that editing an existing private project cannot replace its name with whitespace.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "edit-validation",
+          "description": "As admin open Edit on Admin Private Project and submit whitespace_project_name. Check the validation message and existing row name, cancel the rejected edit if needed, refresh and confirm the original name remains.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-NAME"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "private_project_id",
+            "private_project_name",
+            "whitespace_project_name"
+          ],
+          "independent_group": "workflow"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-NAME",
+          "description": "Create and Edit both trim project names and reject an empty or whitespace-only name with project name is required. Rejection leaves existing project names and row counts unchanged.",
+          "applies_to": "Project/all/name_validation",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "private_project_id": "project-2",
+        "private_project_name": "Admin Private Project",
+        "whitespace_project_name": " \t ",
+        "admin_username": "admin"
+      },
+      "enabled_seeded_bugs": [
+        "B3"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 1,
+        "independent_goal_groups": 1,
+        "compare_1_vs_3": false,
+        "coordination": "No live cross-identity barrier is required."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "single_bug"
+      ]
+    },
+    {
+      "scenario_id": "H06",
+      "split": "holdout",
+      "name": "Pending creation alongside member offboarding",
+      "difficulty": "Medium",
+      "user_goal": "Check a pending creation by an unassigned member while another member is being offboarded from Seed Project.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project",
+        "Permission",
+        "Member"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "pending-project",
+          "description": "As member2 test repeated submission of submission_project_name while its first creation remains pending; capture operation identity and inspect settled rows after refresh. Do not touch Seed Project.",
+          "feature": "Project",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SUBMIT"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "submission_project_name"
+          ],
+          "independent_group": "creation"
+        },
+        {
+          "goal_id": "offboarded-read",
+          "description": "As member establish Seed Project access and publish member-session-ready. Retain this context until membership-removed, then reopen Members and Tasks and refresh Projects to check that data is inaccessible without logout.",
+          "feature": "Permission",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-MEMBER-ACCESS"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "seed_project_id",
+            "seed_project_name"
+          ],
+          "independent_group": "offboarding"
+        },
+        {
+          "goal_id": "remove-member",
+          "description": "As admin wait for member-session-ready, remove member from project-1, refresh the Members list to prove removal and publish membership-removed.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "seed_project_id",
+            "seed_project_name",
+            "removed_username"
+          ],
+          "independent_group": "offboarding"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "description": "Repeated submission of the same in-flight project-create operation creates one project. Two intentional completed submissions are separate operations and may create two projects.",
+          "applies_to": "Project/all/repeated_submission",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "description": "After an owner or Admin removes a member, the removed member loses project visibility and task/member access in an already logged-in session. Logout is not required; an untouched project remains accessible.",
+          "applies_to": "Permission/member/access_revocation",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        },
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        },
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "submission_project_name": "h06-member2-pending",
+        "seed_project_id": "project-1",
+        "seed_project_name": "Seed Project",
+        "removed_username": "member",
+        "member2_username": "member2",
+        "member_username": "member",
+        "admin_username": "admin"
+      },
+      "enabled_seeded_bugs": [
+        "B5",
+        "B6"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 3,
+        "independent_goal_groups": 2,
+        "compare_1_vs_3": false,
+        "coordination": "Two business branches, one of which needs two synchronized identities. Three contexts may run, but there are not three independent tasks; exclude 1-vs-3 speedup."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e"
+      ]
+    },
+    {
+      "scenario_id": "H07",
+      "split": "holdout",
+      "name": "Private task cleanup joined deletion and membership",
+      "difficulty": "Complex",
+      "user_goal": "Audit separate private-task cleanup, a joined-member deletion attempt, and a new-project membership lifecycle.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Task",
+        "Permission",
+        "Member"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "private-task",
+          "description": "As admin select project-2, create and edit the named task, delete it, refresh and reopen its task list. Do not touch project-1.",
+          "feature": "Task",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-TASK-LIFECYCLE",
+            "EB-TASK-DELETE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "private_project_id",
+            "private_project_name",
+            "task_title",
+            "edited_task_title"
+          ],
+          "independent_group": "task"
+        },
+        {
+          "goal_id": "joined-deletion",
+          "description": "As member attempt Delete on project-1, refresh and verify project/task preservation. Do not touch project-2 or the membership-workflow project.",
+          "feature": "Permission",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-PROJECT-DELETE-AUTH"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "joined_project_id",
+            "joined_project_name"
+          ],
+          "independent_group": "permission"
+        },
+        {
+          "goal_id": "team-members",
+          "description": "As admin create member_project_name, add member2, edit its display name, refresh, remove membership and refresh again, all within this separate project.",
+          "feature": "Member",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-MEMBER-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "member_project_name",
+            "invited_username",
+            "member_display_name"
+          ],
+          "independent_group": "member"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-DELETE",
+          "description": "After successful deletion, the selected task is absent immediately, after page refresh, and after leaving and reopening the Tasks view.",
+          "applies_to": "Task/all/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "description": "Only the Project owner or Admin may delete a project. A joined member who is not its owner is denied, and the project and its tasks remain intact.",
+          "applies_to": "Permission/member/delete",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
+          "applies_to": "Member/all/lifecycle",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "private_project_id": "project-2",
+        "private_project_name": "Admin Private Project",
+        "task_title": "h07-private-task",
+        "edited_task_title": "h07-private-ready",
+        "joined_project_id": "project-1",
+        "joined_project_name": "Seed Project",
+        "member_project_name": "h07-audit-team",
+        "invited_username": "member2",
+        "member_display_name": "H07 Audit Reviewer",
+        "admin_username": "admin",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B1",
+        "B2"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 3,
+        "independent_goal_groups": 3,
+        "compare_1_vs_3": true,
+        "coordination": "Separate project-1, project-2, and newly created membership targets. Destructive project-1 testing cannot erase the private-task evidence."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e",
+        "parallel_multi_agent"
+      ]
+    },
+    {
+      "scenario_id": "H08",
+      "split": "holdout",
+      "name": "Member-owner save pending creation and joined task",
+      "difficulty": "Complex",
+      "user_goal": "Audit a second member own-project rename, an Admin pending creation, and a separate joined-member task edit.",
+      "scope": [
+        "/",
+        "/api",
+        "/version"
+      ],
+      "focus_features": [
+        "Project",
+        "Task"
+      ],
+      "required_test_goals": [
+        {
+          "goal_id": "owner-save",
+          "description": "As member2 create owned_project_name once, rename it, inspect its row immediately after Save, refresh and revisit Projects. No repeated submission is part of this branch.",
+          "feature": "Project",
+          "identity_reference": "member2",
+          "expected_behavior_ids": [
+            "EB-PROJECT-LIFECYCLE",
+            "EB-PROJECT-SAVE"
+          ],
+          "test_data_keys": [
+            "member2_username",
+            "owned_project_name",
+            "edited_project_name"
+          ],
+          "independent_group": "save"
+        },
+        {
+          "goal_id": "admin-submission",
+          "description": "As admin submit submission_project_name repeatedly before the first operation completes, establish same-operation evidence, and compare project identities after settling and refresh.",
+          "feature": "Project",
+          "identity_reference": "admin",
+          "expected_behavior_ids": [
+            "EB-PROJECT-SUBMIT"
+          ],
+          "test_data_keys": [
+            "admin_username",
+            "submission_project_name"
+          ],
+          "independent_group": "submission"
+        },
+        {
+          "goal_id": "joined-task-edit",
+          "description": "As member create and edit the named task in Seed Project, refresh, reopen Tasks and verify the saved title and unchanged access. Do not rename or delete either other branch project.",
+          "feature": "Task",
+          "identity_reference": "member",
+          "expected_behavior_ids": [
+            "EB-TASK-LIFECYCLE"
+          ],
+          "test_data_keys": [
+            "member_username",
+            "joined_project_id",
+            "joined_project_name",
+            "task_title",
+            "edited_task_title"
+          ],
+          "independent_group": "task"
+        }
+      ],
+      "expected_behaviors": [
+        {
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "description": "A nonempty project can be created, opened in the project list, renamed by its owner or Admin, and deleted by its owner or Admin. Changes persist after refresh.",
+          "applies_to": "Project/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "description": "An authorized user can create a nonempty task, edit its title, and reload the selected project without losing the saved title. Empty task titles are rejected.",
+          "applies_to": "Task/all/lifecycle",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SAVE",
+          "description": "After Save succeeds and the edit dialog closes, the renamed project row immediately shows the new name. Refresh and reopened views show the same saved name.",
+          "applies_to": "Project/all/save",
+          "source": "DEMO_SPEC"
+        },
+        {
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "description": "Repeated submission of the same in-flight project-create operation creates one project. Two intentional completed submissions are separate operations and may create two projects.",
+          "applies_to": "Project/all/repeated_submission",
+          "source": "DEMO_SPEC"
+        }
+      ],
+      "allowed_roles": [
+        {
+          "identity_reference": "member2",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER2_PASSWORD"
+        },
+        {
+          "identity_reference": "admin",
+          "role": "admin",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+        },
+        {
+          "identity_reference": "member",
+          "role": "member",
+          "permissions": [
+            "login",
+            "read",
+            "create",
+            "update",
+            "delete"
+          ],
+          "secret_reference": "env:DEMO_MEMBER_PASSWORD"
+        }
+      ],
+      "required_test_data": {
+        "owned_project_name": "h08-member2-workspace",
+        "edited_project_name": "h08-member2-saved",
+        "submission_project_name": "h08-admin-pending",
+        "joined_project_id": "project-1",
+        "joined_project_name": "Seed Project",
+        "task_title": "h08-joined-draft",
+        "edited_task_title": "h08-joined-ready",
+        "member2_username": "member2",
+        "admin_username": "admin",
+        "member_username": "member"
+      },
+      "enabled_seeded_bugs": [
+        "B4",
+        "B5"
+      ],
+      "reset_requirements": {
+        "hook_type": "HTTP_POST",
+        "target": "/test/reset",
+        "before_run": "Trusted harness resets before each run, closes all previous browser contexts, and verifies version and the seed data. Run cases serially at application level.",
+        "before_reproduction": "Reset before every reproduction and verification attempt after exploration has ended. Replay must recreate all required setup, logins, and session ordering; reset alone does not replay another identity.",
+        "after_run": "Close browser contexts and reset after evidence is saved.",
+        "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
+      },
+      "expected_parallelism": {
+        "target_testers": 3,
+        "independent_goal_groups": 3,
+        "compare_1_vs_3": true,
+        "coordination": "Three independent identities and project targets. The single owner creation is not a duplicate-submission test; match findings to the correct branch."
+      },
+      "success_criteria": [
+        "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
+        "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
+        "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
+        "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+      ],
+      "optimization_representative": false,
+      "scenario_types": [
+        "multi_bug",
+        "multi_step_e2e",
+        "parallel_multi_agent"
+      ]
+    }
+  ]
+}
