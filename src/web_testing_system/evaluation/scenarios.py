@@ -8,6 +8,8 @@ from typing import Any
 
 from web_testing_system.config import RunConfig
 
+EVALUATION_MODEL_LIMITS = {"max_llm_calls": 500, "max_input_tokens": 10_000_000, "max_output_tokens": 1_000_000}
+
 
 def load_run_config(path: Path, *, scenario_id: str, target_url: str, tester_count: int = 3) -> RunConfig:
     """Project a trusted case onto the existing RunConfig; never pass a raw case to an Agent."""
@@ -24,6 +26,9 @@ def load_run_config(path: Path, *, scenario_id: str, target_url: str, tester_cou
     for goal in case["required_test_goals"]:
         goals.append({key: goal[key] for key in ("goal_id", "description", "feature", "identity_reference", "expected_behavior_ids", "test_data_keys", "independent_group")})
     budget = dict(dataset["budget"])
+    # 正式评估不沿用免费模型阶段的低预算；仍保留时间、步数、调用等失控上限。
+    for field, minimum in EVALUATION_MODEL_LIMITS.items():
+        budget[field] = max(budget[field], minimum)
     budget.update(max_testers=tester_count, max_parallel_browser_contexts=tester_count)
     payload = {
         "target_url": target_url,

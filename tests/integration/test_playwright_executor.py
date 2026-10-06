@@ -58,6 +58,34 @@ def test_url_scope_compares_origin_and_path_boundaries(
     assert not checker.url_allowed("http://app.test.evil/projects")
 
 
+@pytest.mark.asyncio
+async def test_assertion_waits_for_async_result_and_retains_real_failures(phase2_store: StateStore) -> None:
+    action_executor = executor(phase2_store)
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body='<p id="message"></p>'))
+        await page.goto("http://app.test/")
+        await page.evaluate("setTimeout(() => document.querySelector('#message').textContent='invalid login', 150)")
+        delayed = await action_executor.execute(page=page, browser_session_id="browser-1", action=WebAction(action_type=ActionType.ASSERTION, target="#message", expected="invalid login", behavior_id="EB-auth", timeout_ms=1000))
+        assert delayed.success
+        assert delayed.data["actual"] == "invalid login"
+        negative = await action_executor.execute(page=page, browser_session_id="browser-1", action=WebAction(action_type=ActionType.ASSERTION, target="#message", expected="deleted task", assertion="not_contains", timeout_ms=100))
+        assert negative.success
+        false_negative = await action_executor.execute(page=page, browser_session_id="browser-1", action=WebAction(action_type=ActionType.ASSERTION, target="#message", expected="invalid login", assertion="not_contains", timeout_ms=100))
+        assert false_negative.error_type == "ASSERTION_FAILURE"
+        unsupported = await action_executor.execute(page=page, browser_session_id="browser-1", action=WebAction(action_type=ActionType.ASSERTION, target="#message", expected="invalid login", assertion="invented_operator", timeout_ms=100))
+        assert unsupported.error_type == "INVALID_ACTION"
+        failed = await action_executor.execute(page=page, browser_session_id="browser-1", action=WebAction(action_type=ActionType.ASSERTION, target="#message", expected="logged in", timeout_ms=100))
+        assert not failed.success
+        assert failed.error_type == "ASSERTION_FAILURE"
+        assert failed.data["actual"] == "invalid login"
+        absent = await action_executor.execute(page=page, browser_session_id="browser-1", action=WebAction(action_type=ActionType.ASSERTION, target="#absent", expected="required row", timeout_ms=100))
+        assert absent.error_type == "ASSERTION_FAILURE"
+        assert absent.data["actual"] == ""
+        await browser.close()
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_executor_supports_known_actions_and_persists_event_history(

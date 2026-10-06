@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -95,6 +96,8 @@ class WebTestingRuntime:
             return await self._execute_known_action(action)
 
     async def _execute_known_action(self, action: WebAction) -> ActionResult:
+        if action.action_type in {ActionType.ASSERTION, ActionType.URL_CHECK} and action.goal_check and action.behavior_id is None and len(self.expected_behavior_ids) == 1:
+            action = replace(action, behavior_id=self.expected_behavior_ids[0])
         if self.browser_session_id is None:
             raise RuntimeError("browser session has not started")
         session = self.browser_manager.get_session(self.browser_session_id)
@@ -436,6 +439,7 @@ class WebTestingRuntime:
         )
 
     async def stop_task(self, reason: str) -> None:
+        self.task_finished = True
         self.store.append_event(
             event_id=f"event-{uuid4().hex}",
             run_id=self.run_id,

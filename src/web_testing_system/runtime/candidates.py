@@ -67,7 +67,7 @@ class PageStateReader:
 
     async def _read_elements(self, page: Page) -> list[InteractiveElement]:
         locator = page.locator(INTERACTIVE_SELECTOR)
-        count = min(await locator.count(), self.max_elements)
+        count = await locator.count()
         elements: list[InteractiveElement] = []
         for index in range(count):
             item = locator.nth(index)
@@ -95,6 +95,8 @@ class PageStateReader:
                     enabled=enabled,
                 )
             )
+            if len(elements) >= self.max_elements:
+                break
         return elements
 
 

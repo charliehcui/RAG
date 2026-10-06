@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 from agent_framework import (
@@ -66,13 +66,13 @@ class TesterAgentTools:
 
     async def execute_known_action(
         self,
-        action_type: str,
+        action_type: ActionType,
         target: str | None = None,
         value: str | None = None,
         value_reference: str | None = None,
         url: str | None = None,
         expected: str | None = None,
-        assertion: str = "contains",
+        assertion: Literal["contains", "not_contains", "equals", "visible", "hidden", "count"] = "contains",
         key: str | None = None,
         wait_ms: int = 0,
         resource_id: str | None = None,
@@ -90,6 +90,8 @@ class TesterAgentTools:
                 "error_type": "INVALID_ACTION",
                 "error": f"unsupported action: {action_type}",
             }
+        if target is None and (parsed_action == ActionType.DOM_INSPECTION or parsed_action == ActionType.ASSERTION and assertion in {"contains", "not_contains", "equals"}):
+            target = "body"
         if behavior_id is not None and behavior_id not in self.runtime.expected_behavior_ids:
             return {"success": False, "error_type": "UNKNOWN_EXPECTED_BEHAVIOR"}
         if value_reference is not None:
@@ -221,10 +223,10 @@ class TesterAgentTools:
     async def record_finding(
         self,
         title: str,
-        status: str,
+        status: Literal["OBSERVATION", "ANOMALY", "SUSPECTED_ISSUE"],
         expected_result: str,
         actual_result: str,
-        severity_hint: str | None = None,
+        severity_hint: Literal["LOW", "MEDIUM", "HIGH", "CRITICAL"] | None = None,
         affected_page: str | None = None,
         action: str | None = None,
         error_text: str | None = None,
@@ -327,8 +329,15 @@ class TesterAgentTools:
         return {"status": result.status, "reason": result.reason, "action": result.action, "before_state_id": result.before_state.state_id if result.before_state else None, "after_state_id": result.after_state.state_id if result.after_state else None, "evidence_ids": list(result.evidence_ids)}
 
     async def finish_task(self) -> dict[str, object]:
-        """Finish execution; Python derives PASS/FAIL/UNKNOWN from recorded goal assertions."""
-        return await self.runtime.record_task_outcome(finish=True)
+        """Finish only after explicit assertions cover assigned behaviors and failed checks have Findings; otherwise return missing checks and keep the Task open."""
+        outcome = await self.runtime.record_task_outcome()
+        assertions = outcome["assertions"]
+        assert isinstance(assertions, list)
+        covered = {item.get("behavior_id") for item in assertions}
+        missing = sorted(set(self.runtime.expected_behavior_ids) - covered)
+        if missing or outcome["reason"] == "APPLICATION_DEVIATION_UNREPORTED":
+            return {**outcome, "finished": False, "missing_behavior_ids": missing, "instruction": "Record actual assertion checks with the supplied behavior_id values. DOM Inspection alone is not a goal check. Record Findings for failed application assertions, then call finish_task."}
+        return {**await self.runtime.record_task_outcome(finish=True), "finished": True}
 
     def read_test_data(self, reference: str) -> dict[str, Any]:
         """Read an allowed non-secret input. Secret references can only be filled by Runtime."""
@@ -339,9 +348,12 @@ class TesterAgentTools:
 
 
 class FinishTaskMiddleware(FunctionMiddleware):
+    def __init__(self, runtime: WebTestingRuntime) -> None:
+        self.runtime = runtime
+
     async def process(self, context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
         await call_next()
-        if context.function.name == "finish_task":
+        if self.runtime.task_finished:
             raise MiddlewareTermination("Task outcome recorded; no final Done model round is needed.", result=context.result)
 
 
@@ -350,14 +362,18 @@ def create_tester_agent(
 ) -> Agent:
     instructions = (
         "You are the only Tester Agent type. Work only on the assigned Task, scope, identity, namespace, and step budget. "
-        "Use execute_known_action for known actions. Use explore_unknown_path instead of inventing unknown actions. "
+        "Work in short subgoals. For known targets, issue the ordered execute_known_action calls for one safe subgoal in the same response; the Runtime serializes page actions. "
+        "For example, fill the known username and password fields, submit, then inspect in one response. Stop the batch before an unknown target or action. "
+        "Inspect at page or subgoal boundaries, not after each successful fill or click. Use explore_unknown_path instead of inventing unknown actions. "
         "Check shared Coverage before starting a path and collaborate only through structured Shared State facts. "
         "Never change global scope, bypass permissions, create another Agent, or declare a confirmed bug. "
         "Record uncertain behavior only with record_observation. Request replan when the local path cannot continue."
-        " Mark actual goal assertions with goal_check=true or their supplied behavior_id. "
-        "Use value_reference for configured inputs and account secret references. Never invent unavailable inputs. "
+        " Mark every actual goal assertion with goal_check=true and its assigned behavior_id; keep setup checks untagged. Use a locator visibility check for inputs/buttons, not a body-text check for placeholders or aria-labels. "
+        "For INPUT and SELECT from configured data, always pass value_reference, including blank values and usernames; do not copy the returned value into the value argument. Account secrets use their supplied references directly. "
+        "Read nonsecret assertion values once and reuse them. Never invent unavailable inputs. "
         "Use repeat_submit with the same-origin request URL and submit-button target to check one pending repeated form operation. "
-        "When recording a deviation, identify its assigned behavior_id and related_task_ids for another Task's necessary setup or membership change. Read shared facts for those task references. "
+        "Immediately record a failed goal check before another browser action, with the same behavior_id. Include related_task_ids for another Task's necessary setup or membership change. Read shared facts for those task references. "
+        "If the same completion error or wait repeats without progress, report no progress and request replan rather than repeating identical Findings or waiting indefinitely. "
         "Call finish_task after testing the goal; Python determines success. Do not produce a final Done summary."
     )
     if tools.action_policy == "TESTER_LLM_EVERY_STEP":
@@ -369,7 +385,7 @@ def create_tester_agent(
         name="tester-agent",
         description="Executes one assigned web testing task through the controlled runtime.",
         instructions=instructions,
-        middleware=[TraceChatMiddleware(), TraceToolMiddleware(), FinishTaskMiddleware()],
+        middleware=[TraceChatMiddleware(), TraceToolMiddleware(), FinishTaskMiddleware(tools.runtime)],
         tools=[
             tools.execute_known_action,
             tools.explore_unknown_path,

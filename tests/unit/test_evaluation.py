@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, replace
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -21,10 +22,71 @@ from web_testing_system.evaluation import (
     build_execution_route,
     summarize_evaluation_runs,
 )
+from web_testing_system.evaluation.matching import match_ground_truth
+from web_testing_system.evaluation.scenarios import load_run_config
+from web_testing_system.state import StateStore
 
 
 def make_controls() -> EvaluationControls:
     return EvaluationControls(demo_version="demo-1", seeded_bugs=("B1",), model_configuration=(("main", "fake-gemini"), ("tester", "fake-groq")), token_budget=100, time_budget_seconds=30, accounts=("admin", "member"), initial_data=(("project", "project-1"),), test_scope=("Project", "Task"))
+
+
+def test_formal_scenario_uses_model_headroom_and_keeps_runaway_limits() -> None:
+    path = Path(__file__).resolve().parents[2] / "evaluation/scenarios.json"
+    original = path.read_bytes()
+    config = load_run_config(path, scenario_id="D03", target_url="http://127.0.0.1:8000")
+    assert config.budget.max_input_tokens == 10_000_000
+    assert config.budget.max_output_tokens == 1_000_000
+    assert config.budget.max_llm_calls == 500
+    assert config.budget.max_runtime_seconds == 900
+    assert config.budget.max_browser_steps_per_task == 90
+    assert config.budget.max_replans_per_task == 2
+    assert config.budget.max_testers == config.budget.max_parallel_browser_contexts == 3
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("mode", ["canonical", "annotated", "wrong_page", "unverified_page", "wrong_role", "wrong_behavior", "wrong_identity", "wrong_entity", "owner_delete", "denied_delete", "project_remains", "unstable"])
+def test_matching_annotated_page_requires_verified_path_and_exact_bug_evidence(tmp_path: Path, mode: str) -> None:
+    bug = {"bug_id": "B2", "behavior_id": "EB-PROJECT-DELETE-AUTH", "applicable_role": "member", "identity_reference": "member", "page": "/", "project_reference": "project-1"}
+    answers = tmp_path / "answers.json"
+    answers.write_text(json.dumps({"demo_version": "demo-1", "scenarios": [{"scenario_id": "D05", "bugs": [bug], "enabled_bug_ids": ["B2"]}]}), encoding="utf-8")
+    steps = [{"action_type": "navigation", "url": "http://app.test/", "identity_reference": "member"}, {"action_type": "assertion", "behavior_id": "EB-PROJECT-DELETE-AUTH", "identity_reference": "member"}]
+    results = [{"success": True, "data": {"url": "http://app.test/"}}, {"success": False, "error_type": "ASSERTION_FAILURE", "data": {"matched": False}}]
+    finding = {"finding_id": "finding", "task_id": "task", "status": "CONFIRMED_BUG", "verification_result": "FAIL", "reproduction_success_count": 2, "verification_details": {"attempt_id": "verify"}, "reproduction_steps": steps, "affected_role": "member", "affected_page": "/ (Projects list) and /api/projects"}
+    records = [{"identity_reference": "member", "url": "http://app.test/api/login", "response_data": {"user": {"username": "member"}}, "captured_at": "1"}, {"identity_reference": "member", "url": "http://app.test/api/projects", "method": "GET", "response_data": {"projects": [{"project_id": "project-1", "owner": "admin"}]}, "captured_at": "2"}, {"identity_reference": "member", "url": "http://app.test/api/projects/project-1", "method": "DELETE", "status": 200, "captured_at": "3"}, {"identity_reference": "member", "url": "http://app.test/api/projects", "method": "GET", "response_data": {"projects": []}, "captured_at": "4"}]
+    if mode == "canonical":
+        finding["affected_page"] = "/"
+    elif mode == "wrong_page":
+        finding["affected_page"] = "/wrong (Projects list) and /"
+    elif mode == "unverified_page":
+        results[0]["data"]["url"] = "http://app.test/wrong"
+    elif mode == "wrong_role":
+        finding["affected_role"] = "admin"
+    elif mode == "wrong_behavior":
+        steps[-1]["behavior_id"] = "EB-PROJECT-SAVE"
+    elif mode == "wrong_identity":
+        steps[-1]["identity_reference"] = "admin"
+    elif mode == "wrong_entity":
+        records[2]["url"] = "http://app.test/api/projects/project-2"
+    elif mode == "owner_delete":
+        records[1]["response_data"]["projects"][0]["owner"] = "member"
+    elif mode == "denied_delete":
+        records[2]["status"] = 403
+    elif mode == "project_remains":
+        records[-1]["response_data"]["projects"] = [{"project_id": "project-1"}]
+    elif mode == "unstable":
+        finding["reproduction_success_count"] = 1
+    (tmp_path / "network.json").write_text(json.dumps(records), encoding="utf-8")
+    store = MagicMock(spec=StateStore)
+    store.get_run.return_value = {"status": "COMPLETED", "finished_at": "finished", "application_version": "demo-1"}
+    store.list_recent_findings.return_value = [finding]
+    store.list_events.return_value = [{"result": {"finding_id": "finding", "attempt_id": "verify", "action_results": results, "assertion_positions": [1]}, "evidence_references": ["network"]}]
+    store.list_evidence.return_value = [{"evidence_type": "NETWORK", "evidence_id": "network", "relative_file_path": "network.json", "browser_session_id": "fresh-session"}]
+    _, matching = match_ground_truth(answers, scenario_id="D05", run_id="run", store=store, artifacts_root=tmp_path, test_data={})
+    expected = "B2" if mode in {"canonical", "annotated"} else "unmatched"
+    assert matching["finding_to_bug"] == {"finding": expected}
+    assert matching["tp"] == int(expected == "B2")
+    assert matching["fp"] == int(expected == "unmatched")
 
 
 class FakeExecutor:

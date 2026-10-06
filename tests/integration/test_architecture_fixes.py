@@ -76,6 +76,72 @@ class FakeJev:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+@pytest.mark.parametrize("conflicting_role", [False, True])
+async def test_identity_reference_selects_its_role_without_a_duplicate_role_field(tmp_path: Path, conflicting_role: bool) -> None:
+    class WorkerClient(FunctionInvocationLayer, BaseChatClient):
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            return ChatResponse(messages=[Message(role="assistant", contents=["Done."])])
+
+    references = {"admin-ref": "admin", "member-ref": "member", "other-member-ref": "member"}
+    plans = []
+    for reference in references:
+        planned = task(reference, requirements={"identity_reference": reference})
+        planned["data_requirements"].pop("role")
+        plans.append(planned)
+    if conflicting_role:
+        plans[1]["data_requirements"]["role"] = "admin"
+    with DemoAppServer() as app:
+        run_config = config(app.base_url).model_copy(update={"account_references": [AccountReference(identity_reference=reference, role=role, permissions=["read"]) for reference, role in references.items()], "budget": BudgetConfig(max_testers=3, max_parallel_browser_contexts=3)})
+        if conflicting_role:
+            with pytest.raises(ValueError, match="unambiguous identity_reference for role admin"):
+                await run(run_config, settings(tmp_path), main_client=PlanningClient(plans), tester_client_factory=WorkerClient, jev_selector=JevSelector(FakeJev()))
+            return
+        report_path = await run(run_config, settings(tmp_path), main_client=PlanningClient(plans), tester_client_factory=WorkerClient, jev_selector=JevSelector(FakeJev()))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    run_id = report["test_summary"]["run_id"]
+    testers = StateStore(tmp_path / "state.db").list_testers(run_id)
+    assert report["test_summary"]["run_status"] == "COMPLETED"
+    assert len(testers) == 3
+    for tester in testers:
+        reference = tester["identity_id"].removeprefix(f"{run_id}-")
+        assert tester["role"] == references[reference]
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_ordered_known_actions_share_one_model_turn_and_preserve_goal_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARCH_BATCH_PASSWORD", "demo-admin")
+
+    class WorkerClient(FunctionInvocationLayer, ChatMiddlewareLayer, BaseChatClient):
+        calls = 0
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            type(self).calls += 1
+            assert type(self).calls <= 2
+            if type(self).calls == 2:
+                return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("finish", "finish_task", arguments={})])])
+            actions = [
+                {"action_type": "input", "target": "#login-username", "value_reference": "admin_username"},
+                {"action_type": "input", "target": "#login-password", "value_reference": "env:ARCH_BATCH_PASSWORD"},
+                {"action_type": "click", "target": "#login-form button[type='submit']"},
+                {"action_type": "assertion", "target": "#app-section", "assertion": "visible", "goal_check": True, "behavior_id": "EB-session"},
+            ]
+            contents = [Content.from_function_call(f"action-{index}", "execute_known_action", arguments=arguments) for index, arguments in enumerate(actions)]
+            return ChatResponse(messages=[Message(role="assistant", contents=contents)])
+
+    with DemoAppServer() as app:
+        run_config = config(app.base_url).model_copy(update={"account_references": [AccountReference(identity_reference="admin-id", role="admin", permissions=["login", "read"], secret_reference="env:ARCH_BATCH_PASSWORD")], "test_data": {"admin_username": "admin"}, "expected_behaviors": [ExpectedBehavior(behavior_id="EB-session", description="Valid login displays the app", applies_to="Project/admin/session", source=ExpectedBehaviorSource.USER_PROVIDED)]})
+        report_path = await run(run_config, settings(tmp_path), main_client=PlanningClient([task("batch-login", requirements={"identity_reference": "admin-id", "expected_behavior_ids": ["EB-session"]})]), tester_client_factory=WorkerClient, jev_selector=JevSelector(FakeJev()))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    history = StateStore(tmp_path / "state.db").list_action_history(run_id=report["test_summary"]["run_id"], task_id="batch-login")
+    assert [step["action"] for step in history[-4:]] == ["input", "input", "click", "assertion"]
+    assert all(step["success"] for step in history[-4:])
+    assert report["task_outcomes"][0]["success_status"] == "PASS"
+    assert WorkerClient.calls == 2
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_formal_scheduler_refills_before_slow_sibling_finishes(tmp_path: Path) -> None:
     third_started = asyncio.Event()
     order: list[str] = []

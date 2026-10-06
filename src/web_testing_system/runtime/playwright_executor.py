@@ -9,11 +9,12 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from playwright.async_api import Locator, Page, Route
+from playwright.async_api import Locator, Page, Route, expect
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from web_testing_system.evidence import EvidenceBuffer
 from web_testing_system.observability import trace_result, trace_span
+from web_testing_system.runtime.candidates import PageStateReader
 from web_testing_system.runtime.models import ActionResult, ActionType, WebAction
 from web_testing_system.runtime.permissions import PermissionChecker
 from web_testing_system.state import StateStore
@@ -114,7 +115,7 @@ class PlaywrightExecutor:
             return page.locator(action.target)
         locator = page.locator(action.target).first
         count = await locator.count()
-        if action.action_type == ActionType.ASSERTION and action.assertion in {"visible", "hidden", "count"}:
+        if action.action_type == ActionType.ASSERTION:
             return locator
         if count == 0:
             raise ValueError("target does not exist")
@@ -200,18 +201,23 @@ class PlaywrightExecutor:
             return {"url": page.url}
         if action.action_type == ActionType.DOM_INSPECTION:
             assert locator is not None
+            page_state = await PageStateReader().read(page)
             return {
                 "url": page.url,
                 "text": await locator.inner_text(timeout=action.timeout_ms),
+                "interactive_elements": page_state.selection_summary()["interactive_elements"],
             }
         if action.action_type == ActionType.URL_CHECK:
             if action.expected is None:
                 raise ValueError("URL check requires an expected value")
-            matched = (
-                page.url == action.expected
-                if action.assertion == "equals"
-                else action.expected in page.url
-            )
+            if action.assertion not in {"contains", "not_contains", "equals"}:
+                raise ValueError("unsupported URL assertion")
+            if action.assertion == "equals":
+                matched = page.url == action.expected
+            elif action.assertion == "not_contains":
+                matched = action.expected not in page.url
+            else:
+                matched = action.expected in page.url
             return {"url": page.url, "matched": matched, "actual": page.url}
         if action.action_type == ActionType.ASSERTION:
             assert locator is not None
@@ -271,6 +277,25 @@ class PlaywrightExecutor:
     async def _run_assertion(
         self, locator: Locator, action: WebAction
     ) -> dict[str, Any]:
+        if action.assertion not in {"contains", "not_contains", "equals", "visible", "hidden", "count"}:
+            raise ValueError("unsupported assertion operator")
+        if action.assertion not in {"visible", "hidden"} and action.expected is None:
+            raise ValueError("assertion requires an expected value")
+        try:
+            if action.assertion == "visible":
+                await expect(locator).to_be_visible(timeout=action.timeout_ms)
+            elif action.assertion == "hidden":
+                await expect(locator).to_be_hidden(timeout=action.timeout_ms)
+            elif action.assertion == "count":
+                await expect(locator).to_have_count(int(action.expected or "0"), timeout=action.timeout_ms)
+            elif action.assertion == "equals":
+                await expect(locator).to_have_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
+            elif action.assertion == "not_contains":
+                await expect(locator).not_to_contain_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
+            else:
+                await expect(locator).to_contain_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
+        except AssertionError:
+            pass
         if action.assertion == "visible":
             visible = await locator.is_visible()
             return {"matched": visible, "actual": visible}
@@ -284,12 +309,13 @@ class PlaywrightExecutor:
             return {"matched": actual_count == int(action.expected), "actual": actual_count}
         if action.expected is None:
             raise ValueError("text assertion requires an expected value")
-        actual = await locator.inner_text(timeout=action.timeout_ms)
-        matched = (
-            actual == action.expected
-            if action.assertion == "equals"
-            else action.expected in actual
-        )
+        actual = await locator.inner_text(timeout=action.timeout_ms) if await locator.count() else ""
+        if action.assertion == "equals":
+            matched = actual == action.expected
+        elif action.assertion == "not_contains":
+            matched = action.expected not in actual
+        else:
+            matched = action.expected in actual
         return {"matched": matched, "actual": actual}
 
     def _record_action(

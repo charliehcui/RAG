@@ -65,6 +65,7 @@ class FakeRuntime:
         self.replan_reasons: list[str] = []
         self.stop_reasons: list[str] = []
         self.known_calls = 0
+        self.task_finished = False
 
     async def request_replan(self, reason: str) -> dict[str, object]:
         self.replan_reasons.append(reason)
@@ -122,6 +123,19 @@ def budget(max_llm_calls: int = 2) -> BudgetGuard:
     )
 
 
+def test_known_action_schema_advertises_the_runtime_action_types() -> None:
+    tools = AgentTools(assignment=assignment(), runtime=FakeRuntime(), store=FakeStore())  # type: ignore[arg-type]
+    agent = create_tester_agent(client=FakeToolCallingClient(), assignment=assignment(), tools=tools)
+    tool = next(tool for tool in agent.default_options["tools"] if tool.name == "execute_known_action")
+    schema = tool.parameters()
+    reference = schema["properties"]["action_type"]["$ref"].rsplit("/", 1)[-1]
+    assert set(schema["$defs"][reference]["enum"]) == {action.value for action in ActionType}
+    assert "fill" not in schema["$defs"][reference]["enum"]
+    assert "dom_inspection" in schema["$defs"][reference]["enum"]
+    finding_tool = next(tool for tool in agent.default_options["tools"] if tool.name == "record_finding")
+    assert set(finding_tool.parameters()["properties"]["status"]["enum"]) == {"OBSERVATION", "ANOMALY", "SUSPECTED_ISSUE"}
+
+
 @pytest.mark.asyncio
 async def test_maf_fake_llm_invokes_only_the_exposed_replan_tool() -> None:
     fake_runtime = FakeRuntime()
@@ -171,3 +185,26 @@ async def test_known_action_bypasses_llm_and_llm_budget_stops_before_call() -> N
     assert stopped_result == "STOPPED: MAX_LLM_CALLS_REACHED"
     assert fake_runtime.stop_reasons == ["MAX_LLM_CALLS_REACHED"]
     assert client.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_stopped_browser_ends_tool_loop_without_another_model_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime = FakeRuntime()
+
+    async def stop_on_action(action: WebAction) -> ActionResult:
+        runtime.task_finished = True
+        return ActionResult(started_at="start", ended_at="end", latency_ms=1, success=False, error="TASK_STOPPED", error_type="BUDGET_STOP")
+
+    class StopClient(FakeToolCallingClient):
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.call_count += 1
+            assert self.call_count == 1, "A stopped Task must not make a final model round"
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("stop-call", "execute_known_action", arguments={"action_type": "wait", "wait_ms": 1})])])
+
+    monkeypatch.setattr(runtime, "execute_known_action", stop_on_action)
+    client = StopClient()
+    tools = AgentTools(assignment=assignment(), runtime=runtime, store=FakeStore())  # type: ignore[arg-type]
+    agent = create_tester_agent(client=client, assignment=assignment(), tools=tools)
+    await agent.run("Execute the assigned Task")
+    assert client.call_count == 1
+    assert runtime.task_finished

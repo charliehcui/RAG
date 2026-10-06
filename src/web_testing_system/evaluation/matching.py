@@ -56,6 +56,13 @@ def match_ground_truth(path: Path, *, scenario_id: str, run_id: str, store: Stat
             reasons[finding_id] = "verified assertion does not match the recorded path"
             continue
         step = steps[failed_index]
+        affected_page = str(finding["affected_page"] or "")
+        page, separator, annotation = affected_page.partition(" (")
+        if separator and ")" in annotation:
+            # 页面说明不属于路径；只接受独立验证实际成功导航过的同一路径。
+            page_path = urlsplit(page).path
+            if any(recorded.get("action_type") == "navigation" and result.get("success") is True and urlsplit(str(result.get("data", {}).get("url", ""))).path == page_path for recorded, result in zip(steps, results, strict=False)):
+                affected_page = page
         records: list[dict[str, Any]] = []
         for evidence in store.list_evidence(run_id=run_id, finding_id=finding_id):
             if evidence["evidence_type"] != "NETWORK" or str(evidence["evidence_id"]) not in attempt.get("evidence_ids", []):
@@ -72,7 +79,7 @@ def match_ground_truth(path: Path, *, scenario_id: str, run_id: str, store: Stat
         for bug in case["bugs"]:
             if step.get("behavior_id") != bug["behavior_id"] or finding["affected_role"] != bug["applicable_role"]:
                 continue
-            if urlsplit(str(finding["affected_page"] or "")).path != bug["page"]:
+            if urlsplit(affected_page).path != bug["page"]:
                 continue
             if step.get("identity_reference") != bug["identity_reference"]:
                 continue

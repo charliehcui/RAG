@@ -33,6 +33,10 @@ class OpenRouterChatClient(OpenAIChatCompletionClient):
 
     def _prepare_options(self, messages: Sequence[Message], options: Mapping[str, Any]) -> dict[str, Any]:
         prepared = super()._prepare_options(messages, options)
+        # 固定端点不接受 tool_choice=none；移除工具声明保持同样的禁用工具语义。
+        if prepared.get("tool_choice") == "none":
+            prepared.pop("tool_choice")
+            prepared.pop("tools", None)
         if "max_completion_tokens" in prepared:
             prepared["max_tokens"] = prepared.pop("max_completion_tokens")
         return prepared
@@ -126,6 +130,7 @@ def _create_chat_client(settings: Settings, *, model: str, provider: str, usage:
         usage.fixed_provider = provider
         middleware.append(usage)
     chat_client = OpenRouterChatClient(model=model, async_client=client, middleware=middleware)
+    chat_client.function_invocation_configuration["max_iterations"] = 500
     chat_client.additional_properties.update({"provider": "openrouter", "fixed_provider": provider})
     return chat_client
 

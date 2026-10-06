@@ -122,3 +122,16 @@ async def test_page_state_and_candidate_builder_filter_and_revalidate_actions(
             == "CANDIDATE_EXPIRED"
         )
         await browser.close()
+
+
+@pytest.mark.asyncio
+async def test_hidden_controls_do_not_hide_visible_candidates_beyond_the_limit() -> None:
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=True)
+        page = await browser.new_page()
+        await page.set_content('<div hidden>' + '<input placeholder="hidden">' * 35 + '</div><button id="edit">Edit task</button><button>Delete task</button>')
+        state = await PageStateReader(max_elements=1).read(page)
+        assert [element.label for element in state.interactive_elements] == ["Edit task"]
+        await page.locator(state.interactive_elements[0].target).click()
+        assert await page.locator(state.interactive_elements[0].target).get_attribute("id") == "edit"
+        await browser.close()

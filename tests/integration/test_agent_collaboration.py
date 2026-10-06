@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import tempfile
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -280,6 +281,56 @@ def create_store(path: Path, run_config: RunConfig) -> StateStore:
         remaining_budget=run_config.budget.model_dump(),
     )
     return store
+
+
+def test_main_tool_schema_only_advertises_configured_features(tmp_path: Path) -> None:
+    config = make_run_config()
+    config.focus_features = ["Task"]
+    store = create_store(tmp_path / "state.db", config)
+    tools = MainAgentTools(store=store, run_id="run-phase3", target_url=str(config.target_url), focus_features=config.focus_features, allowed_scope=config.allowed_scope, denied_operations=config.denied_operations, max_step_budget=config.budget.max_browser_steps_per_task)
+    agent = create_main_agent(client=ScriptedMainClient(), settings=Settings(_env_file=None), tools=tools)
+    for tool in agent.default_options["tools"]:
+        if tool.name in {"create_task", "redirect_task"}:
+            assert tool.parameters()["properties"]["feature"]["enum"] == ["Task"]
+    with pytest.raises(ValueError, match="feature is outside"):
+        tools.create_task(task_id="outside-auth", goal="Log in", feature="Auth", priority="P1", dependencies=[], step_budget=5, data_requirements={}, scope_targets=["/tasks"], required_operations=["read"])
+    assert store.list_tasks("run-phase3") == []
+
+
+@pytest.mark.asyncio
+async def test_parent_then_child_tool_calls_commit_in_declared_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = make_run_config()
+    store = create_store(tmp_path / "ordered.db", config)
+    original_create = store.create_task
+
+    def delayed_create(**arguments: Any) -> dict[str, Any]:
+        if arguments["task_id"] == "parent":
+            time.sleep(0.05)
+        return original_create(**arguments)
+
+    class OrderedClient(FunctionInvocationLayer, BaseChatClient):
+        def __init__(self) -> None:
+            self.calls = 0
+            super().__init__()
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.calls += 1
+            if self.calls == 1:
+                calls = []
+                for task_id, dependencies in (("parent", []), ("child", ["parent"])):
+                    arguments = {"task_id": task_id, "goal": "Check the project", "feature": "Project", "priority": "P1", "dependencies": dependencies, "step_budget": 6, "data_requirements": {}, "scope_targets": ["/projects"], "required_operations": ["read"]}
+                    calls.append(Content.from_function_call("call-" + task_id, "create_task", arguments=arguments))
+                return ChatResponse(messages=[Message(role="assistant", contents=calls)])
+            return ChatResponse(messages=[Message(role="assistant", contents=["Plan complete."])])
+
+    monkeypatch.setattr(store, "create_task", delayed_create)
+    tools = MainAgentTools(store=store, run_id="run-phase3", target_url=str(config.target_url), focus_features=config.focus_features, allowed_scope=config.allowed_scope, denied_operations=config.denied_operations, max_step_budget=config.budget.max_browser_steps_per_task)
+    client = OrderedClient()
+    agent = create_main_agent(client=client, settings=Settings(_env_file=None), tools=tools)
+    await agent.run("Create the ordered plan", session=agent.create_session())
+    assert {task["task_id"] for task in store.list_tasks("run-phase3")} == {"parent", "child"}
+    assert store.get_task("child")["dependencies"] == ["parent"]  # type: ignore[index]
+    assert client.calls == 2
 
 
 def create_tester_runner(

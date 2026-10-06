@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
-from agent_framework import Agent, AgentResponse, AgentSession, create_harness_agent
+from agent_framework import (
+    Agent,
+    AgentResponse,
+    AgentSession,
+    FunctionTool,
+    create_harness_agent,
+)
 
 from web_testing_system.config import RunConfig, Settings
 from web_testing_system.observability import (
@@ -59,6 +65,7 @@ class MainAgentTools:
         self.store = store
         self.run_id = run_id
         self.focus_features = {feature.casefold() for feature in focus_features}
+        self.feature_names = list(focus_features)
         self.allowed_urls = tuple(urljoin(target_url, value) for value in allowed_scope)
         self.denied_operations = {operation.casefold() for operation in denied_operations}
         self.max_step_budget = max_step_budget
@@ -403,6 +410,10 @@ def create_main_agent(
     *, client: Any, settings: Settings, tools: MainAgentTools
 ) -> Agent:
     """Create the Main Agent with SQLite Tasks as its only executable plan."""
+    create_task_tool = FunctionTool(name="create_task", description="Create one scoped test Task. Login/logout are setup within that Task, not separate Auth Tasks unless Auth is an allowed feature.", func=tools.create_task, _invoke_sync_on_event_loop=True)
+    create_task_tool.parameters()["properties"]["feature"]["enum"] = tools.feature_names
+    redirect_task_tool = FunctionTool(name="redirect_task", description="Redirect an open Task within the configured feature scope.", func=tools.redirect_task)
+    redirect_task_tool.parameters()["properties"]["feature"]["enum"] = tools.feature_names
     agent = create_harness_agent(
         client,
         name="main-agent",
@@ -416,9 +427,9 @@ def create_main_agent(
             "For the final review, synthesize only the supplied deterministic report facts. Never modify task outcomes, Finding states, evidence, metrics, or expected behavior."
         ),
         tools=[
-            tools.create_task,
+            create_task_tool,
             tools.read_coordination_snapshot,
-            tools.redirect_task,
+            redirect_task_tool,
             tools.change_task_priority,
             tools.pause_task,
             tools.stop_task,

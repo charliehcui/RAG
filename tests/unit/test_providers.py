@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from agent_framework import Agent
+from agent_framework import Agent, FunctionTool, Message
 from agent_framework.openai import OpenAIChatCompletionClient
 from openai import AsyncOpenAI
 
@@ -49,6 +49,19 @@ def test_missing_key_and_free_routing_variants_are_rejected() -> None:
     for model in ("openrouter/free", "openrouter/auto", "model:free", "model:floor", "~latest"):
         with pytest.raises(ValueError, match="fixed paid"):
             Settings(_env_file=None, main_agent_model=model)
+
+
+def test_disabled_tools_preserve_semantics_without_unsupported_tool_choice() -> None:
+    settings = Settings(_env_file=None, openrouter_api_key="fake-key")
+    client = create_main_chat_client(settings)
+    tool = FunctionTool(name="read_state", func=lambda: "state")
+    prepared = client._prepare_options([Message(role="user", contents=["Review the fixed facts"])], {"tools": [tool], "tool_choice": "none"})
+    assert "tools" not in prepared
+    assert "tool_choice" not in prepared
+    assert prepared["model"] == settings.main_agent_model
+    enabled = client._prepare_options([Message(role="user", contents=["Plan"])], {"tools": [tool], "tool_choice": "auto"})
+    assert enabled["tools"]
+    assert enabled["tool_choice"] == "auto"
 
 
 @pytest.mark.asyncio
@@ -111,3 +124,32 @@ async def test_openrouter_visual_action_maps_coordinates_and_pins_provider() -> 
     assert (result.input_tokens, result.output_tokens, result.cost) == (13, 2, 0.001)
     assert requests[0]["extra_body"]["provider"]["only"] == ["relace"]
     assert requests[0]["tool_choice"] == "auto"
+
+
+@pytest.mark.asyncio
+async def test_paid_client_can_complete_more_than_forty_normal_tool_rounds(monkeypatch: pytest.MonkeyPatch) -> None:
+    request_count = 0
+    tool_count = 0
+
+    def read_state() -> str:
+        nonlocal tool_count
+        tool_count += 1
+        return str(tool_count)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        request_count += 1
+        message: dict[str, object] = {"role": "assistant", "content": "completed"}
+        if request_count <= 45:
+            message = {"role": "assistant", "content": None, "tool_calls": [{"id": f"call-{request_count}", "type": "function", "function": {"name": "read_state", "arguments": "{}"}}]}
+        return httpx.Response(200, json={"id": f"response-{request_count}", "object": "chat.completion", "created": 1, "model": "z-ai/glm-5.3-flash", "choices": [{"index": 0, "message": message, "finish_reason": "tool_calls" if request_count <= 45 else "stop"}]})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    real_constructor = AsyncOpenAI
+    monkeypatch.setattr("web_testing_system.providers.AsyncOpenAI", lambda **kwargs: real_constructor(**kwargs, http_client=http_client))
+    client = create_tester_chat_client(Settings(_env_file=None, openrouter_api_key="fake-key"))
+    response = await Agent(client=client, tools=[read_state]).run("Complete the required sequence")
+    assert response.text == "completed"
+    assert tool_count == 45
+    assert request_count == 46
+    await http_client.aclose()

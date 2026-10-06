@@ -162,10 +162,19 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
         def create_tester(task: Mapping[str, Any]) -> TesterInstance:
             task_id = str(task["task_id"])
             requirements = dict(task["data_requirements"])
-            role = str(requirements.get("role", config.account_references[0].role))
             reference = requirements.get("identity_reference")
+            selected_account = None
+            role = requirements.get("role")
+            if reference is not None:
+                selected_account = account_by_reference.get(str(reference))
+                if role is None and selected_account is not None:
+                    role = selected_account.role
+            if role is None:
+                role = config.account_references[0].role
+            role = str(role)
             accounts = [account for account in config.account_references if account.role == role]
-            selected_account = account_by_reference.get(str(reference)) if reference is not None else accounts[0] if len(accounts) == 1 else None
+            if reference is None and len(accounts) == 1:
+                selected_account = accounts[0]
             if selected_account is None or selected_account.role != role:
                 raise ValueError(f"Task {task_id} needs an unambiguous identity_reference for role {role}")
             feature = str(requirements.get("feature", ""))

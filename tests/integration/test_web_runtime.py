@@ -115,6 +115,35 @@ async def install_page(page: Page) -> None:
     await page.route("http://app.test/**", handle)
 
 
+@pytest.mark.asyncio
+async def test_default_inspection_and_finish_contract_require_actual_goal_checks(phase2_store: StateStore) -> None:
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    runtime.expected_behavior_ids = ("EB-check",)
+    session_id = await runtime.start_session()
+    session = runtime.browser_manager.get_session(session_id)
+    await install_page(session.page)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="admin", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/projects"))
+        inspection = await tools.execute_known_action(ActionType.DOM_INSPECTION)
+        assert inspection["success"]
+        assert inspection["data"]["interactive_elements"]
+        rejected_finish = await tools.finish_task()
+        assert rejected_finish["missing_behavior_ids"] == ["EB-check"]
+        assert rejected_finish["finished"] is False
+        assert runtime.task_finished is False
+        check = await tools.execute_known_action(ActionType.ASSERTION, target="#status", expected="ready", goal_check=True)
+        assert check["success"]
+        assert phase2_store.list_action_history(run_id="run-1", task_id="task-1")[-1]["action_data"]["behavior_id"] == "EB-check"
+        completed = await tools.finish_task()
+        assert completed["finished"] is True
+        assert completed["success_status"] == "PASS"
+        assert runtime.task_finished is True
+    finally:
+        await runtime.browser_manager.close()
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_llm_decision_route_uses_candidate_id_and_runtime_revalidation(phase2_store: StateStore) -> None:
@@ -158,6 +187,10 @@ async def test_layered_decision_jev_fallback_checkpoint_and_crash_recovery(
         success = await runtime.explore_unknown_path("Open Project")
 
         assert navigation.success is True
+        inspection = await runtime.execute_known_action(WebAction(action_type=ActionType.DOM_INSPECTION, target="body"))
+        control = next(item for item in inspection.data["interactive_elements"] if item["label"] == "Open Project")
+        assert await session.page.locator(control["target"]).count() == 1
+        assert "value" not in control
         assert success.source == "JEV_TO_PLAYWRIGHT"
         assert (
             success.action_result is not None and success.action_result.success is True
@@ -219,6 +252,9 @@ async def test_layered_decision_jev_fallback_checkpoint_and_crash_recovery(
             "STOP_CONDITION",
         } <= event_types
         assert runtime.browser_session_id is None
+        assert runtime.task_finished
+        after_stop = await runtime.execute_known_action(WebAction(action_type=ActionType.CLICK, target="#open"))
+        assert after_stop.error == "TASK_ALREADY_FINISHED"
         assert "storage_state" not in str(phase2_store.list_events("run-1")).lower()
     finally:
         await runtime.browser_manager.close()
