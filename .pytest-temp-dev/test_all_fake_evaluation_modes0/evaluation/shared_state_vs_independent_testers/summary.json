@@ -1,0 +1,38 @@
+{
+  "shared-state": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-shared_state_vs_independent_testers-shared-state-1-3a6e0e48",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  "independent-testers": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-shared_state_vs_independent_testers-independent-testers-1-de4757f9",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "scenario_id": "D08",
+  "finding_to_bug": {
+    "finding-1be8577399cb490aa9bbfe276b1565ae": "B5"
+  },
+  "match_reasons": {
+    "finding-1be8577399cb490aa9bbfe276b1565ae": "behavior, role, identity, path/entity and ordered verification evidence match"
+  },
+  "tp": 1,
+  "fp": 0,
+  "missed_bug_ids": [],
+  "detected_bug_count": 1,
+  "expected_bug_count": 1,
+  "task_outcomes": {
+    "repeat-create": "APPLICATION_BUG_DETECTED"
+  }
+}

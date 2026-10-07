@@ -1,0 +1,1488 @@
+{
+  "test_summary": {
+    "application": "http://127.0.0.1:64631/",
+    "version": "phase5-demo-1.0",
+    "run_id": "readiness-D13",
+    "run_status": "COMPLETED",
+    "test_goal": "Audit project input validation, pending submission protection, and a separate task workflow in parallel.\nRequired checks: [{\"goal_id\": \"name-validation\", \"description\": \"As admin check empty and whitespace-only Create Project inputs. Correlate each response with its affected empty-name project rows; concurrent valid creations by other workflows must not be counted as validation failures.\", \"feature\": \"Project\", \"identity_reference\": \"admin\", \"expected_behavior_ids\": [\"EB-PROJECT-NAME\"], \"test_data_keys\": [\"admin_username\", \"empty_project_name\", \"whitespace_project_name\"], \"independent_group\": \"validation\"}, {\"goal_id\": \"pending-submission\", \"description\": \"As member2 test two submissions of submission_project_name while the first remains pending, establish that this is one operation, and inspect settled rows after refresh.\", \"feature\": \"Project\", \"identity_reference\": \"member2\", \"expected_behavior_ids\": [\"EB-PROJECT-SUBMIT\"], \"test_data_keys\": [\"member2_username\", \"submission_project_name\"], \"independent_group\": \"submission\"}, {\"goal_id\": \"task-workflow\", \"description\": \"As admin create task_project_name and check task creation, title editing, persistence, deletion and refresh within that separate project.\", \"feature\": \"Task\", \"identity_reference\": \"admin\", \"expected_behavior_ids\": [\"EB-TASK-LIFECYCLE\", \"EB-TASK-DELETE\"], \"test_data_keys\": [\"admin_username\", \"task_project_name\", \"task_title\", \"edited_task_title\"], \"independent_group\": \"task\"}]\nCompletion requirements: [\"For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.\", \"Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.\", \"Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.\", \"For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.\", \"The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.\"]",
+    "run_time_seconds": 23.894255,
+    "tester_count": 3,
+    "configured_tester_capacity": 3,
+    "total_tasks": 3,
+    "completed_tasks": 3,
+    "successful_tasks": 3,
+    "unsuccessful_tasks": 0,
+    "unknown_success_tasks": 0,
+    "peak_concurrent_testers": 3,
+    "failed_tasks": 0,
+    "stopped_tasks": 0
+  },
+  "coverage_summary": {
+    "features_tested": [
+      "Open Tasks"
+    ],
+    "pages_visited": [
+      "http://127.0.0.1:64631/"
+    ],
+    "roles_tested": [
+      "admin",
+      "member"
+    ],
+    "flows_tested": 1,
+    "negative_cases": 8,
+    "permission_cases": 0,
+    "repeated_paths": 0,
+    "untested_registered_targets": [
+      "Project",
+      "Task"
+    ]
+  },
+  "confirmed_bugs": [
+    {
+      "finding_id": "finding-0554aa9a71b8415f9501434f08cc8d42",
+      "title": "Observed EB-PROJECT-NAME deviation",
+      "severity_hint": null,
+      "expected": "Create and Edit both trim project names and reject an empty or whitespace-only name with project name is required. Rejection leaves existing project names and row counts unchanged.",
+      "actual": "{\"matched\": false, \"actual\": \"\"}",
+      "stable_reproduction_steps": [
+        {
+          "action_type": "navigation",
+          "target": null,
+          "value_reference": null,
+          "url": "http://127.0.0.1:64631/",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-username",
+          "value_reference": "admin_username",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-password",
+          "value_reference": "env:DEMO_ADMIN_PASSWORD",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "click",
+          "target": "#login-form button[type='submit']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "wait",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 50,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "input",
+          "target": "#project-name",
+          "value_reference": "empty_project_name",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "click",
+          "target": "#project-submit",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "wait",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 50,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#message",
+          "value_reference": null,
+          "url": null,
+          "expected": "project name is required",
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": false,
+          "expected_error_type": "ASSERTION_FAILURE",
+          "identity_reference": "admin",
+          "behavior_id": "EB-PROJECT-NAME",
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        }
+      ],
+      "reproduction_rate": 1.0,
+      "verification": "FAIL",
+      "evidence": [
+        {
+          "evidence_id": "evidence-0ce65d6e761c4a5fb40817572f717fd4",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/observed.png"
+        },
+        {
+          "evidence_id": "evidence-f459c3fa321a4ab3bcd8b56a2e1fb23a",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/dom.html"
+        },
+        {
+          "evidence_id": "evidence-f7e44959c21b4a8cab7f9fa56cccf763",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/network.json"
+        },
+        {
+          "evidence_id": "evidence-7e47a4bdf891412594aca36eb057fef7",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/console.json"
+        },
+        {
+          "evidence_id": "evidence-4cb27ac798454f9fb82ddfae730563c5",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-f8cc23c14ccd4da38625de48667333da",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-97a77e8a7a694e038265e844bfe31bfe",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-6e5054953cd44f818270e6a70c60f6b3",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-8d0e6086d6c84d65ad7183485ee313fb",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-f2497ddaef0f4c9d948d3afc22c72936",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-0686a095534b4c2a8440b9fbd1e83529",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-d263c4e1b02b45df84c2b0fb31373e32",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-1242854b548545f1bacae62fd817ff33",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-2b308c5d8e064471886c4586811cac2e",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-f33d9f4b9e8b47a5bfe3c0dc83cd06c2",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/verification-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-4706e49d393f4537a15a47ba02a1c01a",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-307cf4da19d74d6daef973d69cd1a2e5",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-71375f4c082744d188040fee21070e4c",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-30e7ca1a46e94eb4b6861ae4f694b887",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/playwright-trace.zip"
+        }
+      ],
+      "role": "admin",
+      "page": "/"
+    },
+    {
+      "finding_id": "finding-b69ee6addb36414db26890e555e4ee3a",
+      "title": "Observed EB-PROJECT-SUBMIT deviation",
+      "severity_hint": null,
+      "expected": "Repeated submission of the same in-flight project-create operation creates one project. Two intentional completed submissions are separate operations and may create two projects.",
+      "actual": "{\"matched\": false, \"actual\": 2}",
+      "stable_reproduction_steps": [
+        {
+          "action_type": "navigation",
+          "target": null,
+          "value_reference": null,
+          "url": "http://127.0.0.1:64631/",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-username",
+          "value_reference": "member2_username",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-password",
+          "value_reference": "env:DEMO_MEMBER2_PASSWORD",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "click",
+          "target": "#login-form button[type='submit']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "wait",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 50,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "input",
+          "target": "#project-name",
+          "value_reference": "submission_project_name",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "repeat_submit",
+          "target": "#project-submit",
+          "value_reference": null,
+          "url": "http://127.0.0.1:64631/api/projects",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "wait",
+          "target": "#projects-table .project-name:text-is('d13-pending-creation')",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#projects-table .project-name:text-is('d13-pending-creation')",
+          "value_reference": null,
+          "url": null,
+          "expected": "1",
+          "assertion": "count",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": false,
+          "expected_error_type": "ASSERTION_FAILURE",
+          "identity_reference": "member2",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        }
+      ],
+      "reproduction_rate": 1.0,
+      "verification": "FAIL",
+      "evidence": [
+        {
+          "evidence_id": "evidence-e956c707a0be40948a96f0eab450af11",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/observed.png"
+        },
+        {
+          "evidence_id": "evidence-4e727da517564eb7a34a7d145600e57b",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/dom.html"
+        },
+        {
+          "evidence_id": "evidence-4f6aa4db28204dbbb0984c2a79cc3f50",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/network.json"
+        },
+        {
+          "evidence_id": "evidence-18a5b416eb7043c5b1f58693adb1635f",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/console.json"
+        },
+        {
+          "evidence_id": "evidence-a2a7c7d440aa4918979c5c65dc899813",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-617730da1f5b47f49f42154b6dec4e21",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-31c8fd9f1d454616938db9dfcf0146d5",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-3734832be5bc4ce392db8abc4b52612f",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-53e929ef85e846c4aa1e8f0d2c40e88d",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-96f6b226d894439fbae988d069befd83",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-ca28b85a0d70420b990a3c3bd250d3e2",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-4529f01dc53249a58a78120966adbc8d",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-8531da5c7c5b48218edf0bf134d63513",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-b101b60e4b804f7d953a1b2222144c62",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-21c20aa0f18d400a86de9abf944855df",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/verification-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-42d2a718a5f14a3faa9a0e560179438b",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-d72530fd45ee41699fc25043c009a740",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-56efc97242c048b2a931f88bc7c03925",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-af260df425d046a8acd36994c2d0f256",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/playwright-trace.zip"
+        }
+      ],
+      "role": "member",
+      "page": "/"
+    }
+  ],
+  "needs_confirmation": [],
+  "environment_issues": [],
+  "findings": [
+    {
+      "finding_id": "finding-0554aa9a71b8415f9501434f08cc8d42",
+      "status": "CONFIRMED_BUG",
+      "title": "Observed EB-PROJECT-NAME deviation",
+      "expected": "Create and Edit both trim project names and reject an empty or whitespace-only name with project name is required. Rejection leaves existing project names and row counts unchanged.",
+      "actual": "{\"matched\": false, \"actual\": \"\"}",
+      "screening_reason": "DETERMINISTIC_REPLAY_STARTED",
+      "verification": "FAIL",
+      "reproduction_steps": [
+        {
+          "action_type": "navigation",
+          "target": null,
+          "value_reference": null,
+          "url": "http://127.0.0.1:64631/",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-username",
+          "value_reference": "admin_username",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-password",
+          "value_reference": "env:DEMO_ADMIN_PASSWORD",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "click",
+          "target": "#login-form button[type='submit']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "wait",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 50,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "input",
+          "target": "#project-name",
+          "value_reference": "empty_project_name",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "click",
+          "target": "#project-submit",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "wait",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 50,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "admin",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#message",
+          "value_reference": null,
+          "url": null,
+          "expected": "project name is required",
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": false,
+          "expected_error_type": "ASSERTION_FAILURE",
+          "identity_reference": "admin",
+          "behavior_id": "EB-PROJECT-NAME",
+          "goal_check": false,
+          "session_reference": "browser-d2e9b1000d574378a6c6d06945f91f78"
+        }
+      ],
+      "reproduction_rate": 1.0,
+      "evidence": [
+        {
+          "evidence_id": "evidence-0ce65d6e761c4a5fb40817572f717fd4",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/observed.png"
+        },
+        {
+          "evidence_id": "evidence-f459c3fa321a4ab3bcd8b56a2e1fb23a",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/dom.html"
+        },
+        {
+          "evidence_id": "evidence-f7e44959c21b4a8cab7f9fa56cccf763",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/network.json"
+        },
+        {
+          "evidence_id": "evidence-7e47a4bdf891412594aca36eb057fef7",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/observation-65f2b0e718004b3b872886deaf5d4265/console.json"
+        },
+        {
+          "evidence_id": "evidence-4cb27ac798454f9fb82ddfae730563c5",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-f8cc23c14ccd4da38625de48667333da",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-97a77e8a7a694e038265e844bfe31bfe",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-6e5054953cd44f818270e6a70c60f6b3",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-8d0e6086d6c84d65ad7183485ee313fb",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-94ac84279c0b4041889688dc4765ecef-admin-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-f2497ddaef0f4c9d948d3afc22c72936",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-0686a095534b4c2a8440b9fbd1e83529",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-d263c4e1b02b45df84c2b0fb31373e32",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-1242854b548545f1bacae62fd817ff33",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-2b308c5d8e064471886c4586811cac2e",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/reproduction-3437759c783940c4a312a6e63b7fbe43-admin-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-f33d9f4b9e8b47a5bfe3c0dc83cd06c2",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/verification-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-4706e49d393f4537a15a47ba02a1c01a",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-307cf4da19d74d6daef973d69cd1a2e5",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-71375f4c082744d188040fee21070e4c",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-30e7ca1a46e94eb4b6861ae4f694b887",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-0554aa9a71b8415f9501434f08cc8d42/verification-2f2744187215405da40e874f43dd919d-admin-0/playwright-trace.zip"
+        }
+      ]
+    },
+    {
+      "finding_id": "finding-b69ee6addb36414db26890e555e4ee3a",
+      "status": "CONFIRMED_BUG",
+      "title": "Observed EB-PROJECT-SUBMIT deviation",
+      "expected": "Repeated submission of the same in-flight project-create operation creates one project. Two intentional completed submissions are separate operations and may create two projects.",
+      "actual": "{\"matched\": false, \"actual\": 2}",
+      "screening_reason": "DETERMINISTIC_REPLAY_STARTED",
+      "verification": "FAIL",
+      "reproduction_steps": [
+        {
+          "action_type": "navigation",
+          "target": null,
+          "value_reference": null,
+          "url": "http://127.0.0.1:64631/",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-username",
+          "value_reference": "member2_username",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-password",
+          "value_reference": "env:DEMO_MEMBER2_PASSWORD",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "click",
+          "target": "#login-form button[type='submit']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "wait",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 50,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "input",
+          "target": "#project-name",
+          "value_reference": "submission_project_name",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "repeat_submit",
+          "target": "#project-submit",
+          "value_reference": null,
+          "url": "http://127.0.0.1:64631/api/projects",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "wait",
+          "target": "#projects-table .project-name:text-is('d13-pending-creation')",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member2",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#projects-table .project-name:text-is('d13-pending-creation')",
+          "value_reference": null,
+          "url": null,
+          "expected": "1",
+          "assertion": "count",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": false,
+          "expected_error_type": "ASSERTION_FAILURE",
+          "identity_reference": "member2",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "goal_check": false,
+          "session_reference": "browser-9377d351c0a141329ceeab5ffc14862d"
+        }
+      ],
+      "reproduction_rate": 1.0,
+      "evidence": [
+        {
+          "evidence_id": "evidence-e956c707a0be40948a96f0eab450af11",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/observed.png"
+        },
+        {
+          "evidence_id": "evidence-4e727da517564eb7a34a7d145600e57b",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/dom.html"
+        },
+        {
+          "evidence_id": "evidence-4f6aa4db28204dbbb0984c2a79cc3f50",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/network.json"
+        },
+        {
+          "evidence_id": "evidence-18a5b416eb7043c5b1f58693adb1635f",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/observation-a3c64e9be765498daa907005d2649390/console.json"
+        },
+        {
+          "evidence_id": "evidence-a2a7c7d440aa4918979c5c65dc899813",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-617730da1f5b47f49f42154b6dec4e21",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-31c8fd9f1d454616938db9dfcf0146d5",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-3734832be5bc4ce392db8abc4b52612f",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-53e929ef85e846c4aa1e8f0d2c40e88d",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-3034d25220ed416796bdf42a8f849072-member2-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-96f6b226d894439fbae988d069befd83",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-ca28b85a0d70420b990a3c3bd250d3e2",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-4529f01dc53249a58a78120966adbc8d",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-8531da5c7c5b48218edf0bf134d63513",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-b101b60e4b804f7d953a1b2222144c62",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/reproduction-88236a9374b3407a83ee40b97212f556-member2-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-21c20aa0f18d400a86de9abf944855df",
+          "type": "SCREENSHOT",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/verification-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-42d2a718a5f14a3faa9a0e560179438b",
+          "type": "DOM",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-d72530fd45ee41699fc25043c009a740",
+          "type": "NETWORK",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-56efc97242c048b2a931f88bc7c03925",
+          "type": "CONSOLE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-af260df425d046a8acd36994c2d0f256",
+          "type": "TRACE",
+          "relative_path": "readiness-D13/evidence/finding-b69ee6addb36414db26890e555e4ee3a/verification-4865175263d24e6b9b1ab1c20b5d0894-member2-0/playwright-trace.zip"
+        }
+      ]
+    }
+  ],
+  "task_outcomes": [
+    {
+      "task_id": "name-validation",
+      "goal": "As admin check empty and whitespace-only Create Project inputs. Correlate each response with its affected empty-name project rows; concurrent valid creations by other workflows must not be counted as validation failures.",
+      "feature": "Project",
+      "execution_status": "COMPLETED",
+      "success_status": "PASS",
+      "reason": "APPLICATION_BUG_DETECTED",
+      "application_behavior": "FAIL",
+      "assertions": [
+        {
+          "event_id": "event-d3200634052541c98f5b28a63e5632a1",
+          "behavior_id": "EB-PROJECT-NAME",
+          "success": false,
+          "error_type": "ASSERTION_FAILURE"
+        }
+      ]
+    },
+    {
+      "task_id": "pending-submission",
+      "goal": "As member2 test two submissions of submission_project_name while the first remains pending, establish that this is one operation, and inspect settled rows after refresh.",
+      "feature": "Project",
+      "execution_status": "COMPLETED",
+      "success_status": "PASS",
+      "reason": "APPLICATION_BUG_DETECTED",
+      "application_behavior": "FAIL",
+      "assertions": [
+        {
+          "event_id": "event-2bb2902c59bc4f40b21ae4fea539eea4",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "success": false,
+          "error_type": "ASSERTION_FAILURE"
+        }
+      ]
+    },
+    {
+      "task_id": "task-workflow",
+      "goal": "As admin create task_project_name and check task creation, title editing, persistence, deletion and refresh within that separate project.",
+      "feature": "Task",
+      "execution_status": "COMPLETED",
+      "success_status": "PASS",
+      "reason": "GOAL_ASSERTIONS_PASSED",
+      "application_behavior": "PASS",
+      "assertions": [
+        {
+          "event_id": "event-e59663655b174a2aa72f5b6ef9e8ae78",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "success": true,
+          "error_type": null
+        },
+        {
+          "event_id": "event-8d8cea4356064feda5978e870b0ddd3a",
+          "behavior_id": "EB-TASK-DELETE",
+          "success": true,
+          "error_type": null
+        }
+      ]
+    }
+  ],
+  "model_configuration": {
+    "transport": "openrouter",
+    "main_model": "deepseek/deepseek-v4-flash",
+    "main_provider": "streamlake/fp8",
+    "tester_model": "z-ai/glm-5.3-flash",
+    "tester_provider": "relace",
+    "jev_model": "typesafe/jev-1.13",
+    "automatic_fallback": false
+  },
+  "cost_and_performance": {
+    "llm_calls": 4,
+    "jev_calls": 1,
+    "computer_use_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "runtime_seconds": 34.47104959958233,
+    "estimated_cost": 0.0,
+    "cost_status": "INCOMPLETE",
+    "llm_request_count": 4,
+    "llm_success_count": 1,
+    "llm_failure_count": 0,
+    "llm_input_tokens": 0,
+    "llm_output_tokens": 0,
+    "llm_models": [],
+    "llm_by_phase": {
+      "main_planning": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_replan": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "tester": {
+        "requests": 3,
+        "latency_ms": 11964.10320000723,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "RECORDED"
+      },
+      "visual": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_final_summary": {
+        "requests": 1,
+        "latency_ms": 0.5740999476984143,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "INCOMPLETE"
+      }
+    },
+    "total_run_time_seconds": 23.894255,
+    "average_browser_action_ms": 206.478,
+    "average_jev_decision_ms": 0.314,
+    "average_llm_ms": 2991.169,
+    "average_computer_use_ms": "N/A",
+    "cost_per_confirmed_bug": "N/A"
+  },
+  "main_final_summary": {
+    "status": "COMPLETED",
+    "error_type": null,
+    "latency_ms": 0.5740999476984143,
+    "relative_path": "summary.md",
+    "facts_stage": "before_main_final_summary"
+  },
+  "full_evaluation": "Full Evaluation: NOT RUN",
+  "testing_phase_cost_and_performance": {
+    "llm_calls": 3,
+    "jev_calls": 1,
+    "computer_use_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "runtime_seconds": 34.47047549963463,
+    "estimated_cost": 0.0,
+    "cost_status": "RECORDED",
+    "llm_request_count": 3,
+    "llm_success_count": 0,
+    "llm_failure_count": 0,
+    "llm_input_tokens": 0,
+    "llm_output_tokens": 0,
+    "llm_models": [],
+    "llm_by_phase": {
+      "main_planning": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_replan": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "tester": {
+        "requests": 3,
+        "latency_ms": 11964.10320000723,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "RECORDED"
+      },
+      "visual": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_final_summary": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      }
+    },
+    "total_run_time_seconds": 23.793548,
+    "average_browser_action_ms": 206.478,
+    "average_jev_decision_ms": 0.314,
+    "average_llm_ms": 3988.034,
+    "average_computer_use_ms": "N/A",
+    "cost_per_confirmed_bug": 0.0
+  }
+}

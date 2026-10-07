@@ -1,0 +1,17 @@
+{
+  "scenario_id": "D01",
+  "finding_to_bug": {
+    "finding-050b6a129b524e88934d513378bfbf4d": "unmatched"
+  },
+  "match_reasons": {
+    "finding-050b6a129b524e88934d513378bfbf4d": "missing, contradictory or ambiguous behavior evidence"
+  },
+  "tp": 0,
+  "fp": 1,
+  "missed_bug_ids": [],
+  "detected_bug_count": 0,
+  "expected_bug_count": 0,
+  "task_outcomes": {
+    "task-workflow": "AGENT_EXECUTION_FAILURE"
+  }
+}

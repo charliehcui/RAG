@@ -1,0 +1,38 @@
+{
+  "playwright-first": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-playwright_first_vs_model_every_step-playwright-first-1-89e64421",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  "model-every-step": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-playwright_first_vs_model_every_step-model-every-step-1-24ecb35a",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  }
+}

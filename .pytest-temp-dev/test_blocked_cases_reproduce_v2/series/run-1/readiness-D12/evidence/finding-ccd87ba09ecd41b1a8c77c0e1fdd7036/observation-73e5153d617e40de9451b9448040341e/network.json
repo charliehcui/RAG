@@ -1,0 +1,20 @@
+[
+  {
+    "url": "http://127.0.0.1:51690/api/projects/project-1",
+    "method": "DELETE",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:00.597790+00:00",
+    "identity_reference": "member",
+    "response_data": {}
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:00.598116+00:00",
+    "identity_reference": "member",
+    "response_data": {
+      "projects": []
+    }
+  }
+]

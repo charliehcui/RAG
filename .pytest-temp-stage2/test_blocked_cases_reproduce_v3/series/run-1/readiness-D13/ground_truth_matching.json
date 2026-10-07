@@ -1,0 +1,21 @@
+{
+  "scenario_id": "D13",
+  "finding_to_bug": {
+    "finding-d8184e4e3cd2428492954663ac039956": "B5",
+    "finding-bb29ba2a7053444dbfeccbe090f63351": "B3"
+  },
+  "match_reasons": {
+    "finding-d8184e4e3cd2428492954663ac039956": "behavior, role, identity, path/entity and ordered verification evidence match",
+    "finding-bb29ba2a7053444dbfeccbe090f63351": "behavior, role, identity, path/entity and ordered verification evidence match"
+  },
+  "tp": 2,
+  "fp": 0,
+  "missed_bug_ids": [],
+  "detected_bug_count": 2,
+  "expected_bug_count": 2,
+  "task_outcomes": {
+    "name-validation": "APPLICATION_BUG_DETECTED",
+    "pending-submission": "APPLICATION_BUG_DETECTED",
+    "task-workflow": "NORMAL_APPLICATION_BEHAVIOR"
+  }
+}

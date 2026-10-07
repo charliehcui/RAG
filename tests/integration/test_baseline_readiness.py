@@ -172,6 +172,8 @@ class ScriptedWorker(FunctionInvocationLayer, ChatMiddlewareLayer, BaseChatClien
                 arguments = {**arguments, "expected_result": self.behaviors[arguments["behavior_id"]], "actual_result": json.dumps(last.get("data", {}))}
             self.calls += 1
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call(f"readiness-{self.calls}", name, arguments=arguments)])])
+        if last.get("finished") is False:
+            return ChatResponse(messages=[Message(role="assistant", contents=["The scripted Task is incomplete; no further checks are available."])])
         raise AssertionError("finish_task did not terminate the worker")
 
 

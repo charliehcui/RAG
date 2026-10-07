@@ -1,0 +1,1 @@
+{"demo_version": "demo-1", "scenarios": [{"scenario_id": "D05", "bugs": [{"bug_id": "B2", "behavior_id": "EB-PROJECT-DELETE-AUTH", "applicable_role": "member", "identity_reference": "member", "page": "/", "project_reference": "project-1"}], "enabled_bug_ids": ["B2"]}]}

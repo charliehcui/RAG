@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+from typing import Any
 from urllib.parse import urljoin
 
 from playwright.async_api import Page
@@ -36,7 +38,7 @@ class PageStateReader:
         self.max_elements = max_elements
         self.max_dom_characters = max_dom_characters
 
-    async def read(self, page: Page) -> PageState:
+    async def read(self, page: Page, *, include_content: bool = False) -> PageState:
         body = page.locator("body")
         visible_dom = (await body.inner_text())[: self.max_dom_characters]
         try:
@@ -45,12 +47,16 @@ class PageStateReader:
             accessibility = ""
         load_state = await page.evaluate("() => document.readyState")
         elements = await self._read_elements(page)
+        if include_content:
+            for row in await self.read_rows(page):
+                for cell in row["cells"]:
+                    elements.append(InteractiveElement(kind="cell", label=cell["header"], target=cell["target"], context=row["text"], context_target=row["target"]))
         fingerprint_input = "|".join(
             [
                 page.url,
                 load_state,
                 *(
-                    f"{item.kind}:{item.label}:{item.target}:{item.href}"
+                    f"{item.kind}:{item.label}:{item.target}:{item.href}:{item.context}"
                     for item in elements
                 ),
             ]
@@ -73,6 +79,8 @@ class PageStateReader:
             item = locator.nth(index)
             if not await item.is_visible():
                 continue
+            if not await item.evaluate("element => { const modal = document.querySelector('dialog:modal, [role=dialog][aria-modal=true]'); return !modal || modal.contains(element); }"):
+                continue
             kind = await item.evaluate("element => element.tagName.toLowerCase()")
             role = await item.get_attribute("role")
             href = await item.get_attribute("href")
@@ -85,6 +93,30 @@ class PageStateReader:
             ).strip()
             enabled = await item.is_enabled()
             target = f"{INTERACTIVE_SELECTOR} >> nth={index}"
+            element_id = await item.get_attribute("id")
+            if element_id:
+                target = f"[id={json.dumps(element_id)}]"
+            else:
+                aria_label = await item.get_attribute("aria-label")
+                if aria_label:
+                    proposed = f"{kind}[aria-label={json.dumps(aria_label)}]"
+                    if await page.locator(proposed).count() == 1:
+                        target = proposed
+            context = await item.evaluate("element => (element.closest('tr, dialog, form')?.innerText || '').slice(0, 300)")
+            context_target = await item.evaluate("""element => {
+                const parent = element.closest('tr, dialog, form');
+                if (!parent) return null;
+                if (parent.id) return '[id=' + JSON.stringify(parent.id) + ']';
+                const attribute = Array.from(parent.attributes).find(item => item.name.startsWith('data-'));
+                if (attribute) return parent.tagName.toLowerCase() + '[' + attribute.name + '=' + JSON.stringify(attribute.value) + ']';
+                return null;
+            }""")
+            if kind in {"button", "a"} and label:
+                proposed = f"{kind}:text-is({json.dumps(label)})"
+                if context_target:
+                    proposed = f"{context_target} >> {proposed}"
+                if await page.locator(proposed).count() == 1:
+                    target = proposed
             elements.append(
                 InteractiveElement(
                     kind=kind,
@@ -93,11 +125,26 @@ class PageStateReader:
                     role=role,
                     href=href,
                     enabled=enabled,
+                    context=context,
+                    context_target=context_target,
                 )
             )
             if len(elements) >= self.max_elements:
                 break
         return elements
+
+    async def read_rows(self, page: Page) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = await page.locator("tr").evaluate_all("""elements => elements.flatMap((row, index) => {
+            if (!row.getClientRects().length) return [];
+            const table = row.closest('table');
+            const headers = table?.querySelector('thead tr')?.children || [];
+            const attribute = Array.from(row.attributes).find(item => item.name.startsWith('data-'));
+            let target = 'tr >> nth=' + index;
+            if (attribute) target = 'tr[' + attribute.name + '=' + JSON.stringify(attribute.value) + ']';
+            if (attribute && table?.id) target = '[id=' + JSON.stringify(table.id) + '] ' + target;
+            return [{target, container_target: table?.id ? '[id=' + JSON.stringify(table.id) + ']' : null, text: row.innerText.slice(0, 500), cells: Array.from(row.children).map((cell, position) => ({target: target + ' >> :scope > :nth-child(' + (position + 1) + ')', text: cell.innerText.slice(0, 500), header: headers[position]?.innerText || ''}))}];
+        }).slice(0, 12)""")
+        return rows
 
 
 class CandidateBuilder:
@@ -120,6 +167,8 @@ class CandidateBuilder:
         explored_targets = explored_targets or set()
         ranked: list[tuple[int, ActionCandidate]] = []
         for element in page_state.interactive_elements:
+            if element.kind == "cell":
+                continue
             if not element.enabled:
                 continue
             action_type = ActionType.CLICK
@@ -180,6 +229,11 @@ class CandidateBuilder:
                 resource_id=action.resource_id,
                 requires_resource=action.requires_resource,
                 confirmed=action.confirmed,
+                value_reference=action.value_reference,
+                expected=action.expected,
+                assertion=action.assertion,
+                behavior_id=action.behavior_id,
+                goal_check=action.goal_check,
             )
             label_words = {
                 word.lower() for word in business_action.label.split() if len(word) > 2
@@ -230,6 +284,11 @@ class CandidateBuilder:
             action_type=action_type,
             target=candidate.target,
             value=candidate.value,
+            value_reference=candidate.value_reference,
+            expected=candidate.expected,
+            assertion=candidate.assertion,
+            behavior_id=candidate.behavior_id,
+            goal_check=candidate.goal_check,
             url=candidate.url,
             resource_id=candidate.resource_id,
             requires_resource=candidate.requires_resource,

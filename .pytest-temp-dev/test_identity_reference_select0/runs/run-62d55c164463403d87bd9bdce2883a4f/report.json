@@ -1,0 +1,216 @@
+{
+  "test_summary": {
+    "application": "http://127.0.0.1:50507/",
+    "version": "UNKNOWN",
+    "run_id": "run-62d55c164463403d87bd9bdce2883a4f",
+    "run_status": "COMPLETED",
+    "test_goal": "Test browser workflows",
+    "run_time_seconds": 1.292099,
+    "tester_count": 3,
+    "configured_tester_capacity": 3,
+    "total_tasks": 3,
+    "completed_tasks": 3,
+    "successful_tasks": 0,
+    "unsuccessful_tasks": 0,
+    "unknown_success_tasks": 3,
+    "peak_concurrent_testers": 3,
+    "failed_tasks": 0,
+    "stopped_tasks": 0
+  },
+  "coverage_summary": {
+    "features_tested": [],
+    "pages_visited": [],
+    "roles_tested": [
+      "admin",
+      "member"
+    ],
+    "flows_tested": 0,
+    "negative_cases": 0,
+    "permission_cases": 0,
+    "repeated_paths": 0,
+    "untested_registered_targets": [
+      "Project"
+    ]
+  },
+  "confirmed_bugs": [],
+  "needs_confirmation": [],
+  "environment_issues": [],
+  "findings": [],
+  "task_outcomes": [
+    {
+      "task_id": "admin-ref",
+      "goal": "Test Project",
+      "feature": "Project",
+      "execution_status": "COMPLETED",
+      "success_status": "UNKNOWN",
+      "reason": "GOAL_ASSERTION_MISSING",
+      "application_behavior": "UNKNOWN",
+      "assertions": []
+    },
+    {
+      "task_id": "member-ref",
+      "goal": "Test Project",
+      "feature": "Project",
+      "execution_status": "COMPLETED",
+      "success_status": "UNKNOWN",
+      "reason": "GOAL_ASSERTION_MISSING",
+      "application_behavior": "UNKNOWN",
+      "assertions": []
+    },
+    {
+      "task_id": "other-member-ref",
+      "goal": "Test Project",
+      "feature": "Project",
+      "execution_status": "COMPLETED",
+      "success_status": "UNKNOWN",
+      "reason": "GOAL_ASSERTION_MISSING",
+      "application_behavior": "UNKNOWN",
+      "assertions": []
+    }
+  ],
+  "model_configuration": {
+    "transport": "openrouter",
+    "main_model": "deepseek/deepseek-v4-flash",
+    "main_provider": "streamlake/fp8",
+    "tester_model": "z-ai/glm-5.3-flash",
+    "tester_provider": "relace",
+    "jev_model": "typesafe/jev-1.13",
+    "automatic_fallback": false
+  },
+  "cost_and_performance": {
+    "llm_calls": 4,
+    "jev_calls": 0,
+    "computer_use_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "runtime_seconds": 0.46420209982898086,
+    "estimated_cost": 0.0,
+    "cost_status": "INCOMPLETE",
+    "llm_request_count": 4,
+    "llm_success_count": 1,
+    "llm_failure_count": 0,
+    "llm_input_tokens": 0,
+    "llm_output_tokens": 0,
+    "llm_models": [],
+    "llm_by_phase": {
+      "main_planning": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_replan": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "tester": {
+        "requests": 3,
+        "latency_ms": 23.08289986103773,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "RECORDED"
+      },
+      "visual": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_final_summary": {
+        "requests": 1,
+        "latency_ms": 0.4648999311029911,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "INCOMPLETE"
+      }
+    },
+    "total_run_time_seconds": 1.292099,
+    "average_browser_action_ms": 146.885,
+    "average_jev_decision_ms": "N/A",
+    "average_llm_ms": 5.887,
+    "average_computer_use_ms": "N/A",
+    "cost_per_confirmed_bug": "N/A"
+  },
+  "main_final_summary": {
+    "status": "COMPLETED",
+    "error_type": null,
+    "latency_ms": 0.4648999311029911,
+    "relative_path": "summary.md",
+    "facts_stage": "before_main_final_summary"
+  },
+  "full_evaluation": "Full Evaluation: NOT RUN",
+  "testing_phase_cost_and_performance": {
+    "llm_calls": 3,
+    "jev_calls": 0,
+    "computer_use_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "runtime_seconds": 0.46373719989787787,
+    "estimated_cost": 0.0,
+    "cost_status": "RECORDED",
+    "llm_request_count": 3,
+    "llm_success_count": 0,
+    "llm_failure_count": 0,
+    "llm_input_tokens": 0,
+    "llm_output_tokens": 0,
+    "llm_models": [],
+    "llm_by_phase": {
+      "main_planning": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_replan": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "tester": {
+        "requests": 3,
+        "latency_ms": 23.08289986103773,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "RECORDED"
+      },
+      "visual": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_final_summary": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      }
+    },
+    "total_run_time_seconds": 1.19291,
+    "average_browser_action_ms": 146.885,
+    "average_jev_decision_ms": "N/A",
+    "average_llm_ms": 7.694,
+    "average_computer_use_ms": "N/A",
+    "cost_per_confirmed_bug": "N/A"
+  }
+}

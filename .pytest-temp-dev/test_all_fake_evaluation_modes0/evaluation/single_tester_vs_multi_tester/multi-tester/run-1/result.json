@@ -1,0 +1,64 @@
+{
+  "config": {
+    "variant_id": "multi-tester",
+    "tester_count": 3,
+    "decision_policy": "JEV",
+    "shared_state": true,
+    "auto_reproduction": true,
+    "action_policy": "PLAYWRIGHT_FIRST",
+    "computer_use_fallback": true,
+    "controls": {
+      "demo_version": "demo-1",
+      "seeded_bugs": [
+        "B1"
+      ],
+      "model_configuration": [
+        [
+          "main",
+          "fake-gemini"
+        ],
+        [
+          "tester",
+          "fake-groq"
+        ]
+      ],
+      "token_budget": 100,
+      "time_budget_seconds": 30,
+      "accounts": [
+        "admin",
+        "member"
+      ],
+      "initial_data": [
+        [
+          "project",
+          "project-1"
+        ]
+      ],
+      "test_scope": [
+        "Project",
+        "Task"
+      ]
+    }
+  },
+  "route": {
+    "tester_count": 3,
+    "candidate_selection": "JEV",
+    "coordination": "SHARED_STATE",
+    "finding_after_anomaly": "REPRODUCTION",
+    "known_action": "PLAYWRIGHT",
+    "visual_fallback": "COMPUTER_USE",
+    "full_evaluation": false
+  },
+  "result": {
+    "mode": "single_tester_vs_multi_tester",
+    "variant_id": "multi-tester",
+    "run_number": 1,
+    "run_id": "evaluation-single_tester_vs_multi_tester-multi-tester-1-64cf0dea",
+    "status": "COMPLETED",
+    "metrics": {
+      "score": 1.0
+    },
+    "evidence_directory": "single_tester_vs_multi_tester\\multi-tester\\run-1\\evaluation-single_tester_vs_multi_tester-multi-tester-1-64cf0dea\\evidence",
+    "error": null
+  }
+}

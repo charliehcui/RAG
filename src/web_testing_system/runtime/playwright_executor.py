@@ -136,6 +136,10 @@ class PlaywrightExecutor:
             and not await locator.is_enabled()
         ):
             raise ValueError("target is disabled")
+        if action.action_type in {ActionType.CLICK, ActionType.INPUT, ActionType.SELECT, ActionType.REPEAT_SUBMIT, ActionType.DRAG_AND_DROP}:
+            active = await locator.evaluate("element => { const modal = document.querySelector('dialog:modal, [role=dialog][aria-modal=true]'); return !modal || modal.contains(element); }")
+            if not active:
+                raise ValueError("target is outside the active modal")
         return locator
 
     async def _execute_action(
@@ -206,6 +210,7 @@ class PlaywrightExecutor:
                 "url": page.url,
                 "text": await locator.inner_text(timeout=action.timeout_ms),
                 "interactive_elements": page_state.selection_summary()["interactive_elements"],
+                "rows": await PageStateReader().read_rows(page),
             }
         if action.action_type == ActionType.URL_CHECK:
             if action.expected is None:

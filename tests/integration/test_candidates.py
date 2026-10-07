@@ -134,4 +134,9 @@ async def test_hidden_controls_do_not_hide_visible_candidates_beyond_the_limit()
         assert [element.label for element in state.interactive_elements] == ["Edit task"]
         await page.locator(state.interactive_elements[0].target).click()
         assert await page.locator(state.interactive_elements[0].target).get_attribute("id") == "edit"
+        await page.set_content('<table id="items"><tr data-key="one"><th>Key</th><td>Value</td></tr></table>')
+        rows = await PageStateReader().read_rows(page)
+        assert [cell["text"] for cell in rows[0]["cells"]] == ["Key", "Value"]
+        for cell in rows[0]["cells"]:
+            assert await page.locator(cell["target"]).inner_text() == cell["text"]
         await browser.close()

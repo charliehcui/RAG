@@ -1,0 +1,149 @@
+[
+  {
+    "url": "http://127.0.0.1:49674/",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:32:25.023428+00:00",
+    "identity_reference": "admin"
+  },
+  {
+    "url": "http://127.0.0.1:49674/version",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:32:25.165915+00:00",
+    "identity_reference": "admin"
+  },
+  {
+    "url": "http://127.0.0.1:49674/api/session",
+    "method": "GET",
+    "status": 401,
+    "captured_at": "2026-10-07T01:32:25.166059+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "error": "login required"
+    }
+  },
+  {
+    "url": "http://127.0.0.1:49674/api/login",
+    "method": "POST",
+    "status": 200,
+    "captured_at": "2026-10-07T01:32:25.869187+00:00",
+    "identity_reference": "admin",
+    "request_data": {
+      "username": "admin"
+    },
+    "response_data": {
+      "user": {
+        "username": "admin",
+        "role": "admin",
+        "display_name": "Demo Admin"
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:49674/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:32:25.870556+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-1",
+          "name": "Seed Project",
+          "owner": "admin",
+          "members": [
+            "member"
+          ]
+        },
+        {
+          "project_id": "project-2",
+          "name": "Admin Private Project",
+          "owner": "admin",
+          "members": []
+        }
+      ]
+    }
+  },
+  {
+    "url": "http://127.0.0.1:49674/api/projects",
+    "method": "POST",
+    "status": 201,
+    "captured_at": "2026-10-07T01:32:26.530748+00:00",
+    "identity_reference": "admin",
+    "request_data": {
+      "name": "d15-admin-pending",
+      "submission_id": "cf8fab1d-ce07-454d-a025-4ceec45c051e"
+    },
+    "response_data": {
+      "project": {
+        "project_id": "project-5",
+        "name": "d15-admin-pending",
+        "owner": "admin",
+        "members": []
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:49674/api/projects",
+    "method": "POST",
+    "status": 201,
+    "captured_at": "2026-10-07T01:32:26.532837+00:00",
+    "identity_reference": "admin",
+    "request_data": {
+      "name": "d15-admin-pending",
+      "submission_id": "cf8fab1d-ce07-454d-a025-4ceec45c051e"
+    },
+    "response_data": {
+      "project": {
+        "project_id": "project-4",
+        "name": "d15-admin-pending",
+        "owner": "admin",
+        "members": []
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:49674/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:32:26.598646+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-1",
+          "name": "Seed Project",
+          "owner": "admin",
+          "members": [
+            "member"
+          ]
+        },
+        {
+          "project_id": "project-2",
+          "name": "Admin Private Project",
+          "owner": "admin",
+          "members": []
+        },
+        {
+          "project_id": "project-3",
+          "name": "d15-owned-team",
+          "owner": "member2",
+          "members": []
+        },
+        {
+          "project_id": "project-4",
+          "name": "d15-admin-pending",
+          "owner": "admin",
+          "members": []
+        },
+        {
+          "project_id": "project-5",
+          "name": "d15-admin-pending",
+          "owner": "admin",
+          "members": []
+        }
+      ]
+    }
+  }
+]

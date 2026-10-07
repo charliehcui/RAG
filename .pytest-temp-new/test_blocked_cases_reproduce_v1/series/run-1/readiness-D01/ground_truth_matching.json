@@ -1,0 +1,13 @@
+{
+  "scenario_id": "D01",
+  "finding_to_bug": {},
+  "match_reasons": {},
+  "tp": 0,
+  "fp": 0,
+  "missed_bug_ids": [],
+  "detected_bug_count": 0,
+  "expected_bug_count": 0,
+  "task_outcomes": {
+    "task-workflow": "AGENT_EXECUTION_FAILURE"
+  }
+}

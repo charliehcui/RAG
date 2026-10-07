@@ -36,6 +36,8 @@ class InteractiveElement:
     role: str | None = None
     href: str | None = None
     enabled: bool = True
+    context: str = ""
+    context_target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,8 @@ class PageState:
                     "label": element.label,
                     "target": element.target,
                     "role": element.role,
+                    "context": element.context,
+                    "context_target": element.context_target,
                 }
                 for element in self.interactive_elements
             ],
@@ -77,6 +81,11 @@ class ActionCandidate:
     resource_id: str | None = None
     requires_resource: bool = False
     confirmed: bool = False
+    value_reference: str | None = None
+    expected: str | None = None
+    assertion: str = "contains"
+    behavior_id: str | None = None
+    goal_check: bool = False
 
 
 @dataclass(frozen=True)

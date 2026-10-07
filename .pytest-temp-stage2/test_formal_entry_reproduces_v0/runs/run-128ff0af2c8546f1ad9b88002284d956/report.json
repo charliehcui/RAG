@@ -1,0 +1,987 @@
+{
+  "test_summary": {
+    "application": "http://127.0.0.1:60504/",
+    "version": "UNKNOWN",
+    "run_id": "run-128ff0af2c8546f1ad9b88002284d956",
+    "run_status": "COMPLETED",
+    "test_goal": "Test browser workflows",
+    "run_time_seconds": 14.490072,
+    "tester_count": 1,
+    "configured_tester_capacity": 2,
+    "total_tasks": 1,
+    "completed_tasks": 1,
+    "successful_tasks": 1,
+    "unsuccessful_tasks": 0,
+    "unknown_success_tasks": 0,
+    "peak_concurrent_testers": 1,
+    "failed_tasks": 0,
+    "stopped_tasks": 0
+  },
+  "coverage_summary": {
+    "features_tested": [
+      "Open Tasks"
+    ],
+    "pages_visited": [
+      "http://127.0.0.1:60504/"
+    ],
+    "roles_tested": [
+      "member"
+    ],
+    "flows_tested": 1,
+    "negative_cases": 4,
+    "permission_cases": 0,
+    "repeated_paths": 0,
+    "untested_registered_targets": [
+      "Task"
+    ]
+  },
+  "confirmed_bugs": [
+    {
+      "finding_id": "finding-ae212f0f026a4a3083db719f0ed7a96f",
+      "title": "Deleted Task reappears",
+      "severity_hint": null,
+      "expected": "Deleted Task stays absent after refresh",
+      "actual": "Deleted Task is visible after refresh",
+      "stable_reproduction_steps": [
+        {
+          "action_type": "navigation",
+          "target": null,
+          "value_reference": null,
+          "url": "http://127.0.0.1:60504/",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-username",
+          "value_reference": "member_username",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-password",
+          "value_reference": "env:ARCH_TEST_PASSWORD",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "#login-form button[type='submit']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "button:text-is(\"Tasks\")",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "#tasks-table tr[data-task-id='task-1'] .delete-task",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "hidden",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "refresh",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "#nav-tasks",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "hidden",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": false,
+          "expected_error_type": "ASSERTION_FAILURE",
+          "identity_reference": "member-id",
+          "behavior_id": "EB-delete",
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        }
+      ],
+      "reproduction_rate": 1.0,
+      "verification": "FAIL",
+      "evidence": [
+        {
+          "evidence_id": "evidence-0a640da12db342fba81d3cea285a4470",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/observed.png"
+        },
+        {
+          "evidence_id": "evidence-e09e6d91eda445ffb72bb504cc0e133c",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/dom.html"
+        },
+        {
+          "evidence_id": "evidence-c9c8584ef7c647a3ab3439b3f6930048",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/network.json"
+        },
+        {
+          "evidence_id": "evidence-65388679ca4f4af1bdadca1b0f37aa4c",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/console.json"
+        },
+        {
+          "evidence_id": "evidence-e740f29b2a524b5c9f0597d8268e8506",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-5fc407a33d434ea7b615f3e65d09d76e",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-5930d201f480458e97a25f45a374b1da",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-dd1d7ff1956d44eda55178fc59322bc4",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-70f7b6abedf94027883659039985b790",
+          "type": "TRACE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-c61cc7105a164b87afaee8e35bf0c328",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-2e2377c5d97c498aa1734f2adf985a6a",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-0fe5519eab7a405b9d22a4b0de05e180",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-bf74b849ac284616ad64c41b4c003ab7",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-63734d68437944bb9c27c05ae1dd3d68",
+          "type": "TRACE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-e5723f5f515d4df397f5974c61c299e1",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/verification-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-a78599454b9b483b981060c8ce3d572d",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-1cba23c0c59f43e0b8be66cdf3fe44ee",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-49542500f05142d3ae7d0aa722986286",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-f2549c43a30e4f3b969580311564b13b",
+          "type": "TRACE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/playwright-trace.zip"
+        }
+      ],
+      "role": "member",
+      "page": "/"
+    }
+  ],
+  "needs_confirmation": [],
+  "environment_issues": [],
+  "findings": [
+    {
+      "finding_id": "finding-ae212f0f026a4a3083db719f0ed7a96f",
+      "status": "CONFIRMED_BUG",
+      "title": "Deleted Task reappears",
+      "expected": "Deleted Task stays absent after refresh",
+      "actual": "Deleted Task is visible after refresh",
+      "screening_reason": "DETERMINISTIC_REPLAY_STARTED",
+      "verification": "FAIL",
+      "reproduction_steps": [
+        {
+          "action_type": "navigation",
+          "target": null,
+          "value_reference": null,
+          "url": "http://127.0.0.1:60504/",
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-username",
+          "value_reference": "member_username",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "input",
+          "target": "#login-password",
+          "value_reference": "env:ARCH_TEST_PASSWORD",
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "#login-form button[type='submit']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "button:text-is(\"Tasks\")",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "#tasks-table tr[data-task-id='task-1'] .delete-task",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "hidden",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "refresh",
+          "target": null,
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#app-section",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "click",
+          "target": "#nav-tasks",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "wait",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "contains",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": true,
+          "expected_error_type": null,
+          "identity_reference": "member-id",
+          "behavior_id": null,
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        },
+        {
+          "action_type": "assertion",
+          "target": "#tasks-table tr[data-task-id='task-1']",
+          "value_reference": null,
+          "url": null,
+          "expected": null,
+          "assertion": "hidden",
+          "key": null,
+          "wait_ms": 0,
+          "resource_id": null,
+          "requires_resource": false,
+          "confirmed": false,
+          "timeout_ms": 2000,
+          "expected_success": false,
+          "expected_error_type": "ASSERTION_FAILURE",
+          "identity_reference": "member-id",
+          "behavior_id": "EB-delete",
+          "goal_check": false,
+          "session_reference": "browser-6c150d1602424999ab081150f016468b"
+        }
+      ],
+      "reproduction_rate": 1.0,
+      "evidence": [
+        {
+          "evidence_id": "evidence-0a640da12db342fba81d3cea285a4470",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/observed.png"
+        },
+        {
+          "evidence_id": "evidence-e09e6d91eda445ffb72bb504cc0e133c",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/dom.html"
+        },
+        {
+          "evidence_id": "evidence-c9c8584ef7c647a3ab3439b3f6930048",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/network.json"
+        },
+        {
+          "evidence_id": "evidence-65388679ca4f4af1bdadca1b0f37aa4c",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/observation-b8dff763e2ae46d1869e964a2f5e141c/console.json"
+        },
+        {
+          "evidence_id": "evidence-e740f29b2a524b5c9f0597d8268e8506",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-5fc407a33d434ea7b615f3e65d09d76e",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-5930d201f480458e97a25f45a374b1da",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-dd1d7ff1956d44eda55178fc59322bc4",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-70f7b6abedf94027883659039985b790",
+          "type": "TRACE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-0ba6f5d905f64611938fdf04ccc77ca3-member-id-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-c61cc7105a164b87afaee8e35bf0c328",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/reproduction-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-2e2377c5d97c498aa1734f2adf985a6a",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-0fe5519eab7a405b9d22a4b0de05e180",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-bf74b849ac284616ad64c41b4c003ab7",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-63734d68437944bb9c27c05ae1dd3d68",
+          "type": "TRACE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/reproduction-2e9cb9a008e84178840a4353210b7ca0-member-id-0/playwright-trace.zip"
+        },
+        {
+          "evidence_id": "evidence-e5723f5f515d4df397f5974c61c299e1",
+          "type": "SCREENSHOT",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/verification-screenshot.png"
+        },
+        {
+          "evidence_id": "evidence-a78599454b9b483b981060c8ce3d572d",
+          "type": "DOM",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/dom.html"
+        },
+        {
+          "evidence_id": "evidence-1cba23c0c59f43e0b8be66cdf3fe44ee",
+          "type": "NETWORK",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/network.json"
+        },
+        {
+          "evidence_id": "evidence-49542500f05142d3ae7d0aa722986286",
+          "type": "CONSOLE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/console.json"
+        },
+        {
+          "evidence_id": "evidence-f2549c43a30e4f3b969580311564b13b",
+          "type": "TRACE",
+          "relative_path": "run-128ff0af2c8546f1ad9b88002284d956/evidence/finding-ae212f0f026a4a3083db719f0ed7a96f/verification-e0182eaf4eea410aaf86fd4fb5131180-member-id-0/playwright-trace.zip"
+        }
+      ]
+    }
+  ],
+  "task_outcomes": [
+    {
+      "task_id": "task-delete",
+      "goal": "Test Task",
+      "feature": "Task",
+      "execution_status": "COMPLETED",
+      "success_status": "PASS",
+      "reason": "APPLICATION_BUG_DETECTED",
+      "application_behavior": "FAIL",
+      "assertions": [
+        {
+          "event_id": "event-87538187c6a44716b601bd24534a5903",
+          "behavior_id": "EB-delete",
+          "success": false,
+          "error_type": "ASSERTION_FAILURE"
+        }
+      ]
+    }
+  ],
+  "model_configuration": {
+    "transport": "openrouter",
+    "main_model": "deepseek/deepseek-v4-flash",
+    "main_provider": "streamlake/fp8",
+    "tester_model": "z-ai/glm-5.3-flash",
+    "tester_provider": "relace",
+    "jev_model": "typesafe/jev-1.13",
+    "automatic_fallback": false
+  },
+  "cost_and_performance": {
+    "llm_calls": 2,
+    "jev_calls": 1,
+    "computer_use_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "runtime_seconds": 13.183205799781717,
+    "estimated_cost": 0.0,
+    "cost_status": "INCOMPLETE",
+    "llm_request_count": 2,
+    "llm_success_count": 1,
+    "llm_failure_count": 0,
+    "llm_input_tokens": 0,
+    "llm_output_tokens": 0,
+    "llm_models": [],
+    "llm_by_phase": {
+      "main_planning": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_replan": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "tester": {
+        "requests": 1,
+        "latency_ms": 3913.3084000786766,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "RECORDED"
+      },
+      "visual": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_final_summary": {
+        "requests": 1,
+        "latency_ms": 0.5310000851750374,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "INCOMPLETE"
+      }
+    },
+    "total_run_time_seconds": 14.490072,
+    "average_browser_action_ms": 165.515,
+    "average_jev_decision_ms": 0.501,
+    "average_llm_ms": 1956.92,
+    "average_computer_use_ms": "N/A",
+    "cost_per_confirmed_bug": "N/A"
+  },
+  "main_final_summary": {
+    "status": "COMPLETED",
+    "error_type": null,
+    "latency_ms": 0.5310000851750374,
+    "relative_path": "summary.md",
+    "facts_stage": "before_main_final_summary"
+  },
+  "full_evaluation": "Full Evaluation: NOT RUN",
+  "testing_phase_cost_and_performance": {
+    "llm_calls": 1,
+    "jev_calls": 1,
+    "computer_use_calls": 0,
+    "input_tokens": 0,
+    "output_tokens": 0,
+    "runtime_seconds": 13.182674799696542,
+    "estimated_cost": 0.0,
+    "cost_status": "RECORDED",
+    "llm_request_count": 1,
+    "llm_success_count": 0,
+    "llm_failure_count": 0,
+    "llm_input_tokens": 0,
+    "llm_output_tokens": 0,
+    "llm_models": [],
+    "llm_by_phase": {
+      "main_planning": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_replan": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "tester": {
+        "requests": 1,
+        "latency_ms": 3913.3084000786766,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0.0,
+        "cost_status": "RECORDED"
+      },
+      "visual": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      },
+      "main_final_summary": {
+        "requests": 0,
+        "latency_ms": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "recorded_cost": 0,
+        "cost_status": "RECORDED"
+      }
+    },
+    "total_run_time_seconds": 14.370464,
+    "average_browser_action_ms": 165.515,
+    "average_jev_decision_ms": 0.501,
+    "average_llm_ms": 3913.308,
+    "average_computer_use_ms": "N/A",
+    "cost_per_confirmed_bug": 0.0
+  }
+}

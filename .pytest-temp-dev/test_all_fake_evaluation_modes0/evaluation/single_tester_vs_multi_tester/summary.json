@@ -1,0 +1,38 @@
+{
+  "single-tester": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-single_tester_vs_multi_tester-single-tester-1-177dc43f",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  "multi-tester": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-single_tester_vs_multi_tester-multi-tester-1-64cf0dea",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  }
+}

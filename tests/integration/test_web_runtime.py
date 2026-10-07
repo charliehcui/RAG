@@ -392,3 +392,261 @@ async def test_context_budget_exhaustion_records_stop_before_browser_start(
         if event["event_type"] == "STOP_CONDITION"
     )
     assert stop_event["result"]["reason"] == "MAX_BROWSER_CONTEXTS_REACHED"
+
+
+@pytest.mark.asyncio
+async def test_semantic_steps_execute_in_one_model_request_and_record_failed_check_before_next_action(phase2_store: StateStore) -> None:
+    from collections.abc import Sequence
+
+    from agent_framework import BaseChatClient, ChatResponse, Content, Message
+    from agent_framework._tools import FunctionInvocationLayer
+
+    from web_testing_system.agents.tester_agent import create_tester_agent
+    from web_testing_system.reproduction import ReplayPlanBuilder
+
+    class BatchClient(FunctionInvocationLayer, BaseChatClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.call_count = 0
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.call_count += 1
+            assert self.call_count == 1
+            steps = [{"action_type": "input", "control": "Project name", "value_reference": "name"}, {"action_type": "click", "control": "Store project"}, {"action_type": "assertion", "target": "#status", "assertion": "equals", "expected": "other", "behavior_id": "EB-check"}, {"action_type": "refresh"}, {"action_type": "assertion", "target": "#status", "assertion": "equals", "expected": "ready", "behavior_id": "EB-check"}]
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("batch", "execute_page_steps", arguments={"steps": steps, "finish": True})])])
+
+    client = BatchClient()
+    jev = FakeJevClient()
+    runtime = build_runtime(phase2_store, make_budget(), jev)
+    runtime.expected_behavior_ids = ("EB-check",)
+    runtime.input_values = {"name": "configured-project"}
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    html = '<input id="name" aria-label="Project name"><button onclick="document.querySelector(\'#status\').textContent=\'saved\'">Store project</button><p id="status">ready</p>'
+
+    async def handle(route: Route) -> None:
+        await route.fulfill(status=200, content_type="text/html", body=html)
+
+    await page.route("http://app.test/**", handle)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/"))
+        await create_tester_agent(client=client, assignment=assignment, tools=tools).run("Execute the Task")
+        assert client.call_count == 1
+        assert jev.call_count == 0
+        assert runtime.task_finished
+        findings = phase2_store.list_recent_findings("run-1")
+        assert len(findings) == 1
+        events = phase2_store.list_events("run-1")
+        created = next(event for event in events if event["event_type"] == "FINDING_CREATED")
+        history = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+        failed = next(item for item in history if not item["success"])
+        assert created["result"]["boundary_event_id"] == failed["event_id"]
+        assert created["result"]["behavior_id"] == "EB-check"
+        assert history[1]["action_data"]["value_reference"] == "name"
+        plan = ReplayPlanBuilder(phase2_store).from_finding(finding_id=findings[0]["finding_id"], input_values=runtime.input_values)
+        assert plan.plan is not None
+        assert plan.plan.steps[-1].expected_success is False
+        assert plan.plan.steps[-1].behavior_id == "EB-check"
+        assert phase2_store.get_task("task-1")["success_reason"] == "APPLICATION_BUG_DETECTED"  # type: ignore[index]
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_semantic_resolution_uses_jev_only_for_ambiguity_and_honors_confidence(phase2_store: StateStore) -> None:
+    jev = FakeJevClient()
+    runtime = build_runtime(phase2_store, make_budget(), jev)
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    await install_page(page)
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/"))
+        exact = await runtime.execute_page_action(WebAction(action_type=ActionType.CLICK), control="Open Project")
+        assert exact.source == "PLAYWRIGHT"
+        assert jev.call_count == 0
+        selected = await runtime.execute_page_action(WebAction(action_type=ActionType.CLICK), control="open the workspace")
+        assert selected.source == "JEV_TO_PLAYWRIGHT"
+        assert jev.call_count == 1
+        previous = len(phase2_store.list_action_history(run_id="run-1", task_id="task-1"))
+        jev.mode = "low"
+        refused = await runtime.execute_page_action(WebAction(action_type=ActionType.CLICK), control="open the workspace")
+        assert refused.reason == "LOW_JEV_CONFIDENCE"
+        assert len(phase2_store.list_action_history(run_id="run-1", task_id="task-1")) == previous
+        await page.set_content('<a href="https://evil.test/outside">External</a>')
+        external = await runtime.execute_page_action(WebAction(action_type=ActionType.CLICK), control="External")
+        assert external.reason == "CONTROL_NOT_FOUND"
+        assert jev.call_count == 2
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_batch_rejects_missing_inputs_and_stops_before_later_actions(phase2_store: StateStore) -> None:
+    from web_testing_system.agents.tester_agent import PageStep
+
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    runtime.input_values = {"name": "configured"}
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    await install_page(page)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/"))
+        rejected = await tools.execute_page_steps([PageStep(ActionType.INPUT, control="name")])
+        assert rejected["error_type"] == "INPUT_REFERENCE_REQUIRED"
+        failed = await tools.execute_page_steps([PageStep(ActionType.CLICK, target="#missing"), PageStep(ActionType.CLICK, target="#open")])
+        assert failed["failed_step"] == 0
+        assert len(phase2_store.list_action_history(run_id="run-1", task_id="task-1")) == 2
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_shared_wait_detects_planning_deadlock_without_polling_the_model(phase2_store: StateStore) -> None:
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    phase2_store.create_task(task_id="participant", run_id="run-1", goal="Publish removal", priority="P0", dependencies=["task-1"], created_by="main", step_budget=10)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+    result = await tools.wait_for_shared_progress("membership-removed", task_id="participant")
+    assert result["reason"] == "LIVE_PARTICIPANT_DEPENDS_ON_OBSERVER"
+    assert runtime.task_finished
+    assert phase2_store.get_task("task-1")["status"] == "STOPPED"  # type: ignore[index]
+    assert runtime.budget.snapshot()["llm_calls"] == 0
+
+
+@pytest.mark.asyncio
+async def test_shared_wait_reads_the_other_task_signal_without_browser_actions(phase2_store: StateStore) -> None:
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    phase2_store.create_task(task_id="participant", run_id="run-1", goal="Publish removal", priority="P0", dependencies=[], created_by="main", step_budget=10)
+    phase2_store.append_event(event_id="signal", run_id="run-1", task_id="participant", event_type="TASK_PROGRESS", tool="TesterAgent", action="update_progress", result={"summary": "membership-removed"}, latency_ms=0)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    result = await AgentTools(assignment=assignment, runtime=runtime, store=phase2_store).wait_for_shared_progress("membership-removed", timeout_seconds=0)
+    assert result["ready"]
+    assert result["event_id"] == "signal"
+    assert not runtime.task_finished
+    assert not phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+
+
+@pytest.mark.asyncio
+async def test_modal_binding_column_assertions_and_duplicate_checks(phase2_store: StateStore) -> None:
+    from web_testing_system.agents.tester_agent import PageStep
+
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    runtime.input_values = {"new_name": "new-project"}
+    runtime.expected_behavior_ids = ("EB-check",)
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    html = '<input id="background" aria-label="Project name"><table id="items"><thead><tr><th>Name</th><th>Owner</th></tr></thead><tbody><tr data-key="entity-7"><td>old-project</td><td>member</td></tr></tbody></table><dialog id="editor"><input id="edit" aria-label="Edit value"><button onclick="document.querySelector(\'#editor\').close()">Save</button></dialog>'
+
+    async def handle(route: Route) -> None:
+        await route.fulfill(status=200, content_type="text/html", body=html)
+
+    await page.route("http://app.test/**", handle)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/"))
+        await page.locator("#editor").evaluate("dialog => dialog.showModal()")
+        state = await runtime.page_state_reader.read(page)
+        assert {element.label for element in state.interactive_elements} == {"Edit value", "Save"}
+        invalid = await tools.execute_known_action(ActionType.INPUT, target="#background", value_reference="new_name")
+        assert invalid["error_type"] == "INVALID_ACTION"
+        completed = await tools.execute_page_steps([PageStep(ActionType.INPUT, control="Edit value", value_reference="new_name"), PageStep(ActionType.CLICK, control="Save"), PageStep(ActionType.ASSERTION, control="Name", context="entity-7", expected_reference="new_name", assertion="equals", behavior_id="EB-check")])
+        assert completed["results"][-1]["actual"] == "old-project"
+        assert await page.locator("#edit").input_value() == "new-project"
+        assert await page.locator("#background").input_value() == ""
+        await tools.execute_page_steps([PageStep(ActionType.ASSERTION, control="Name", context="entity-7", expected_reference="new_name", assertion="equals", behavior_id="EB-check")])
+        assert len(phase2_store.list_recent_findings("run-1")) == 1
+        rejected = await tools.execute_page_steps([PageStep(ActionType.ASSERTION, target="body", assertion="visible", expected="new-project", behavior_id="EB-check")])
+        assert rejected["error_type"] == "VISIBILITY_DOES_NOT_COMPARE_TEXT"
+        waited = await tools.execute_page_steps([PageStep(ActionType.WAIT, wait_ms=5)])
+        assert waited["success"]
+        await tools.execute_known_action(ActionType.WAIT, target="5")
+        assert phase2_store.list_action_history(run_id="run-1", task_id="task-1")[-1]["action_data"]["wait_ms"] == 5
+        await page.locator('tr[data-key="entity-7"]').evaluate("row => row.remove()")
+        missing = await tools.execute_page_steps([PageStep(ActionType.ASSERTION, control="Name", context="entity-7", expected_reference="new_name", assertion="equals", behavior_id="EB-check")])
+        assert missing["results"][-1]["error_type"] == "ASSERTION_FAILURE"
+        assert missing["results"][-1]["actual"] == ""
+        assert len(phase2_store.list_recent_findings("run-1")) == 1
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_prepared_login_handoff_finishes_with_one_fake_model_call_and_keeps_replay_references(phase2_store: StateStore) -> None:
+    from collections.abc import Sequence
+
+    from agent_framework import BaseChatClient, ChatResponse, Content, Message
+    from agent_framework._tools import FunctionInvocationLayer
+
+    from web_testing_system.agents.tester_agent import TesterRunner as Runner
+    from web_testing_system.agents.tester_agent import create_tester_agent
+
+    class PreparedClient(FunctionInvocationLayer, BaseChatClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.calls += 1
+            assert self.calls == 1
+            text = "\n".join(message.text for message in messages)
+            assert "AUTHENTICATED" in text
+            assert "member (member)" in text
+            assert "secret-value" not in text
+            step = {"action_type": "assertion", "control": "Name", "context": "entity-7", "expected_reference": "name", "assertion": "equals", "behavior_id": "EB-check"}
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("prepared", "execute_page_steps", arguments={"steps": [step], "finish": True})])])
+
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    runtime.expected_behavior_ids = ("EB-check",)
+    runtime.input_values = {"member_username": "member", "env:TEST_PASSWORD": "secret-value", "name": "named-project"}
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    html = """<form id="login"><input id="username" aria-label="Login username"><input id="password" aria-label="Login password"><button type="button" onclick="document.body.innerHTML=document.querySelector('#logged-in').innerHTML">Login</button></form><template id="logged-in"><p>member (member)</p><button>Logout</button><table id="items"><thead><tr><th>Name</th></tr></thead><tbody><tr data-key="entity-7"><td>named-project</td></tr></tbody></table></template>"""
+
+    async def handle(route: Route) -> None:
+        await route.fulfill(status=200, content_type="text/html", body=html)
+
+    await page.route("http://app.test/**", handle)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store, task_context={"identity_reference": "member", "secret_reference": "env:TEST_PASSWORD", "required_operations": ["read"]})
+    client = PreparedClient()
+    runner = Runner(agent=create_tester_agent(client=client, assignment=assignment, tools=tools), assignment=assignment, runtime=runtime, store=phase2_store, budget=runtime.budget, budget_id="budget-1", prepare_task_page=True)
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/"))
+        await runner.ask_tester_llm("Execute assigned Task task-1: check the project")
+        assert client.calls == 1
+        assert runtime.task_finished
+        histories = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+        assert [item["action_data"]["value_reference"] for item in histories if item["action"] == "input"] == ["member_username", "env:TEST_PASSWORD"]
+        assert phase2_store.get_task("task-1")["success_status"] == "PASS"  # type: ignore[index]
+        steps = phase2_store.list_events("run-1", event_types=("PAGE_STEP",))
+        assert steps[-1]["result"]["semantic_control"]
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_removed_member_assertion_does_not_bind_to_member2(phase2_store: StateStore) -> None:
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    runtime.input_values = {"removed_username": "member"}
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    html = '<table id="members"><thead><tr><th>Username</th><th>Name</th><th>Role</th></tr></thead><tbody><tr data-username="member2"><td>member2</td><td>Member Two</td><td>member</td></tr><tr data-username="member"><td>member</td><td>Member One</td><td>member</td></tr></tbody></table>'
+
+    async def handle(route: Route) -> None:
+        await route.fulfill(status=200, content_type="text/html", body=html)
+
+    await page.route("http://app.test/**", handle)
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/"))
+        runtime.remember_assertion_targets(await runtime.page_state_reader.read_rows(page))
+        await page.locator('tr[data-username="member"]').evaluate("row => row.remove()")
+        result = await runtime.execute_page_action(WebAction(action_type=ActionType.ASSERTION, assertion="hidden"), control="Name", context="member")
+        assert result.action_result is not None and result.action_result.success
+        assert result.candidate is not None and 'data-username="member"' in str(result.candidate.target)
+    finally:
+        await runtime.browser_manager.close()

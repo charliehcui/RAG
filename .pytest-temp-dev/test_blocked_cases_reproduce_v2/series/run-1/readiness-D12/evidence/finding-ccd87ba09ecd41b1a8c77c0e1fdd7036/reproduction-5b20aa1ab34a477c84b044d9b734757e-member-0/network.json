@@ -1,0 +1,122 @@
+[
+  {
+    "url": "http://127.0.0.1:51690/",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:09.451315+00:00",
+    "identity_reference": "member"
+  },
+  {
+    "url": "http://127.0.0.1:51690/version",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:09.500914+00:00",
+    "identity_reference": "member"
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/session",
+    "method": "GET",
+    "status": 401,
+    "captured_at": "2026-10-07T00:54:09.501149+00:00",
+    "identity_reference": "member",
+    "response_data": {
+      "error": "login required"
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/login",
+    "method": "POST",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:09.952425+00:00",
+    "identity_reference": "member",
+    "request_data": {
+      "username": "member"
+    },
+    "response_data": {
+      "user": {
+        "username": "member",
+        "role": "member",
+        "display_name": "Demo Member"
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:09.952960+00:00",
+    "identity_reference": "member",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-1",
+          "name": "Seed Project",
+          "owner": "admin",
+          "members": [
+            "member"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:10.725643+00:00",
+    "identity_reference": "member"
+  },
+  {
+    "url": "http://127.0.0.1:51690/version",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:10.770235+00:00",
+    "identity_reference": "member"
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/session",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:10.770384+00:00",
+    "identity_reference": "member",
+    "response_data": {
+      "username": "member",
+      "role": "member"
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:10.770898+00:00",
+    "identity_reference": "member",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-1",
+          "name": "Seed Project",
+          "owner": "admin",
+          "members": []
+        }
+      ]
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects/project-1",
+    "method": "DELETE",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:13.069062+00:00",
+    "identity_reference": "member",
+    "response_data": {}
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:13.069563+00:00",
+    "identity_reference": "member",
+    "response_data": {
+      "projects": []
+    }
+  }
+]

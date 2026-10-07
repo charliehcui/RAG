@@ -1,0 +1,114 @@
+[
+  {
+    "url": "http://127.0.0.1:65267/",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:53:28.771365+00:00",
+    "identity_reference": "member2"
+  },
+  {
+    "url": "http://127.0.0.1:65267/version",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:53:28.823684+00:00",
+    "identity_reference": "member2"
+  },
+  {
+    "url": "http://127.0.0.1:65267/api/session",
+    "method": "GET",
+    "status": 401,
+    "captured_at": "2026-10-07T00:53:28.823832+00:00",
+    "identity_reference": "member2",
+    "response_data": {
+      "error": "login required"
+    }
+  },
+  {
+    "url": "http://127.0.0.1:65267/api/login",
+    "method": "POST",
+    "status": 200,
+    "captured_at": "2026-10-07T00:53:29.021468+00:00",
+    "identity_reference": "member2",
+    "request_data": {
+      "username": "member2"
+    },
+    "response_data": {
+      "user": {
+        "username": "member2",
+        "role": "member",
+        "display_name": "Second Member"
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:65267/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:53:29.022012+00:00",
+    "identity_reference": "member2",
+    "response_data": {
+      "projects": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:65267/api/projects",
+    "method": "POST",
+    "status": 201,
+    "captured_at": "2026-10-07T00:53:29.637341+00:00",
+    "identity_reference": "member2",
+    "request_data": {
+      "name": "d08-pending-project",
+      "submission_id": "ee412e61-123a-4eab-9bec-bb3cbb839afd"
+    },
+    "response_data": {
+      "project": {
+        "project_id": "project-4",
+        "name": "d08-pending-project",
+        "owner": "member2",
+        "members": []
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:65267/api/projects",
+    "method": "POST",
+    "status": 201,
+    "captured_at": "2026-10-07T00:53:29.637854+00:00",
+    "identity_reference": "member2",
+    "request_data": {
+      "name": "d08-pending-project",
+      "submission_id": "ee412e61-123a-4eab-9bec-bb3cbb839afd"
+    },
+    "response_data": {
+      "project": {
+        "project_id": "project-3",
+        "name": "d08-pending-project",
+        "owner": "member2",
+        "members": []
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:65267/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:53:29.694532+00:00",
+    "identity_reference": "member2",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-3",
+          "name": "d08-pending-project",
+          "owner": "member2",
+          "members": []
+        },
+        {
+          "project_id": "project-4",
+          "name": "d08-pending-project",
+          "owner": "member2",
+          "members": []
+        }
+      ]
+    }
+  }
+]

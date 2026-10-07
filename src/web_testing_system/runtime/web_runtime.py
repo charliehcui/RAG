@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Mapping
+import json
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Any
+from urllib.parse import urljoin
 from uuid import uuid4
+
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from web_testing_system.evidence import EvidenceBuffer, EvidenceStore
 from web_testing_system.observability import trace_result, trace_span
@@ -19,9 +24,11 @@ from web_testing_system.runtime.computer_use import (
 )
 from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.runtime.models import (
+    ActionCandidate,
     ActionResult,
     ActionType,
     DecisionResult,
+    PageState,
     WebAction,
 )
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
@@ -75,6 +82,37 @@ class WebTestingRuntime:
         self.evidence_buffer.identity_reference = getattr(executor, "identity_reference", None)
         self.evidence_marker = (0, 0)
         self.task_finished = False
+        self.assertion_targets: dict[tuple[str, str], dict[str, str | None]] = {}
+
+    def remember_assertion_targets(self, rows: Sequence[Mapping[str, Any]], context: str = "") -> None:
+        for row in rows:
+            aliases = {str(row["target"]), str(row["text"])}
+            aliases.update(str(cell["text"]) for cell in row["cells"] if cell["text"])
+            for reference, value in self.input_values.items():
+                if not reference.startswith("env:") and value.strip() and self._row_matches_context(row, value):
+                    aliases.add(value)
+            if context and self._row_matches_context(row, context):
+                aliases.add(context)
+            aliases = {alias for alias in aliases if self._row_matches_context(row, alias)}
+            for cell in row["cells"]:
+                if not cell["header"]:
+                    continue
+                for alias in aliases:
+                    key = (str(cell["header"]).casefold(), alias.casefold())
+                    self.assertion_targets.setdefault(key, {})[str(cell["target"])] = row.get("container_target")
+
+    def _row_matches_context(self, row: Mapping[str, Any], context: str) -> bool:
+        if context == row["target"] or f"={json.dumps(context)}]" in str(row["target"]):
+            return True
+        normalized = " ".join(context.casefold().split())
+        username = any(not reference.startswith("env:") and "username" in reference.casefold() and " ".join(value.casefold().split()) == normalized for reference, value in self.input_values.items())
+        username_cells = [cell for cell in row["cells"] if "username" in str(cell["header"]).casefold()]
+        if username and username_cells:
+            return any(" ".join(str(cell["text"]).casefold().split()) == normalized for cell in username_cells)
+        configured = any(not reference.startswith("env:") and " ".join(value.casefold().split()) == normalized for reference, value in self.input_values.items())
+        if configured:
+            return any(" ".join(str(cell["text"]).casefold().split()) == normalized for cell in row["cells"])
+        return normalized in " ".join(str(row["text"]).casefold().split())
 
     async def start_session(self) -> str:
         try:
@@ -158,6 +196,67 @@ class WebTestingRuntime:
             return DecisionResult(
                 source="TESTER_LLM", reason="NO_LEGAL_CANDIDATES", needs_tester_llm=True
             )
+        return await self._select_and_execute(current_goal, page_state, candidates)
+
+    async def execute_page_action(self, action: WebAction, *, control: str, context: str = "") -> DecisionResult:
+        """Resolve a semantic control locally or with Jev, then execute its allowed action."""
+        async with self.page_lock:
+            if self.task_finished:
+                return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
+            if self.browser_session_id is None:
+                raise RuntimeError("browser session has not started")
+            session = self.browser_manager.get_session(self.browser_session_id)
+            try:
+                await session.page.wait_for_load_state("networkidle", timeout=action.timeout_ms)
+            except PlaywrightTimeoutError:
+                return DecisionResult(source="TESTER_LLM", reason="PAGE_NOT_SETTLED", needs_tester_llm=True)
+            page_state = await self.page_state_reader.read(session.page, include_content=action.action_type == ActionType.ASSERTION)
+            rows = await self.page_state_reader.read_rows(session.page)
+            self.remember_assertion_targets(rows, context)
+            kinds = {ActionType.INPUT: {"input", "textarea"}, ActionType.SELECT: {"select"}, ActionType.REPEAT_SUBMIT: {"button"}, ActionType.ASSERTION: {"cell"}}
+            candidates = []
+            exact = []
+            for element in page_state.interactive_elements:
+                matches_context = not context or context.casefold() in element.context.casefold() or context == element.context_target or f"={json.dumps(context)}]" in (element.context_target or "")
+                row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target) or row["text"] == element.context), None)
+                if context and row is not None:
+                    matches_context = self._row_matches_context(row, context)
+                if not element.enabled or not matches_context:
+                    continue
+                if action.action_type in kinds and element.kind not in kinds[action.action_type]:
+                    continue
+                if action.action_type == ActionType.CLICK and element.kind in {"input", "textarea", "select", "cell"}:
+                    continue
+                resolved_url = action.url
+                if action.action_type == ActionType.CLICK and element.href:
+                    resolved_url = urljoin(page_state.url, element.href)
+                resolved = replace(action, target=element.target, url=resolved_url)
+                permission = self.executor.permission_checker.check(resolved, current_url=page_state.url)
+                if not permission.allowed:
+                    continue
+                candidate = ActionCandidate(candidate_id=self.candidate_builder._candidate_id(page_state.state_id, action.action_type.value, element.target), action=action.action_type.value, label=f"{element.label} ({element.context})", target=element.target, state_id=page_state.state_id, value=action.value, value_reference=action.value_reference, url=resolved_url, resource_id=action.resource_id, requires_resource=action.requires_resource, confirmed=action.confirmed, expected=action.expected, assertion=action.assertion, behavior_id=action.behavior_id, goal_check=action.goal_check)
+                candidates.append(candidate)
+                if element.label.casefold() == control.casefold():
+                    exact.append(candidate)
+            if len(exact) == 1:
+                result = await self._execute_known_action(replace(action, target=exact[0].target, url=exact[0].url))
+                return DecisionResult(source="PLAYWRIGHT", reason="EXACT_CONTROL", candidate=exact[0], action_result=result)
+            if not candidates:
+                known = self.assertion_targets.get((control.casefold(), context.casefold()), {})
+                if action.action_type == ActionType.ASSERTION and len(known) == 1:
+                    target, container = next(iter(known.items()))
+                    if container is None or await session.page.locator(container).is_visible():
+                        # 删除后缺失的单元格仍须用此前观察到的定位器做真实断言。
+                        result = await self._execute_known_action(replace(action, target=target))
+                        candidate = ActionCandidate(candidate_id="recorded-assertion", action=action.action_type.value, label=control, target=target, state_id=page_state.state_id)
+                        return DecisionResult(source="PLAYWRIGHT", reason="RECORDED_ASSERTION_TARGET", candidate=candidate, action_result=result)
+                return DecisionResult(source="TESTER_LLM", reason="CONTROL_NOT_FOUND", needs_tester_llm=True)
+            choices = (exact or candidates) + self.candidate_builder._control_candidates(page_state.state_id)
+            return await self._select_and_execute(f"{action.action_type.value} the control '{control}' in '{context}'; stop if no control fits", page_state, choices)
+
+    async def _select_and_execute(self, current_goal: str, page_state: PageState, candidates: list[ActionCandidate]) -> DecisionResult:
+        assert self.browser_session_id is not None
+        session = self.browser_manager.get_session(self.browser_session_id)
         try:
             self.budget.ensure_can_start("jev")
         except BudgetExceededError as error:
@@ -227,7 +326,7 @@ class WebTestingRuntime:
             return DecisionResult(
                 source="TESTER_LLM", reason="LOW_JEV_CONFIDENCE", needs_tester_llm=True
             )
-        current_page_state = await self.page_state_reader.read(session.page)
+        current_page_state = await self.page_state_reader.read(session.page, include_content=candidate.action == ActionType.ASSERTION.value)
         validation = self.candidate_builder.validate(
             candidate=candidate, current_page_state=current_page_state
         )

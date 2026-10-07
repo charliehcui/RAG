@@ -1,0 +1,38 @@
+{
+  "auto-reproduction-on": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-auto_reproduction_on_vs_off-auto-reproduction-on-1-3ab9b38d",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  },
+  "auto-reproduction-off": {
+    "runs": [
+      {
+        "run": 1,
+        "run_id": "evaluation-auto_reproduction_on_vs_off-auto-reproduction-off-1-38074dee",
+        "status": "COMPLETED",
+        "error": null
+      }
+    ],
+    "metrics": {
+      "score": {
+        "run_1": 1.0,
+        "median": 1.0,
+        "min": 1.0,
+        "max": 1.0
+      }
+    }
+  }
+}

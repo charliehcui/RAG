@@ -1,0 +1,134 @@
+[
+  {
+    "url": "http://127.0.0.1:51690/",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:15.657829+00:00",
+    "identity_reference": "admin"
+  },
+  {
+    "url": "http://127.0.0.1:51690/version",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:15.717010+00:00",
+    "identity_reference": "admin"
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/session",
+    "method": "GET",
+    "status": 401,
+    "captured_at": "2026-10-07T00:54:15.717134+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "error": "login required"
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/login",
+    "method": "POST",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:16.069426+00:00",
+    "identity_reference": "admin",
+    "request_data": {
+      "username": "admin"
+    },
+    "response_data": {
+      "user": {
+        "username": "admin",
+        "role": "admin",
+        "display_name": "Demo Admin"
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:16.069959+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-1",
+          "name": "Seed Project",
+          "owner": "admin",
+          "members": [
+            "member"
+          ]
+        },
+        {
+          "project_id": "project-2",
+          "name": "Admin Private Project",
+          "owner": "admin",
+          "members": []
+        }
+      ]
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects/project-1/members",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:16.387096+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "members": [
+        {
+          "username": "admin",
+          "role": "admin",
+          "display_name": "Demo Admin"
+        },
+        {
+          "username": "member",
+          "role": "member",
+          "display_name": "Demo Member"
+        }
+      ]
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects/project-1/members",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:16.675077+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "members": [
+        {
+          "username": "admin",
+          "role": "admin",
+          "display_name": "Demo Admin"
+        },
+        {
+          "username": "member",
+          "role": "member",
+          "display_name": "Demo Member"
+        }
+      ]
+    }
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects/project-1/members/member",
+    "method": "DELETE",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:16.833580+00:00",
+    "identity_reference": "admin",
+    "response_data": {}
+  },
+  {
+    "url": "http://127.0.0.1:51690/api/projects/project-1/members",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T00:54:16.834146+00:00",
+    "identity_reference": "admin",
+    "response_data": {
+      "members": [
+        {
+          "username": "admin",
+          "role": "admin",
+          "display_name": "Demo Admin"
+        }
+      ]
+    }
+  }
+]

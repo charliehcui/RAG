@@ -1,0 +1,137 @@
+[
+  {
+    "url": "http://127.0.0.1:57079/",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:30:53.790588+00:00",
+    "identity_reference": "member2"
+  },
+  {
+    "url": "http://127.0.0.1:57079/version",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:30:53.847927+00:00",
+    "identity_reference": "member2"
+  },
+  {
+    "url": "http://127.0.0.1:57079/api/session",
+    "method": "GET",
+    "status": 401,
+    "captured_at": "2026-10-07T01:30:53.848218+00:00",
+    "identity_reference": "member2",
+    "response_data": {
+      "error": "login required"
+    }
+  },
+  {
+    "url": "http://127.0.0.1:57079/api/login",
+    "method": "POST",
+    "status": 200,
+    "captured_at": "2026-10-07T01:30:54.090502+00:00",
+    "identity_reference": "member2",
+    "request_data": {
+      "username": "member2"
+    },
+    "response_data": {
+      "user": {
+        "username": "member2",
+        "role": "member",
+        "display_name": "Second Member"
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:57079/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:30:54.091896+00:00",
+    "identity_reference": "member2",
+    "response_data": {
+      "projects": []
+    }
+  },
+  {
+    "url": "http://127.0.0.1:57079/api/projects",
+    "method": "POST",
+    "status": 201,
+    "captured_at": "2026-10-07T01:30:54.696912+00:00",
+    "identity_reference": "member2",
+    "request_data": {
+      "name": "d08-pending-project",
+      "submission_id": "25234c18-598b-4d41-9e75-6adf78ad3d71"
+    },
+    "response_data": {
+      "project": {
+        "project_id": "project-4",
+        "name": "d08-pending-project",
+        "owner": "member2",
+        "members": []
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:57079/api/projects",
+    "method": "POST",
+    "status": 201,
+    "captured_at": "2026-10-07T01:30:54.698269+00:00",
+    "identity_reference": "member2",
+    "request_data": {
+      "name": "d08-pending-project",
+      "submission_id": "25234c18-598b-4d41-9e75-6adf78ad3d71"
+    },
+    "response_data": {
+      "project": {
+        "project_id": "project-3",
+        "name": "d08-pending-project",
+        "owner": "member2",
+        "members": []
+      }
+    }
+  },
+  {
+    "url": "http://127.0.0.1:57079/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:30:54.748866+00:00",
+    "identity_reference": "member2",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-3",
+          "name": "d08-pending-project",
+          "owner": "member2",
+          "members": []
+        },
+        {
+          "project_id": "project-4",
+          "name": "d08-pending-project",
+          "owner": "member2",
+          "members": []
+        }
+      ]
+    }
+  },
+  {
+    "url": "http://127.0.0.1:57079/api/projects",
+    "method": "GET",
+    "status": 200,
+    "captured_at": "2026-10-07T01:30:54.750148+00:00",
+    "identity_reference": "member2",
+    "response_data": {
+      "projects": [
+        {
+          "project_id": "project-3",
+          "name": "d08-pending-project",
+          "owner": "member2",
+          "members": []
+        },
+        {
+          "project_id": "project-4",
+          "name": "d08-pending-project",
+          "owner": "member2",
+          "members": []
+        }
+      ]
+    }
+  }
+]

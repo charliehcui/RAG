@@ -1,0 +1,1 @@
+The run used two Testers and confirmed the recorded Task deletion persistence bug.

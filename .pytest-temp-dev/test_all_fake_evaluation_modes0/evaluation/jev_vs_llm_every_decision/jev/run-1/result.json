@@ -1,0 +1,64 @@
+{
+  "config": {
+    "variant_id": "jev",
+    "tester_count": 3,
+    "decision_policy": "JEV",
+    "shared_state": true,
+    "auto_reproduction": true,
+    "action_policy": "PLAYWRIGHT_FIRST",
+    "computer_use_fallback": true,
+    "controls": {
+      "demo_version": "demo-1",
+      "seeded_bugs": [
+        "B1"
+      ],
+      "model_configuration": [
+        [
+          "main",
+          "fake-gemini"
+        ],
+        [
+          "tester",
+          "fake-groq"
+        ]
+      ],
+      "token_budget": 100,
+      "time_budget_seconds": 30,
+      "accounts": [
+        "admin",
+        "member"
+      ],
+      "initial_data": [
+        [
+          "project",
+          "project-1"
+        ]
+      ],
+      "test_scope": [
+        "Project",
+        "Task"
+      ]
+    }
+  },
+  "route": {
+    "tester_count": 3,
+    "candidate_selection": "JEV",
+    "coordination": "SHARED_STATE",
+    "finding_after_anomaly": "REPRODUCTION",
+    "known_action": "PLAYWRIGHT",
+    "visual_fallback": "COMPUTER_USE",
+    "full_evaluation": false
+  },
+  "result": {
+    "mode": "jev_vs_llm_every_decision",
+    "variant_id": "jev",
+    "run_number": 1,
+    "run_id": "evaluation-jev_vs_llm_every_decision-jev-1-9ed17bd0",
+    "status": "COMPLETED",
+    "metrics": {
+      "score": 1.0
+    },
+    "evidence_directory": "jev_vs_llm_every_decision\\jev\\run-1\\evaluation-jev_vs_llm_every_decision-jev-1-9ed17bd0\\evidence",
+    "error": null
+  }
+}
