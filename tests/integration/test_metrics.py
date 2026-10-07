@@ -97,3 +97,20 @@ def test_metrics_return_na_when_a_rate_has_no_denominator(tmp_path: Path) -> Non
         assert metrics[name] == "N/A"
     assert metrics["estimated_total_cost"] == 0
     assert metrics["invalid_action_count"] == 0
+
+
+def test_tester_metrics_keep_failed_attempts_and_separate_main_and_task_latency(tmp_path: Path) -> None:
+    store = create_metrics_store(tmp_path / "role-metrics.db")
+    for event_id, agent, success, input_tokens, cost, latency in [("main-extra", "main", True, 10000, 1.0, 5000), ("tester-ok", "tester", True, 20, 0.002, 2000), ("tester-error", "tester", False, 0, 0, 1000)]:
+        store.append_event(event_id=event_id, run_id="run-metrics", task_id="task-1", event_type="LLM_CALL", action="provider_request", result={"agent": agent, "success": success, "input_tokens": input_tokens, "output_tokens": 2 if success else 0, "usage_source": "provider" if success else "unavailable", "cost_known": success}, cost=cost, latency_ms=latency)
+    metrics = MetricsCalculator(store).calculate("run-metrics", ground_truth=GroundTruthComparison(enabled_bug_ids=frozenset(), finding_to_bug={}), expected_behavior_ids=frozenset({"EB-required"}))
+    assert metrics["tester_request_count"] == 2
+    assert metrics["tester_requests_per_task"] == pytest.approx(2 / 3)
+    assert metrics["tester_recorded_tokens"] == 22
+    assert metrics["tester_recorded_cost"] == 0.002
+    assert metrics["tester_tokens_per_task"] == "N/A"
+    assert metrics["tester_cost_per_task"] == "N/A"
+    assert metrics["average_tester_request_latency_ms"] == 1500
+    assert metrics["tester_request_latency_seconds_per_task"] == 1.0
+    assert metrics["average_tester_task_latency_seconds"] == "N/A"
+    assert metrics["e2e_success"] == 0

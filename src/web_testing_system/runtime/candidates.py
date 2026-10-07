@@ -162,12 +162,16 @@ class CandidateBuilder:
         include_controls: bool = True,
         business_actions: Sequence[BusinessAction] = (),
         explored_targets: set[str] | None = None,
+        click_inputs: bool = True,
+        excluded_candidates: set[str] | None = None,
     ) -> list[ActionCandidate]:
         goal_words = {word.lower() for word in goal.split() if len(word) > 2}
         explored_targets = explored_targets or set()
         ranked: list[tuple[int, ActionCandidate]] = []
         for element in page_state.interactive_elements:
             if element.kind == "cell":
+                continue
+            if not click_inputs and element.kind in {"input", "select", "textarea"}:
                 continue
             if not element.enabled:
                 continue
@@ -189,7 +193,7 @@ class CandidateBuilder:
             candidate = ActionCandidate(
                 candidate_id=candidate_id,
                 action=action_type.value,
-                label=element.label,
+                label=f"{element.label} ({element.context})" if not click_inputs and element.context else element.label,
                 target=element.target,
                 state_id=page_state.state_id,
                 url=candidate_url,
@@ -215,6 +219,8 @@ class CandidateBuilder:
             ):
                 continue
             target_key = action.target or action.url or action.action_type.value
+            if action.value_reference is not None:
+                target_key += f":{action.value_reference}"
             candidate = ActionCandidate(
                 candidate_id=self._candidate_id(
                     page_state.state_id, action.action_type.value, target_key
@@ -243,6 +249,8 @@ class CandidateBuilder:
                 (len(goal_words & label_words) * 2 + unexplored_score, candidate)
             )
         ranked.sort(key=lambda item: (-item[0], item[1].candidate_id))
+        if excluded_candidates:
+            ranked = [item for item in ranked if item[1].candidate_id not in excluded_candidates]
         candidates = [item[1] for item in ranked[: self.max_candidates]]
         if include_controls:
             candidates.extend(self._control_candidates(page_state.state_id))

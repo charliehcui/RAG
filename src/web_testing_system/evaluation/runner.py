@@ -242,7 +242,9 @@ class FormalRunExecutor:
             comparison, matching = match_ground_truth(self.ground_truth_path, scenario_id=self.scenario_id, run_id=run_id, store=store, artifacts_root=run_settings.artifacts_dir, test_data=self.run_config.test_data)
             matching["task_outcomes"] = calculator.task_outcomes(run_id, ground_truth=comparison)
             report_path.with_name("ground_truth_matching.json").write_text(json.dumps(matching, ensure_ascii=False, indent=2), encoding="utf-8")
-        metrics = calculator.calculate(run_id, ground_truth=comparison, final_report=report)
+        metrics = calculator.calculate(run_id, ground_truth=comparison, final_report=report, expected_behavior_ids=frozenset(behavior.behavior_id for behavior in self.run_config.expected_behaviors))
+        report["evaluation_metrics"] = metrics
+        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         status = str(report["test_summary"]["run_status"])
         return EvaluationExecution(status="INTERRUPTED" if status in {"STOPPED", "CANCELLED"} else status, metrics=metrics, error=execution_error)
 

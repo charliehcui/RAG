@@ -27,6 +27,7 @@ from web_testing_system.runtime.models import (
     ActionCandidate,
     ActionResult,
     ActionType,
+    BusinessAction,
     DecisionResult,
     PageState,
     WebAction,
@@ -174,6 +175,73 @@ class WebTestingRuntime:
             if self.task_finished:
                 return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
             return await self._explore_unknown_path(current_goal)
+
+    async def execute_page_goal(self, goal: str, *, inputs: Sequence[Mapping[str, str]] = (), context: str = "", max_steps: int = 12) -> dict[str, Any]:
+        """Keep page decisions inside Jev; return to Tester only at a goal boundary or failure."""
+        async with self.page_lock:
+            if self.task_finished:
+                return {"success": False, "reason": "TASK_ALREADY_FINISHED", "actions": []}
+            if self.browser_session_id is None:
+                raise RuntimeError("browser session has not started")
+            if not 1 <= max_steps <= 30 or any(binding["value_reference"] not in self.input_values for binding in inputs):
+                return {"success": False, "reason": "INVALID_PAGE_GOAL", "actions": []}
+            session = self.browser_manager.get_session(self.browser_session_id)
+            actions: list[dict[str, Any]] = []
+            completed_inputs: set[int] = set()
+            excluded: set[str] = set()
+            for _ in range(max_steps):
+                try:
+                    await session.page.wait_for_load_state("networkidle", timeout=2_000)
+                except PlaywrightTimeoutError:
+                    return {"success": False, "reason": "PAGE_NOT_SETTLED", "actions": actions}
+                page_state = await self.page_state_reader.read(session.page)
+                rows = await self.page_state_reader.read_rows(session.page)
+                self.remember_assertion_targets(rows, context)
+                elements = []
+                for element in page_state.interactive_elements:
+                    row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target)), None)
+                    if context and row is not None and not self._row_matches_context(row, context):
+                        continue
+                    elements.append(element)
+                business_actions = []
+                input_candidates: dict[str, int] = {}
+                for index, binding in enumerate(inputs):
+                    if index in completed_inputs:
+                        continue
+                    for element in elements:
+                        if not element.enabled or element.kind not in {"input", "textarea", "select"} or element.label.casefold() != binding["control"].casefold():
+                            continue
+                        binding_context = binding.get("context", "")
+                        if binding_context and binding_context.casefold() not in element.context.casefold() and binding_context != element.context_target:
+                            continue
+                        action_type = ActionType.SELECT if element.kind == "select" else ActionType.INPUT
+                        reference = binding["value_reference"]
+                        action = WebAction(action_type=action_type, target=element.target, value=self.input_values[reference], value_reference=reference)
+                        business_actions.append(BusinessAction(label=f"Fill {element.label} using {reference} ({element.context})", action=action))
+                        candidate_id = self.candidate_builder._candidate_id(page_state.state_id, action_type.value, f"{element.target}:{reference}")
+                        input_candidates[candidate_id] = index
+                candidates = self.candidate_builder.build(goal=goal, page_state=replace(page_state, interactive_elements=tuple(elements)), include_controls=False, business_actions=business_actions, click_inputs=False, excluded_candidates=excluded)
+                candidates = [candidate for candidate in candidates if not candidate.requires_confirmation]
+                pending = [binding["control"] for index, binding in enumerate(inputs) if index not in completed_inputs]
+                if not pending and (not inputs or actions and actions[-1]["action"] not in {"input", "select"}):
+                    candidates.append(ActionCandidate(candidate_id=f"candidate-stop-{page_state.state_id}", action="stop_current_path", label="Requested operations are complete; return for the supplied assertions. This does not declare Task success.", target=None, state_id=page_state.state_id))
+                if not candidates:
+                    return {"success": False, "reason": "NO_NEW_LEGAL_ACTIONS", "pending_inputs": pending, "actions": actions}
+                current_goal = f"{goal}\nEntity context: {context}\nPending fields: {json.dumps(pending)}\nAlready executed in this subgoal: {json.dumps(actions)}\nChoose the next operation, or stop when the requested operations are complete. Never repeat an already executed operation."
+                decision = await self._select_and_execute(current_goal, page_state, candidates)
+                if decision.reason == "STOP_CURRENT_PATH":
+                    return {"success": True, "reason": "PAGE_GOAL_STOPPED", "actions": actions}
+                if decision.action_result is None or not decision.action_result.success:
+                    reason = decision.action_result.error_type if decision.action_result is not None else decision.reason
+                    return {"success": False, "reason": reason, "actions": actions}
+                candidate = decision.candidate
+                assert candidate is not None
+                excluded.add(candidate.candidate_id)
+                if candidate.candidate_id in input_candidates:
+                    completed_inputs.add(input_candidates[candidate.candidate_id])
+                actions.append({"action": candidate.action, "control": candidate.label, "value_reference": candidate.value_reference})
+                self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PAGE_GOAL_ACTION", tool="TesterPageGoals", action=candidate.action, result={"source": decision.source, "success": True, "browser_event_id": decision.action_result.event_id}, latency_ms=0)
+            return {"success": False, "reason": "PAGE_GOAL_STEP_LIMIT", "actions": actions}
 
     async def _explore_unknown_path(self, current_goal: str) -> DecisionResult:
         if self.browser_session_id is None:

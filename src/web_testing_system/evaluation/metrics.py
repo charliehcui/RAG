@@ -28,7 +28,7 @@ class MetricsCalculator:
     def __init__(self, store: StateStore) -> None:
         self.store = store
 
-    def calculate(self, run_id: str, *, ground_truth: GroundTruthComparison | None = None, final_report: Mapping[str, Any] | None = None) -> dict[str, MetricValue]:
+    def calculate(self, run_id: str, *, ground_truth: GroundTruthComparison | None = None, final_report: Mapping[str, Any] | None = None, expected_behavior_ids: frozenset[str] | None = None) -> dict[str, MetricValue]:
         run = self.store.get_run(run_id)
         if run is None:
             raise KeyError(f"unknown run: {run_id}")
@@ -53,6 +53,14 @@ class MetricsCalculator:
         true_positives = sum(ground_truth.finding_to_bug.get(str(finding["finding_id"])) in ground_truth.enabled_bug_ids for finding in confirmed) if ground_truth is not None else 0
         detected = {ground_truth.finding_to_bug.get(str(finding["finding_id"]), "unmatched") for finding in confirmed} & ground_truth.enabled_bug_ids if ground_truth is not None else set()
         attempted_reproductions = [finding for finding in findings if int(finding["reproduction_count"]) > 0]
+        tester_calls = [event for event in llm_calls if event["result"].get("agent") == "tester"]
+        tester_tokens = sum(int(event["result"].get("input_tokens") or 0) + int(event["result"].get("output_tokens") or 0) for event in tester_calls)
+        tester_cost = sum(float(event["cost"]) for event in tester_calls)
+        usage_complete = bool(tester_calls) and all(event["result"].get("usage_source") in {"provider", "injected_client"} for event in tester_calls)
+        cost_complete = bool(tester_calls) and all(event["result"].get("cost_known") is True for event in tester_calls)
+        durations = [(datetime.fromisoformat(task["finished_at"]) - datetime.fromisoformat(task["started_at"])).total_seconds() for task in attempted_tasks if task["started_at"] and task["finished_at"]]
+        covered_behaviors = {item.get("behavior_id") for task in tasks for item in task["assertion_results"] if isinstance(item.get("success"), bool)}
+        successful_tasks = sum(task_outcomes[str(task["task_id"])] in {"NORMAL_APPLICATION_BEHAVIOR", "APPLICATION_BUG_DETECTED"} for task in attempted_tasks)
         metrics: dict[str, MetricValue] = {
             "confirmed_bug_recall": self._confirmed_bug_recall(confirmed, ground_truth),
             "false_positive_rate": self._false_positive_rate(confirmed, ground_truth),
@@ -69,6 +77,21 @@ class MetricsCalculator:
             "exploration_duplication": self._ratio(repeated_visits, total_visits),
             "task_completion_rate": self._ratio(sum(task["status"] == "COMPLETED" for task in tasks), len(tasks)),
             "task_success_rate": self._ratio(sum(task_outcomes[str(task["task_id"])] in {"NORMAL_APPLICATION_BEHAVIOR", "APPLICATION_BUG_DETECTED"} for task in attempted_tasks), len(attempted_tasks)),
+            "e2e_success": int(run["status"] == "COMPLETED" and bool(tasks) and all(task["status"] == "COMPLETED" for task in tasks) and successful_tasks == len(tasks) and expected_behavior_ids.issubset(covered_behaviors) and detected == ground_truth.enabled_bug_ids and len(confirmed) == true_positives) if ground_truth is not None and expected_behavior_ids is not None else N_A,
+            "tester_attempted_task_count": len(attempted_tasks),
+            "tester_request_count": len(tester_calls),
+            "tester_requests_per_task": self._ratio(len(tester_calls), len(attempted_tasks)),
+            "tester_recorded_tokens": tester_tokens,
+            "tester_tokens_per_task": self._ratio(tester_tokens, len(attempted_tasks)) if usage_complete else N_A,
+            "tester_recorded_cost": round(tester_cost, 9),
+            "tester_cost_per_task": round(tester_cost / len(attempted_tasks), 9) if cost_complete and attempted_tasks else N_A,
+            "tester_usage_status": "RECORDED" if usage_complete else "INCOMPLETE",
+            "tester_cost_status": "RECORDED" if cost_complete else "INCOMPLETE",
+            "average_tester_request_latency_ms": self._average_latency(tester_calls),
+            "tester_request_latency_seconds_per_task": round(sum(float(event["latency_ms"]) for event in tester_calls) / 1_000 / len(attempted_tasks), 6) if attempted_tasks else N_A,
+            "average_tester_task_latency_seconds": round(fmean(durations), 6) if durations and len(durations) == len(attempted_tasks) else N_A,
+            "jev_requests_per_task": self._ratio(len(jev_calls), len(attempted_tasks)),
+            "jev_page_action_count": sum(event["event_type"] == "PAGE_GOAL_ACTION" and event["result"].get("source") == "JEV_TO_PLAYWRIGHT" for event in events),
             "task_success_unknown_count": sum(value == "UNKNOWN_INCOMPLETE" for value in task_outcomes.values()),
             "agent_execution_failure_count": sum(value == "AGENT_EXECUTION_FAILURE" for value in task_outcomes.values()),
             "application_bug_detected_task_count": sum(value == "APPLICATION_BUG_DETECTED" for value in task_outcomes.values()),

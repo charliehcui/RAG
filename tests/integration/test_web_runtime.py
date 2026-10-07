@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import pytest
+from agent_framework import BaseChatClient, ChatResponse, Content, Message
+from agent_framework._tools import FunctionInvocationLayer
 from playwright.async_api import Page, Route
 
 from web_testing_system.agents import TesterAgentTools as AgentTools
 from web_testing_system.agents import TesterAssignment as Assignment
+from web_testing_system.agents.tester_agent import create_tester_agent
 from web_testing_system.runtime.browser import BrowserManager
 from web_testing_system.runtime.budget import (
     BudgetExceededError,
@@ -23,6 +26,153 @@ from web_testing_system.runtime.web_runtime import WebTestingRuntime
 from web_testing_system.state import StateStore
 
 HTML = "<main><button id='open'>Open Project</button><p id='status'>ready</p></main>"
+
+GOAL_HTML = """<main><button onclick="document.querySelector('form').hidden=false">New Project</button>
+<form hidden onsubmit="event.preventDefault(); document.querySelector('#status').textContent='Created '+this.name.value; this.hidden=true">
+<input name="name" aria-label="Project name"><input type="password" aria-label="Project secret">
+<select aria-label="Visibility"><option>Private</option><option>Public</option></select><button>Save Project</button></form>
+<p id="status">Ready</p><a href="https://evil.test/">External</a></main>"""
+
+
+class GoalJevClient:
+    def __init__(self, mode: str = "success") -> None:
+        self.mode = mode
+        self.states: list[Mapping[str, Any]] = []
+
+    def predict(self, state: Mapping[str, Any], questions: Mapping[str, Any]) -> Mapping[str, Any]:
+        self.states.append(state)
+        candidates = state["legal_candidates"]
+        inputs = [candidate for candidate in candidates if candidate["action"] in {"input", "select"}]
+        if inputs:
+            candidate = inputs[0]
+        elif "Created" in state["page_state"]["text"]:
+            candidate = next(candidate for candidate in candidates if candidate["action"] == "stop_current_path")
+        else:
+            label = "Save Project" if any("Save Project" in candidate["label"] for candidate in candidates) else "New Project"
+            candidate = next(candidate for candidate in candidates if label in candidate["label"])
+        selected = "forged" if self.mode == "illegal" else candidate["id"]
+        return {"answers": {"next_candidate": {"choice": selected, "confidence": 0.1 if self.mode == "low" else 0.95}}, "usage": {"input_tokens": 5, "output_tokens": 1, "cost": 0.0001}}
+
+
+@pytest.mark.asyncio
+async def test_one_tester_request_delegates_dynamic_form_to_jev_and_finishes(phase2_store: StateStore) -> None:
+    selector = GoalJevClient()
+    runtime = build_runtime(phase2_store, make_budget(), selector)  # type: ignore[arg-type]
+    runtime.input_values = {"project_name": "Example", "env:PROJECT_SECRET": "never-return-this", "visibility": "Public"}
+    runtime.expected_behavior_ids = ("EB-create",)
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body=GOAL_HTML))
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="admin", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+
+    class GoalTesterClient(FunctionInvocationLayer, BaseChatClient):
+        def __init__(self) -> None:
+            self.call_count = 0
+            super().__init__()
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.call_count += 1
+            assert self.call_count == 1, "Page decisions and final completion must not call Tester again"
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("goals-1", "execute_page_goals", arguments={"goals": [{"goal": "Create a public project", "inputs": [{"control": "Project name", "value_reference": "project_name"}, {"control": "Project secret", "value_reference": "env:PROJECT_SECRET"}, {"control": "Visibility", "value_reference": "visibility"}], "checks": [{"action_type": "assertion", "target": "#status", "assertion": "equals", "expected": "Created Example", "behavior_id": "EB-create"}]}], "finish": True})])])
+
+    client = GoalTesterClient()
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/projects"))
+        await create_tester_agent(client=client, assignment=assignment, tools=tools).run("Create the assigned project")
+        assert runtime.task_finished
+        assert client.call_count == 1
+        assert len(selector.states) == 6
+        assert await page.locator("#status").inner_text() == "Created Example"
+        assert all("never-return-this" not in str(state) for state in selector.states)
+        assert all(not any("External" in candidate["label"] for candidate in state["legal_candidates"]) for state in selector.states)
+        events = phase2_store.list_events("run-1")
+        assert len([event for event in events if event["event_type"] == "JEV_CALL"]) == 6
+        assert len([event for event in events if event["event_type"] == "PAGE_GOAL_ACTION"]) == 5
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,reason", [("low", "LOW_JEV_CONFIDENCE"), ("illegal", "ILLEGAL_CANDIDATE_ID"), ("limit", "PAGE_GOAL_STEP_LIMIT")])
+async def test_page_goal_failure_returns_without_finishing_or_asserting(phase2_store: StateStore, mode: str, reason: str) -> None:
+    selector = GoalJevClient(mode)
+    runtime = build_runtime(phase2_store, make_budget(), selector)  # type: ignore[arg-type]
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body=GOAL_HTML))
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/projects"))
+        result = await runtime.execute_page_goal("Create project", max_steps=1)
+        assert result["reason"] == reason
+        assert not result["success"]
+        assert not runtime.task_finished
+        assert not any(action["action"] == "assertion" for action in phase2_store.list_action_history(run_id="run-1", task_id="task-1"))
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_jev_stop_is_local_and_cannot_declare_task_success(phase2_store: StateStore) -> None:
+    selector = GoalJevClient()
+    runtime = build_runtime(phase2_store, make_budget(), selector)  # type: ignore[arg-type]
+    runtime.expected_behavior_ids = ("EB-create",)
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body="<p>Created Example</p>"))
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/projects"))
+        result = await runtime.execute_page_goal("Inspect created project")
+        assert result["success"] and result["actions"] == []
+        assert not runtime.task_finished
+        assert (await runtime.record_task_outcome())["success_status"] == "UNKNOWN"
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_page_goal_filters_other_accounts_and_revalidates_changed_page(phase2_store: StateStore) -> None:
+    class MemberJevClient:
+        def __init__(self) -> None:
+            self.states: list[Mapping[str, Any]] = []
+
+        def predict(self, state: Mapping[str, Any], questions: Mapping[str, Any]) -> Mapping[str, Any]:
+            self.states.append(state)
+            candidate = next(candidate for candidate in state["legal_candidates"] if candidate["action"] == "click" and "Edit" in candidate["label"])
+            return {"answers": {"next_candidate": {"choice": candidate["id"], "confidence": 0.95}}}
+
+    selector = MemberJevClient()
+    runtime = build_runtime(phase2_store, make_budget(), selector)  # type: ignore[arg-type]
+    runtime.input_values = {"admin_username": "admin", "invited_username": "member2", "member_username": "member"}
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    html = """<table id="members"><thead><tr><th>Username</th><th>Role</th><th>Actions</th></tr></thead><tbody>
+    <tr data-username="admin"><td>admin</td><td>admin</td><td><button onclick="this.textContent='Wrong'">Edit</button></td></tr>
+    <tr data-username="member"><td>member</td><td>member</td><td><button onclick="this.textContent='Wrong'">Edit</button></td></tr>
+    <tr data-username="member2"><td>member2</td><td>member</td><td><button onclick="this.textContent='Correct'">Edit</button></td></tr></tbody></table>"""
+    await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body=html))
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/members"))
+        result = await runtime.execute_page_goal("Edit invited member", context="member2", max_steps=1)
+        assert result["reason"] == "PAGE_GOAL_STEP_LIMIT"
+        assert await page.locator('tr[data-username="member2"] button').inner_text() == "Correct"
+        assert await page.locator('tr[data-username="admin"] button').inner_text() == "Edit"
+        candidates = selector.states[0]["legal_candidates"]
+        assert all('data-username="member2"' in candidate["target"] for candidate in candidates if candidate["target"])
+        await page.locator('tr[data-username="member2"] button').evaluate("element => element.textContent='Edit'")
+        select = runtime.jev_selector.select
+
+        async def change_page(**kwargs: Any) -> Any:
+            selection = await select(**kwargs)
+            await page.locator("body").evaluate("element => element.insertAdjacentHTML('beforeend','<button>New state</button>')")
+            return selection
+
+        runtime.jev_selector.select = change_page  # type: ignore[method-assign]
+        stale = await runtime.execute_page_goal("Edit invited member", context="member2", max_steps=1)
+        assert stale["reason"] == "CANDIDATE_EXPIRED"
+        assert await page.locator('tr[data-username="member2"] button').inner_text() == "Edit"
+    finally:
+        await runtime.browser_manager.close()
 
 
 class FakeJevClient:
@@ -396,8 +546,6 @@ async def test_context_budget_exhaustion_records_stop_before_browser_start(
 
 @pytest.mark.asyncio
 async def test_semantic_steps_execute_in_one_model_request_and_record_failed_check_before_next_action(phase2_store: StateStore) -> None:
-    from collections.abc import Sequence
-
     from agent_framework import BaseChatClient, ChatResponse, Content, Message
     from agent_framework._tools import FunctionInvocationLayer
 
@@ -577,8 +725,6 @@ async def test_modal_binding_column_assertions_and_duplicate_checks(phase2_store
 
 @pytest.mark.asyncio
 async def test_prepared_login_handoff_finishes_with_one_fake_model_call_and_keeps_replay_references(phase2_store: StateStore) -> None:
-    from collections.abc import Sequence
-
     from agent_framework import BaseChatClient, ChatResponse, Content, Message
     from agent_framework._tools import FunctionInvocationLayer
 

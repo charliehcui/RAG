@@ -50,8 +50,8 @@ class JevSelector:
             return JevSelection(selected_candidate_id=None, confidence=0, latency_ms=0, cost=0, error="NO_CANDIDATES")
         state = {
             "current_goal": current_goal,
-            "page_state": page_state.selection_summary(),
-            "legal_candidates": [{"id": candidate.candidate_id, "action": candidate.action, "label": candidate.label, "target": candidate.target} for candidate in candidates],
+            "page_state": {**page_state.selection_summary(), "text": page_state.visible_dom[:2500]},
+            "legal_candidates": [{"id": candidate.candidate_id, "action": candidate.action, "label": candidate.label, "target": candidate.target, "value_reference": candidate.value_reference} for candidate in candidates],
         }
         questions = {"next_candidate": {"type": "choice", "instructions": "Choose the legal candidate that best advances `current_goal`.", "criteria": {candidate.candidate_id: f"{candidate.action}: {candidate.label}" for candidate in candidates}}}
         try:

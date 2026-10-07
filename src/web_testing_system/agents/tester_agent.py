@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from time import perf_counter
 from typing import Any, Literal
 from uuid import uuid4
@@ -62,6 +62,23 @@ class PageStep:
     wait_ms: int = 0
 
 
+@dataclass
+class PageInput:
+    control: str
+    value_reference: str
+    context: str = ""
+
+
+@dataclass
+class PageGoal:
+    """A business subgoal; Jev chooses its page operations, not its expected behavior."""
+    goal: str
+    inputs: list[PageInput] = field(default_factory=list)
+    checks: list[PageStep] = field(default_factory=list)
+    context: str = ""
+    max_steps: int = 12
+
+
 class TesterAgentTools:
     def __init__(
         self,
@@ -86,6 +103,34 @@ class TesterAgentTools:
         self.task_context = task_context or {}
         if task_context is not None:
             self.task_context["test_inputs"] = {reference: value for reference, value in runtime.input_values.items() if not reference.startswith("env:")}
+
+    async def execute_page_goals(self, goals: list[PageGoal], related_task_ids: list[str] | None = None, finish: bool = False) -> dict[str, Any]:
+        """Delegate business subgoals to Jev/Playwright in one call. Provide field references and assertions, not click sequences. Jev stops each subgoal locally; Python runs checks and determines Task success."""
+        goals = TypeAdapter(list[PageGoal]).validate_python(goals)
+        for goal in goals:
+            if not goal.goal.strip() or not 1 <= goal.max_steps <= 30:
+                return {"success": False, "error_type": "INVALID_PAGE_GOAL"}
+            for binding in goal.inputs:
+                if not binding.control.strip() or binding.value_reference not in self.runtime.input_values:
+                    return {"success": False, "error_type": "INPUT_VALUE_UNAVAILABLE"}
+            for check in goal.checks:
+                if check.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK}:
+                    return {"success": False, "error_type": "PAGE_GOAL_CHECK_REQUIRES_ASSERTION"}
+        results: list[dict[str, Any]] = []
+        for index, goal in enumerate(goals):
+            operations = await self.runtime.execute_page_goal(goal.goal, inputs=[asdict(binding) for binding in goal.inputs], context=goal.context, max_steps=goal.max_steps)
+            result: dict[str, Any] = {"goal": index, "operations": operations}
+            results.append(result)
+            if not operations["success"]:
+                return {"success": False, "failed_goal": index, "results": results, "page": await self._page_summary()}
+            if goal.checks:
+                checks = await self.execute_page_steps(goal.checks, related_task_ids=related_task_ids)
+                result["checks"] = checks["results"]
+                if not checks["success"]:
+                    return {"success": False, "failed_goal": index, "results": results, "page": checks.get("page", {})}
+        if finish:
+            return {"success": True, "results": results, "outcome": await self.finish_task()}
+        return {"success": True, "results": results, "page": await self._page_summary()}
 
     async def execute_page_steps(self, steps: list[PageStep], related_task_ids: list[str] | None = None, finish: bool = False) -> dict[str, Any]:
         """Execute ordered semantic steps; resolve controls with Playwright/Jev. Inputs require references. Assertion failures are recorded immediately and execution continues; other failures stop the batch. finish=True checks and finishes the Task."""
@@ -506,7 +551,8 @@ def create_tester_agent(
         instructions = (
             "You are a Tester. Decide what to test and what the expected application behavior means. Work only on your assigned Task and identity. "
             "Read the supplied Initial Page and preparation status. Python has already navigated, inspected, and prepared an existing account login when possible. Do not repeat successful setup. "
-            "Prefer ONE execute_page_steps call for the whole workflow, including operations, checks, refresh and finish=True. Inspect again only if a batch cannot resolve a control. "
+            "Prefer ONE execute_page_goals call with a few business subgoals and finish=True. Each goal states the desired operation, inputs bind human field labels to value_reference, context identifies the exact entity, and checks describe expected outcomes. Jev chooses navigation, fields and buttons from the actual page and Playwright executes them. Do not write click sequences or individual action decisions for Jev. "
+            "Keep goals short and specific, e.g. create a project, edit that project's name, delete that project. Use separate goals for operations needing different values in the same field. Put immediate result checks on their operation goal; use execute_page_steps for special boundary actions such as refresh or repeat_submit and their checks. Inspect again only if delegation reports a missing control or other failure. "
             "PageStep control is a human control label, and context is text from its surrounding form or row. Python resolves unique exact controls; Jev resolves ambiguity. You do not need numeric positions or CSS for future controls. "
             "For example: input control='Login username' value_reference=<username key>, input control='Login password' value_reference=<secret_reference>, click control='Login'. "
             "For Edit/Delete/Remove use context=<the exact entity row text/name or observed ID> to distinguish repeated buttons. In a dialog use control='Edit value' and control='Save'; background controls are unavailable. "
@@ -517,7 +563,7 @@ def create_tester_agent(
             "Assert the immediate result and persistence where required. For a saved table field use action_type='assertion', control=<actual column heading, e.g. Name>, context=<entity name/observed ID>, assertion='equals', expected_reference=<saved value key>, behavior_id=<assigned ID>. Python binds the actual cell. "
             "Check assigned entities; parallel Tasks can create unrelated rows. For count use a target matching every relevant row, not a control selecting one cell. Compare existing entity IDs/names rather than unrelated global row counts. Use wait_ms for a short wait, never a numeric target. "
             "Use repeat_submit with the observed same-origin submission URL to establish two requests for the SAME pending form submission; two ordinary clicks after completion are a different test. "
-            "Failed goal assertions create an early Finding and evidence immediately; finish all remaining applicable checks. Python alone determines Task success and deterministic replay verifies bugs. "
+            "Failed goal assertions create an early Finding and evidence immediately; finish all remaining applicable checks. Check a changed state only after its prerequisite operation succeeded; missing setup is not an application bug. Python alone determines Task success and deterministic replay verifies bugs. "
             "Do not duplicate auto-created Findings, claim confirmed bugs, repeat a failed check without a new reason, or spend model turns on each fill/click. "
             "Read shared facts only for necessary setup/collaboration. Include related_task_ids in execute_page_steps for prerequisites outside your Task. "
             "Publish live-session readiness with update_task_progress; use wait_for_shared_progress for another participant's signal instead of model polling. "
@@ -529,6 +575,7 @@ def create_tester_agent(
         instructions += " For unknown paths, inspect explore_unknown_path candidates and select exactly one ID with select_candidate."
     exposed_tools = [tools.execute_known_action, tools.explore_unknown_path, tools.read_shared_facts, tools.record_finding, tools.record_observation, tools.update_task_progress, tools.request_replan, tools.finish_task, tools.read_test_data]
     if tools.decision_policy == "JEV" and tools.action_policy == "PLAYWRIGHT":
+        exposed_tools.insert(0, tools.execute_page_goals)
         exposed_tools.insert(0, tools.execute_page_steps)
         exposed_tools.append(tools.wait_for_shared_progress)
     else:

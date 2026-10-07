@@ -46,6 +46,10 @@ class OpenRouterChatClient(OpenAIChatCompletionClient):
         properties = dict(parsed.additional_properties or {})
         properties["cost"] = getattr(response.usage, "cost", None)
         properties["served_provider"] = getattr(response, "provider", None)
+        details = getattr(response.usage, "completion_tokens_details", None)
+        properties["reasoning_tokens"] = getattr(details, "reasoning_tokens", None)
+        properties["finish_reasons"] = [choice.finish_reason for choice in response.choices]
+        properties["tool_argument_characters"] = sum(len(call.function.arguments) for choice in response.choices for call in choice.message.tool_calls or [] if call.type == "function")
         parsed.additional_properties = properties
         return parsed
 
@@ -116,7 +120,7 @@ class ProviderUsageMiddleware(ChatMiddleware):
             if self.budget is not None:
                 self.budget.record_llm_call(input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, cost=cost)
             self.store.update_budget(budget_id=self.budget_id, input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, estimated_cost=cost)
-            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool=self.provider, action="provider_request", result={"agent": self.agent, "phase": self.phase, "provider": self.provider, "model": model, "success": error_name is None, "error_type": error_name, "input_tokens": input_tokens, "output_tokens": output_tokens, "usage_source": "provider" if usage is not None else "unavailable", "requested_provider": self.fixed_provider, "served_provider": served_provider, "cost_known": cost_known}, latency_ms=latency_seconds * 1_000, cost=cost)
+            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool=self.provider, action="provider_request", result={"agent": self.agent, "phase": self.phase, "provider": self.provider, "model": model, "success": error_name is None, "error_type": error_name, "input_tokens": input_tokens, "output_tokens": output_tokens, "reasoning_tokens": properties.get("reasoning_tokens"), "tool_argument_characters": properties.get("tool_argument_characters"), "finish_reasons": properties.get("finish_reasons"), "usage_source": "provider" if usage is not None else "unavailable", "requested_provider": self.fixed_provider, "served_provider": served_provider, "cost_known": cost_known}, latency_ms=latency_seconds * 1_000, cost=cost)
 
 
 def _create_chat_client(settings: Settings, *, model: str, provider: str, usage: ProviderUsageMiddleware | None) -> BaseChatClient:

@@ -12,7 +12,7 @@ SENSITIVE_NAME_PARTS = ("api_key", "authorization", "cookie", "password", "secre
 
 def is_sensitive_name(name: str) -> bool:
     normalized_name = name.lower().replace("-", "_")
-    if normalized_name in {"input_tokens", "output_tokens", "max_input_tokens", "max_output_tokens", "llm_input_tokens", "llm_output_tokens", "input_token_count", "output_token_count", "total_token_count"}:
+    if normalized_name in {"input_tokens", "output_tokens", "reasoning_tokens", "max_input_tokens", "max_output_tokens", "llm_input_tokens", "llm_output_tokens", "input_token_count", "output_token_count", "total_token_count", "tester_recorded_tokens", "tester_tokens_per_task"}:
         return False
     return any(part in normalized_name for part in SENSITIVE_NAME_PARTS)
 

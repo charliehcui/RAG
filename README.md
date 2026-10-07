@@ -90,3 +90,9 @@ Optional visual actions also use paid OpenRouter. Leave COMPUTER_USE_MODEL empty
 Tests use Fake/Mock providers and local browsers, including a formal-entry E2E smoke test. They do not execute a formal evaluation dataset or call paid models. Real OpenRouter endpoint verification is a separately invoked minimal smoke test.
 
 The demo has B1-B6 switches, disabled by default. POST /test/reset is available only in testing mode. Ground Truth remains isolated until after a run. Formal Evaluation still requires existing gates and explicit enablement; FULL_EVALUATION=false remains the default.
+
+## Evaluation and optimization records
+
+[Benchmark history](evaluation/benchmark_history.md) records the initial Baseline and later formal Benchmark results. Retained changes are documented in [Tester optimization](evaluation/optimization/tester_optimization.md) and [Main optimization](evaluation/optimization/main_optimization.md). The dataset and post-run answers remain in evaluation/scenarios.json and evaluation/ground_truth.json.
+
+artifacts/ is an ignored runtime output directory. Its databases, reports, summaries and evidence can be cleared after the useful formal numbers have been recorded in benchmark_history.md; historical runs are not maintained there.

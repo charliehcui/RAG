@@ -74,7 +74,7 @@ async def test_provider_pin_usage_and_no_automatic_fallback(tmp_path: Path, monk
         requests.append(body)
         if fail:
             return httpx.Response(503, json={"error": {"message": "endpoint unavailable", "code": 503}})
-        return httpx.Response(200, json={"id": "response-1", "object": "chat.completion", "created": 1, "model": "deepseek/deepseek-v4-flash", "provider": "StreamLake", "choices": [{"index": 0, "message": {"role": "assistant", "content": "ready"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 17, "completion_tokens": 5, "total_tokens": 22, "cost": 0.00023}})
+        return httpx.Response(200, json={"id": "response-1", "object": "chat.completion", "created": 1, "model": "deepseek/deepseek-v4-flash", "provider": "StreamLake", "choices": [{"index": 0, "message": {"role": "assistant", "content": "ready"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 17, "completion_tokens": 5, "completion_tokens_details": {"reasoning_tokens": 3}, "total_tokens": 22, "cost": 0.00023}})
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     real_constructor = AsyncOpenAI
@@ -100,6 +100,9 @@ async def test_provider_pin_usage_and_no_automatic_fallback(tmp_path: Path, monk
     assert [event["result"]["success"] for event in events] == [True, False]
     assert events[0]["cost"] == 0.00023
     assert events[0]["result"]["served_provider"] == "StreamLake"
+    assert events[0]["result"]["reasoning_tokens"] == 3
+    assert events[0]["result"]["finish_reasons"] == ["stop"]
+    assert events[1]["result"]["reasoning_tokens"] is None
     report = FinalReportBuilder(store).build("provider-run")
     assert report["cost_and_performance"]["llm_input_tokens"] == 17
     assert report["cost_and_performance"]["cost_status"] == "INCOMPLETE"
