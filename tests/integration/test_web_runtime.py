@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -795,4 +796,164 @@ async def test_removed_member_assertion_does_not_bind_to_member2(phase2_store: S
         assert result.action_result is not None and result.action_result.success
         assert result.candidate is not None and 'data-username="member"' in str(result.candidate.target)
     finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["normal", "exception", "assertion_failure", "infrastructure_failure"])
+async def test_complete_plan_keeps_multiple_goals_inside_jev_and_replans_only_on_exception(phase2_store: StateStore, mode: str) -> None:
+    from web_testing_system.agents.tester_agent import TesterRunner
+
+    class PlanJev(GoalJevClient):
+        def predict(self, state: Mapping[str, Any], questions: Mapping[str, Any]) -> Mapping[str, Any]:
+            if mode == "infrastructure_failure":
+                raise TimeoutError("unavailable selector")
+            if state["current_goal"].startswith("Review the created project"):
+                failed = mode == "exception" and not any(item["current_goal"].startswith("Review the created project") for item in self.states)
+                self.states.append(state)
+                action = "stop_current_path" if "Reviewed Example" in state["page_state"]["text"] else "click"
+                candidate = next(item for item in state["legal_candidates"] if item["action"] == action and (action == "stop_current_path" or item["label"].startswith("Review Project")))
+                return {"answers": {"next_candidate": {"choice": candidate["id"], "confidence": 0.1 if failed else 0.95}}, "usage": {"input_tokens": 5, "output_tokens": 1, "cost": 0.0001}}
+            return super().predict(state, questions)
+
+    create_goal = {"goal": "Create a public project", "inputs": [{"control": "Project name", "value_reference": "project_name"}, {"control": "Project secret", "value_reference": "env:PROJECT_SECRET"}, {"control": "Visibility", "value_reference": "visibility"}], "checks": [{"action_type": "assertion", "target": "#status", "assertion": "equals", "expected": "Unexpected" if mode == "assertion_failure" else "Created Example", "behavior_id": "EB-create"}]}
+    review_goal = {"goal": "Review the created project", "checks": [{"action_type": "assertion", "target": "#status", "assertion": "equals", "expected": "Reviewed Example", "behavior_id": "EB-review"}], "after_steps": [{"action_type": "wait", "wait_ms": 1}, {"action_type": "assertion", "target": "#status", "assertion": "equals", "expected": "Reviewed Example", "behavior_id": "EB-review"}], "publish_progress": "review-complete"}
+
+    class PlanClient(FunctionInvocationLayer, BaseChatClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.calls += 1
+            assert self.calls <= (2 if mode == "exception" else 1), "Normal goal boundaries, assertions and API errors must not call Tester again"
+            if self.calls == 1:
+                assert options["tool_choice"] == {"mode": "required", "required_function_name": "execute_test_plan"}
+            assert "never-return-this" not in "\n".join(message.text for message in messages)
+            goals = [create_goal, review_goal] if self.calls == 1 else [review_goal]
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call(f"plan-{self.calls}", "execute_test_plan", arguments={"goals": goals})])], usage_details={"input_token_count": 10, "output_token_count": 5})
+
+    selector = PlanJev()
+    runtime = build_runtime(phase2_store, make_budget(), selector)  # type: ignore[arg-type]
+    runtime.input_values = {"project_name": "Example", "env:PROJECT_SECRET": "never-return-this", "visibility": "Public"}
+    runtime.expected_behavior_ids = ("EB-create", "EB-review")
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    html = GOAL_HTML + '<button onclick="document.querySelector(\'#status\').textContent=\'Reviewed Example\'">Review Project</button>'
+    await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body=html))
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="admin", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+    client = PlanClient()
+    runner = TesterRunner(agent=create_tester_agent(client=client, assignment=assignment, tools=tools), assignment=assignment, runtime=runtime, store=phase2_store, budget=runtime.budget, budget_id="budget-1")
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/projects"))
+        await runner.ask_tester_llm("Execute assigned Task task-1: create and review a public project")
+        assert runtime.task_finished
+        assert client.calls == (2 if mode == "exception" else 1)
+        plans = phase2_store.list_events("run-1", event_types=("TESTER_PLAN",))
+        assert [event["action"] for event in plans] == (["initial_plan", "exception_replan"] if mode == "exception" else ["initial_plan"])
+        if mode == "infrastructure_failure":
+            assert phase2_store.get_task("task-1")["status"] == "STOPPED"  # type: ignore[index]
+            assert not phase2_store.list_recent_findings("run-1")
+        else:
+            task = phase2_store.get_task("task-1")
+            assert task is not None and len(task["assertion_results"]) == 3
+            assert {check["behavior_id"] for check in task["assertion_results"]} == {"EB-create", "EB-review"}
+            assert len(phase2_store.list_recent_findings("run-1")) == (1 if mode == "assertion_failure" else 0)
+            assert sum(item["action"] == "input" for item in phase2_store.list_action_history(run_id="run-1", task_id="task-1")) == 2
+            assert any(event["result"].get("summary") == "review-complete" for event in phase2_store.list_events("run-1", event_types=("TASK_PROGRESS",)))
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_complete_plan_rejects_missing_checks_and_individual_action_sequences_before_execution(phase2_store: StateStore) -> None:
+    from web_testing_system.agents.tester_agent import PageGoal, PageStep
+
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    runtime.expected_behavior_ids = ("EB-check",)
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="admin", data_namespace="test", scope=("http://app.test/",), step_budget=20)
+    tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store)
+    result = await tools.execute_test_plan([PageGoal("Read the page")])
+    assert result["reason"] == "INCOMPLETE_TEST_PLAN"
+    assert result["missing_behavior_ids"] == ["EB-check"]
+    invalid = await tools.execute_test_plan([PageGoal("Click instead of delegating", before_steps=[PageStep(ActionType.CLICK, target="#open")], checks=[PageStep(ActionType.ASSERTION, target="#status", behavior_id="EB-check")])])
+    assert invalid["reason"] == "PLAN_BOUNDARY_ACTION_REQUIRED"
+    assert not phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_complete_plan_preserves_pending_submit_input_references_and_native_replay(phase2_store: StateStore, enabled: bool) -> None:
+    from demo_app import DemoAppServer, SeededBugs
+    from web_testing_system.agents.tester_agent import TesterRunner
+    from web_testing_system.evidence import EvidenceStore
+    from web_testing_system.findings import FindingService, ScreeningSignals
+    from web_testing_system.reproduction import ReplayPlanBuilder, ReproductionRunner
+    from web_testing_system.reproduction.replay import DeterministicReplay
+    from web_testing_system.verification import VerificationRunner
+
+    class PendingPlanClient(FunctionInvocationLayer, BaseChatClient):
+        def __init__(self, target_url: str) -> None:
+            super().__init__()
+            self.calls = 0
+            self.target_url = target_url
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.calls += 1
+            assert self.calls == 1, str(messages[-1])[:4000]
+            assert "demo-member2" not in "\n".join(message.text for message in messages)
+            goal = {"goal": "Prepare one pending project submission", "inputs": [{"control": "Project name", "value_reference": "project_name"}], "after_steps": [{"action_type": "repeat_submit", "target": "#project-submit", "url": self.target_url + "/api/projects"}, {"action_type": "wait", "target": '#projects-table .project-name:text-is("repeat-plan")'}, {"action_type": "assertion", "target": '#projects-table .project-name:text-is("repeat-plan")', "assertion": "count", "expected": "1", "behavior_id": "EB-submit"}]}
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("pending-plan", "execute_test_plan", arguments={"goals": [goal]})])])
+
+    replay_manager: BrowserManager | None = None
+    runtime = build_runtime(phase2_store, make_budget(), GoalJevClient())  # type: ignore[arg-type]
+    runtime.input_values = {"member2_username": "member2", "env:TEST_PASSWORD": "demo-member2", "project_name": "repeat-plan"}
+    runtime.expected_behavior_ids = ("EB-submit",)
+    runtime.executor.identity_reference = "member2"
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("/",), step_budget=20)
+    try:
+        with DemoAppServer(bugs=SeededBugs(b5_double_submit_duplicates=enabled)) as app:
+            runtime.executor.permission_checker.policy = ExecutionPolicy(allowed_url_prefixes=(app.base_url + "/",))
+            tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store, task_context={"identity_reference": "member2", "secret_reference": "env:TEST_PASSWORD", "required_operations": ["create"]})
+            client = PendingPlanClient(app.base_url)
+            runner = TesterRunner(agent=create_tester_agent(client=client, assignment=assignment, tools=tools), assignment=assignment, runtime=runtime, store=phase2_store, budget=runtime.budget, budget_id="budget-1", prepare_task_page=True)
+            await runtime.start_session()
+            await runner.execute_known(WebAction(action_type=ActionType.NAVIGATION, url=app.base_url))
+            await runner.ask_tester_llm("Execute assigned Task task-1: test one repeated pending project submission")
+            assert client.calls == 1 and runtime.task_finished
+            history = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+            repeated = [item for item in history if item["action"] == "repeat_submit"]
+            assert len(repeated) == 1
+            requests = repeated[0]["result"]["data"]["requests"]
+            assert len(requests) == 2 and requests[0]["submission_id"] == requests[1]["submission_id"]
+            assert len({item["response_data"]["project"]["project_id"] for item in requests}) == (2 if enabled else 1)
+            assert "demo-member2" not in json.dumps(history)
+            assert [item["action_data"]["value_reference"] for item in history if item["action"] == "input"] == ["member2_username", "env:TEST_PASSWORD", "project_name"]
+            findings = phase2_store.list_recent_findings("run-1")
+            assert len(findings) == (1 if enabled else 0)
+            if enabled:
+                finding_id = str(findings[0]["finding_id"])
+                service = FindingService(phase2_store, "run-1")
+                service.screen(finding_id, ScreeningSignals())
+                boundary = next(event["result"]["boundary_event_id"] for event in phase2_store.list_events("run-1", event_types=("FINDING_CREATED",)) if event["result"]["finding_id"] == finding_id)
+                build = ReplayPlanBuilder(phase2_store).from_action_history(run_id="run-1", task_id="task-1", input_values=runtime.input_values, through_event_id=boundary, identity_values={"member2": runtime.input_values}, identity_references={"identity-1": "member2"})
+                assert build.plan is not None, build.reason
+                root = phase2_store.database_path.parent
+                evidence = EvidenceStore(store=phase2_store, artifacts_root=root / "runs", temporary_sensitive_root=root / "temporary", secrets=("demo-member2",))
+                replay_budget = BudgetGuard(BudgetLimits(max_runtime_seconds=60, max_llm_calls=0, max_input_tokens=0, max_output_tokens=0, max_jev_calls=0, max_computer_use_calls=0, max_task_steps=80, max_task_replans=0, max_browser_contexts=1))
+                replay_manager = BrowserManager(replay_budget)
+                replay = DeterministicReplay(store=phase2_store, browser_manager=replay_manager, executor=runtime.executor, evidence_store=evidence, budget=replay_budget, budget_id="budget-1")
+
+                async def reset() -> None:
+                    app.state.reset()
+
+                reproduced = await ReproductionRunner(store=phase2_store, finding_service=service, replay=replay).run(finding_id=finding_id, plan=build.plan, max_attempts=2, stable_successes=2, max_minimization_attempts=0, reset_hook=reset)
+                assert reproduced.status == "REPRODUCED", [(attempt.reason, [(build.plan.steps[index].action_type.value, build.plan.steps[index].target, result["error_type"], result["error"]) for index, result in enumerate(attempt.action_results) if result["error_type"] and result["error_type"] != "ASSERTION_FAILURE"]) for attempt in reproduced.attempts]
+                verified = await VerificationRunner(store=phase2_store, finding_service=service, replay=replay).run(finding_id=finding_id, plan=build.plan, reset_hook=reset)
+                assert verified.result == "FAIL"
+                assert phase2_store.get_finding(finding_id)["status"] == "CONFIRMED_BUG"  # type: ignore[index]
+    finally:
+        if replay_manager is not None:
+            await replay_manager.close()
         await runtime.browser_manager.close()

@@ -176,7 +176,7 @@ class WebTestingRuntime:
                 return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
             return await self._explore_unknown_path(current_goal)
 
-    async def execute_page_goal(self, goal: str, *, inputs: Sequence[Mapping[str, str]] = (), context: str = "", max_steps: int = 12) -> dict[str, Any]:
+    async def execute_page_goal(self, goal: str, *, inputs: Sequence[Mapping[str, str]] = (), context: str = "", max_steps: int = 12, stop_after_inputs: bool = False) -> dict[str, Any]:
         """Keep page decisions inside Jev; return to Tester only at a goal boundary or failure."""
         async with self.page_lock:
             if self.task_finished:
@@ -189,7 +189,7 @@ class WebTestingRuntime:
             actions: list[dict[str, Any]] = []
             completed_inputs: set[int] = set()
             excluded: set[str] = set()
-            for _ in range(max_steps):
+            for step_index in range(max_steps):
                 try:
                     await session.page.wait_for_load_state("networkidle", timeout=2_000)
                 except PlaywrightTimeoutError:
@@ -229,6 +229,8 @@ class WebTestingRuntime:
                     return {"success": False, "reason": "NO_NEW_LEGAL_ACTIONS", "pending_inputs": pending, "actions": actions}
                 current_goal = f"{goal}\nEntity context: {context}\nPending fields: {json.dumps(pending)}\nAlready executed in this subgoal: {json.dumps(actions)}\nChoose the next operation, or stop when the requested operations are complete. Never repeat an already executed operation."
                 decision = await self._select_and_execute(current_goal, page_state, candidates)
+                if decision.reason == "CANDIDATE_EXPIRED" and step_index + 1 < max_steps:
+                    continue
                 if decision.reason == "STOP_CURRENT_PATH":
                     return {"success": True, "reason": "PAGE_GOAL_STOPPED", "actions": actions}
                 if decision.action_result is None or not decision.action_result.success:
@@ -241,6 +243,8 @@ class WebTestingRuntime:
                     completed_inputs.add(input_candidates[candidate.candidate_id])
                 actions.append({"action": candidate.action, "control": candidate.label, "value_reference": candidate.value_reference})
                 self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PAGE_GOAL_ACTION", tool="TesterPageGoals", action=candidate.action, result={"source": decision.source, "success": True, "browser_event_id": decision.action_result.event_id}, latency_ms=0)
+                if stop_after_inputs and inputs and len(completed_inputs) == len(inputs):
+                    return {"success": True, "reason": "INPUTS_READY_FOR_PENDING_SUBMISSION", "actions": actions}
             return {"success": False, "reason": "PAGE_GOAL_STEP_LIMIT", "actions": actions}
 
     async def _explore_unknown_path(self, current_goal: str) -> DecisionResult:

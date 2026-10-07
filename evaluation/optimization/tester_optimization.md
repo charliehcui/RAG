@@ -1,14 +1,14 @@
 # Tester Optimization
 
-状态：已有实现和本地验证，正式优化尚未完成。完整基线（Baseline）见 [Benchmark History](../benchmark_history.md)。
+状态：完整计划执行已实现并通过本地验证；代表性真实验证因工具选择兼容性问题中止，正式优化尚未完成。完整基线（Baseline）见 [Benchmark History](../benchmark_history.md)。
 
 这里只记录已实现的优化方向。本地验证数字说明执行路径，不能与完整基线（Baseline）直接相减计算性能收益；成熟版本的正式数字统一记录到基准历史（Benchmark History）。
 
-## 页面子目标委托给 Jev + Playwright
+## 一次完整测试计划，异常时重新规划
 
-- Problem：Tester 在页面操作和重复检查上消耗过多大语言模型请求（LLM Requests），即使批量提交步骤，仍需要生成较长的具体操作序列。
-- Why：原有批处理主要合并工具调用，字段、选择器和点击顺序仍由 Tester 决定，页面决策没有交给 Jev。
-- Change：已实现 `PageGoal`、`PageInput` 和 `execute_page_goals`，由 Tester 提供业务子目标、输入引用和断言，Jev 连续选择合法操作，Playwright 执行；同时保留精确实体绑定、候选重新验证、输入引用和 Python 实际断言，刷新及重复提交等边界操作继续使用 `execute_page_steps`。
-- Before：正式基线（Baseline）的 Tester 请求数为 34.588 次/任务，平均任务耗时为 192.068 秒。
-- After：已有本地假模型（Fake/Mock）验证记录为 1 次 Tester 请求、6 次 Jev 决策、5 次页面操作及最终断言；成熟版本的完整任务成功率、耗时、Token 和费用结果尚未完成，记为 N/A。
-- Final Decision：当前暂时保留该方向，正式基准（Benchmark）完成前不视为最终方案。
+- Problem：子目标执行仍可能返回 Tester，单步工具也允许模型继续决定页面动作，没有强制先提交覆盖整个任务的测试计划。
+- Why：原接口只委托局部操作，计划完整性、子目标之间的推进和异常后的恢复没有统一放在一次执行中。
+- Change：新增 `execute_test_plan`，先检查全部指定行为的断言覆盖，再连续执行完整计划；Jev 决定页面动作，Playwright 执行，Python 记录断言与 Finding。页面变化由 Jev 重新观察，真正阻塞时才重新规划，保留已完成检查并复用既有两次重新规划预算。重复提交仍建立同一待完成操作的两个请求，输入引用、确定性回放（deterministic replay）、安全检查和 LangSmith 追踪（tracing）继续保留。
+- Before：正式基线（Baseline）为 34.588 次 Tester 请求/任务、192.068 秒平均任务耗时、23.53% 任务成功率（8/34）；已记录 Token/任务下界为 552,489.059。
+- After：18 个受影响的本地测试用例分批通过；假模型（Fake/Mock）的正常流程用一次 Tester 请求完成两个子目标及三个断言，异常流程用两次请求且不重复已完成目标；重复提交缺陷经过两次匹配复现和独立验证。预定 D02/D05/D14 的一轮真实验证在 D02 首个 Tester 请求时被 OpenRouter 404 拒绝：固定 Relace 路由不支持新增的命名 `tool_choice`。Jev 未执行，D05/D14 未启动，没有补跑；正式请求数、Token、耗时及质量收益均为 N/A。
+- Final Decision：暂时保留完整计划与异常重新规划方向，当前命名工具选择与固定供应商（Provider）的兼容性问题尚未解决；本轮按 API 失败停止规则终止，不再修改或重新运行真实验证，不能视为最终成功方案，也未达到优化停止条件。完整 16 个用例的最终基准（Benchmark）未运行。

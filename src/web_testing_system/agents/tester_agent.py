@@ -77,6 +77,11 @@ class PageGoal:
     checks: list[PageStep] = field(default_factory=list)
     context: str = ""
     max_steps: int = 12
+    before_steps: list[PageStep] = field(default_factory=list)
+    after_steps: list[PageStep] = field(default_factory=list)
+    run_operations: bool = True
+    wait_for_progress: str | None = None
+    publish_progress: str | None = None
 
 
 class TesterAgentTools:
@@ -100,6 +105,9 @@ class TesterAgentTools:
         self.pending_candidates: dict[str, ActionCandidate] = {}
         self.pending_page_state: PageState | None = None
         self.pending_goal: str | None = None
+        self.plan_started = False
+        self.executing_plan = False
+        self.completed_plan_goals: set[str] = set()
         self.task_context = task_context or {}
         if task_context is not None:
             self.task_context["test_inputs"] = {reference: value for reference, value in runtime.input_values.items() if not reference.startswith("env:")}
@@ -118,7 +126,15 @@ class TesterAgentTools:
                     return {"success": False, "error_type": "PAGE_GOAL_CHECK_REQUIRES_ASSERTION"}
         results: list[dict[str, Any]] = []
         for index, goal in enumerate(goals):
-            operations = await self.runtime.execute_page_goal(goal.goal, inputs=[asdict(binding) for binding in goal.inputs], context=goal.context, max_steps=goal.max_steps)
+            if goal.wait_for_progress:
+                waiting = await self.wait_for_shared_progress(goal.wait_for_progress)
+                if not waiting["ready"]:
+                    return {"success": False, "failed_goal": index, "reason": waiting["reason"], "results": results}
+            if goal.before_steps:
+                preparation = await self.execute_page_steps(goal.before_steps, related_task_ids=related_task_ids)
+                if not preparation["success"]:
+                    return {**preparation, "failed_goal": index}
+            operations = await self.runtime.execute_page_goal(goal.goal, inputs=[asdict(binding) for binding in goal.inputs], context=goal.context, max_steps=goal.max_steps, stop_after_inputs=any(step.action_type == ActionType.REPEAT_SUBMIT for step in goal.after_steps)) if goal.run_operations else {"success": True, "reason": "CHECK_ONLY", "actions": []}
             result: dict[str, Any] = {"goal": index, "operations": operations}
             results.append(result)
             if not operations["success"]:
@@ -128,9 +144,74 @@ class TesterAgentTools:
                 result["checks"] = checks["results"]
                 if not checks["success"]:
                     return {"success": False, "failed_goal": index, "results": results, "page": checks.get("page", {})}
+            if goal.after_steps:
+                after = await self.execute_page_steps(goal.after_steps, related_task_ids=related_task_ids)
+                result["after_steps"] = after["results"]
+                if not after["success"]:
+                    return {"success": False, "failed_goal": index, "results": results, "page": after.get("page", {})}
+            if goal.publish_progress:
+                await self.update_task_progress(True, goal.publish_progress)
         if finish:
             return {"success": True, "results": results, "outcome": await self.finish_task()}
         return {"success": True, "results": results, "page": await self._page_summary()}
+
+    async def execute_test_plan(self, goals: list[PageGoal], related_task_ids: list[str] | None = None) -> dict[str, Any]:
+        """Submit the COMPLETE remaining Task plan once. Jev/Playwright execute every goal and all checks without model turns between goals. Call again only to replace an exceptional blocked plan; successful goals must not be repeated."""
+        if self.plan_started:
+            try:
+                self.runtime.budget.ensure_can_start("replan")
+            except BudgetExceededError as error:
+                await self.runtime.stop_task(error.reason)
+                return {"success": False, "reason": error.reason}
+            self.runtime.budget.record_replan()
+        phase = "exception_replan" if self.plan_started else "initial_plan"
+        self.plan_started = True
+        goals = TypeAdapter(list[PageGoal]).validate_python(goals)
+        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="TESTER_PLAN", tool="TesterPlan", action=phase, result={"phase": phase, "goal_count": len(goals)}, latency_ms=0)
+        current_outcome = await self.runtime.record_task_outcome()
+        current_assertions = current_outcome["assertions"]
+        assert isinstance(current_assertions, list)
+        recorded = {check.get("behavior_id") for check in current_assertions}
+        planned: set[str] = set()
+        boundaries = {ActionType.NAVIGATION, ActionType.REFRESH, ActionType.REPEAT_SUBMIT, ActionType.WAIT, ActionType.ASSERTION, ActionType.URL_CHECK}
+        names: set[str] = set()
+        for goal in goals:
+            if not goal.goal.strip() or goal.goal in names or not 1 <= goal.max_steps <= 30:
+                return {"success": False, "reason": "INVALID_TEST_PLAN", "instruction": "Use distinct, nonempty business goals and valid operation limits."}
+            names.add(goal.goal)
+            if any(not binding.control.strip() or binding.value_reference not in self.runtime.input_values for binding in goal.inputs):
+                return {"success": False, "reason": "INPUT_VALUE_UNAVAILABLE"}
+            if goal.inputs and not goal.run_operations:
+                return {"success": False, "reason": "INPUTS_REQUIRE_PAGE_OPERATIONS"}
+            if any(check.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK} for check in goal.checks):
+                return {"success": False, "reason": "PAGE_GOAL_CHECK_REQUIRES_ASSERTION"}
+            if any(step.action_type not in boundaries for step in [*goal.before_steps, *goal.after_steps]):
+                return {"success": False, "reason": "PLAN_BOUNDARY_ACTION_REQUIRED", "instruction": "Delegate input/click/select decisions to Jev through page goals."}
+            for step in [*goal.before_steps, *goal.checks, *goal.after_steps]:
+                if step.behavior_id:
+                    if step.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK} or step.behavior_id not in self.runtime.expected_behavior_ids:
+                        return {"success": False, "reason": "UNKNOWN_OR_INVALID_BEHAVIOR_CHECK"}
+                    planned.add(step.behavior_id)
+        missing = sorted(set(self.runtime.expected_behavior_ids) - recorded - planned)
+        if not goals or missing:
+            return {"success": False, "reason": "INCOMPLETE_TEST_PLAN", "missing_behavior_ids": missing, "instruction": "Submit every remaining required operation and actual assertion before execution."}
+        self.executing_plan = True
+        try:
+            for index, goal in enumerate(goals):
+                if goal.goal in self.completed_plan_goals:
+                    continue
+                result = await self.execute_page_goals([goal], related_task_ids=related_task_ids)
+                if not result["success"]:
+                    operations = (result.get("results") or [{}])[-1].get("operations", {})
+                    reason = result.get("reason") or result.get("error_type") or operations.get("reason") or "PLAN_EXECUTION_BLOCKED"
+                    if str(reason).startswith("JEV_ERROR:"):
+                        await self.runtime.stop_task(str(reason))
+                    return {"success": False, "reason": reason, "failed_goal": index, "completed_goals": sorted(self.completed_plan_goals), "failed_execution": result, "instruction": "Replan only the remaining checks from this current page. Do not repeat completed goals or successful actions."}
+                self.completed_plan_goals.add(goal.goal)
+            outcome = await self.finish_task()
+            return {"success": bool(outcome["finished"]), "outcome": outcome, "completed_goals": sorted(self.completed_plan_goals)}
+        finally:
+            self.executing_plan = False
 
     async def execute_page_steps(self, steps: list[PageStep], related_task_ids: list[str] | None = None, finish: bool = False) -> dict[str, Any]:
         """Execute ordered semantic steps; resolve controls with Playwright/Jev. Inputs require references. Assertion failures are recorded immediately and execution continues; other failures stop the batch. finish=True checks and finishes the Task."""
@@ -518,11 +599,18 @@ class TesterAgentTools:
 
 
 class FinishTaskMiddleware(FunctionMiddleware):
-    def __init__(self, runtime: WebTestingRuntime) -> None:
+    def __init__(self, runtime: WebTestingRuntime, tools: TesterAgentTools | None = None) -> None:
         self.runtime = runtime
+        self.tools = tools
 
     async def process(self, context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
+        if self.tools is not None and self.tools.plan_started and not self.tools.executing_plan and context.function.name != "execute_test_plan":
+            context.result = {"success": False, "reason": "TEST_PLAN_REQUIRED", "instruction": "Replace the remaining test plan with execute_test_plan; do not operate the browser one action at a time."}
+            await self.runtime.stop_task("TEST_PLAN_REQUIRED")
+            raise MiddlewareTermination("Tester returned to individual tools instead of exceptional replanning.", result=context.result)
         await call_next()
+        if self.tools is not None and self.tools.plan_started and not self.runtime.task_finished and self.runtime.budget.usage.task_replans >= self.runtime.budget.limits.max_task_replans:
+            await self.runtime.stop_task("MAX_TASK_REPLANS_REACHED")
         if self.runtime.task_finished:
             raise MiddlewareTermination("Task outcome recorded; no final Done model round is needed.", result=context.result)
 
@@ -550,9 +638,12 @@ def create_tester_agent(
     if tools.decision_policy == "JEV" and tools.action_policy == "PLAYWRIGHT":
         instructions = (
             "You are a Tester. Decide what to test and what the expected application behavior means. Work only on your assigned Task and identity. "
+            "Your role is ONE complete initial test plan plus exceptional replanning. Your FIRST response must call execute_test_plan with ALL operations and ALL required checks through Task completion. Do not return after a subgoal, emit individual browser actions, or use the old step/subgoal tools for normal execution. Jev owns continuous page decisions and Playwright executes them. "
+            "Only call Tester again when the submitted plan reports a genuine blocker or invalid plan. Replace only the remaining plan, preserving completed checks. Expected application assertion failures are Findings, not a reason to replan or stop the remaining applicable checks. "
             "Read the supplied Initial Page and preparation status. Python has already navigated, inspected, and prepared an existing account login when possible. Do not repeat successful setup. "
-            "Prefer ONE execute_page_goals call with a few business subgoals and finish=True. Each goal states the desired operation, inputs bind human field labels to value_reference, context identifies the exact entity, and checks describe expected outcomes. Jev chooses navigation, fields and buttons from the actual page and Playwright executes them. Do not write click sequences or individual action decisions for Jev. "
-            "Keep goals short and specific, e.g. create a project, edit that project's name, delete that project. Use separate goals for operations needing different values in the same field. Put immediate result checks on their operation goal; use execute_page_steps for special boundary actions such as refresh or repeat_submit and their checks. Inspect again only if delegation reports a missing control or other failure. "
+            "Each planned goal states the desired operation, inputs bind actual human field labels to value_reference, context identifies the exact entity, and checks describe expected outcomes. Jev chooses navigation, fields and buttons from the actual page and Playwright executes them. Do not write click sequences or individual action decisions for Jev. "
+            "Keep goal descriptions concise and distinct. Include create/edit/delete/login/logout and persistence checks in the SAME complete plan. Use separate goals for different values in the same field. Put immediate assertions in checks; put deterministic refresh/repeat_submit/wait/navigation and their assertions in before_steps or after_steps. Use run_operations=false for check-only or boundary-only goals. Input/click/select must stay with Jev. "
+            "Plan every supplied expected_behavior_id and every required operation. Use publish_progress for a collaboration signal and wait_for_progress for another participant's signal inside the plan, without model polling. Omit optional fields unless needed. "
             "PageStep control is a human control label, and context is text from its surrounding form or row. Python resolves unique exact controls; Jev resolves ambiguity. You do not need numeric positions or CSS for future controls. "
             "For example: input control='Login username' value_reference=<username key>, input control='Login password' value_reference=<secret_reference>, click control='Login'. "
             "For Edit/Delete/Remove use context=<the exact entity row text/name or observed ID> to distinguish repeated buttons. In a dialog use control='Edit value' and control='Save'; background controls are unavailable. "
@@ -565,9 +656,8 @@ def create_tester_agent(
             "Use repeat_submit with the observed same-origin submission URL to establish two requests for the SAME pending form submission; two ordinary clicks after completion are a different test. "
             "Failed goal assertions create an early Finding and evidence immediately; finish all remaining applicable checks. Check a changed state only after its prerequisite operation succeeded; missing setup is not an application bug. Python alone determines Task success and deterministic replay verifies bugs. "
             "Do not duplicate auto-created Findings, claim confirmed bugs, repeat a failed check without a new reason, or spend model turns on each fill/click. "
-            "Read shared facts only for necessary setup/collaboration. Include related_task_ids in execute_page_steps for prerequisites outside your Task. "
-            "Publish live-session readiness with update_task_progress; use wait_for_shared_progress for another participant's signal instead of model polling. "
-            "Never change scope, bypass permissions, or create Agents. Use record_observation for uncertainty. Call finish_task if the last batch did not finish."
+            "Include related_task_ids in execute_test_plan for prerequisites outside your Task. Publish readiness with publish_progress and wait with wait_for_progress inside the complete plan, without model polling. "
+            "Never change scope, bypass permissions, or create Agents. execute_test_plan automatically records the final Task outcome after all checks; do not call finish_task or request a Done response yourself."
         )
     if tools.action_policy == "TESTER_LLM_EVERY_STEP":
         instructions += " For this evaluation route, decide one browser action per model response. Call at most one browser action tool before reasoning again."
@@ -575,6 +665,7 @@ def create_tester_agent(
         instructions += " For unknown paths, inspect explore_unknown_path candidates and select exactly one ID with select_candidate."
     exposed_tools = [tools.execute_known_action, tools.explore_unknown_path, tools.read_shared_facts, tools.record_finding, tools.record_observation, tools.update_task_progress, tools.request_replan, tools.finish_task, tools.read_test_data]
     if tools.decision_policy == "JEV" and tools.action_policy == "PLAYWRIGHT":
+        exposed_tools.insert(0, tools.execute_test_plan)
         exposed_tools.insert(0, tools.execute_page_goals)
         exposed_tools.insert(0, tools.execute_page_steps)
         exposed_tools.append(tools.wait_for_shared_progress)
@@ -589,7 +680,7 @@ def create_tester_agent(
         name="tester-agent",
         description="Executes one assigned web testing task through the controlled runtime.",
         instructions=instructions,
-        middleware=[TraceChatMiddleware(), TraceToolMiddleware(), FinishTaskMiddleware(tools.runtime)],
+        middleware=[TraceChatMiddleware(), TraceToolMiddleware(), FinishTaskMiddleware(tools.runtime, tools)],
         tools=exposed_tools,
         additional_properties={"assignment": asdict(assignment), "task_context": tools.task_context},
     )
@@ -655,7 +746,10 @@ class TesterRunner:
                 return "STOPPED: TASK_PREPARATION_STOPPED"
         started_at = perf_counter()
         try:
-            response = await self.agent.run(prompt, session=self.session)
+            if self.decision_policy == "JEV" and self.action_policy == "PLAYWRIGHT" and prompt.startswith("Execute assigned Task "):
+                response = await self.agent.run(prompt, session=self.session, options={"tool_choice": {"mode": "required", "required_function_name": "execute_test_plan"}})
+            else:
+                response = await self.agent.run(prompt, session=self.session)
         except BudgetExceededError as error:
             await self.runtime.stop_task(error.reason)
             return f"STOPPED: {error.reason}"
