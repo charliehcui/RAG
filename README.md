@@ -14,19 +14,19 @@ The workflow entry point is orchestration/runner.py. Structured facts are saved 
 
 Only OPENROUTER_API_KEY is required for production model access. Copy .env.example to .env and supply the key locally. No direct Google/Gemini or Groq client remains.
 
-| Role | Primary model | Fixed provider endpoint | Manual backup model / endpoint |
+| Role | Primary model | Fixed provider endpoint | Backup model / routing |
 |---|---|---|---|
 | Main | deepseek/deepseek-v4-flash | streamlake/fp8 | deepseek/deepseek-v3.2 / deepinfra/fp4 |
-| Tester | z-ai/glm-5.3-flash | relace | openai/gpt-oss-20b / darkbloom/fp8 |
+| Tester | z-ai/glm-5.3-flash | relace | qwen/qwen3.8-flash / automatic provider failover on API failure |
 | Jev | typesafe/jev-1.13 | Existing OpenRouter Decisions API | Unchanged |
 
-Every Agent request pins one endpoint using provider.only, provider.order, allow_fallbacks=false and require_parameters=true. There is no price router, floor variant, automatic model fallback or SDK retry. Backup settings are informational: manual switching requires replacing the primary model AND provider, then starting a separate experiment series. Keep both pairs fixed throughout Baseline, Evaluation, Regression and Final Optimization.
+Primary Agent requests pin one endpoint using provider.only, provider.order, allow_fallbacks=false and require_parameters=true. Main's backup remains manual. If the Tester's primary API or connection is unavailable, it makes one backup attempt with qwen/qwen3.8-flash and lets OpenRouter select a compatible provider with failover. Further exceptional replans for that Task retain the backup. Every attempted request records its actual model, provider and usage; a failed primary dispatch remains in the request count. SDK retries remain disabled.
 
 Catalog verified on 2026-10-06. Prices in USD per million input/output tokens: Main StreamLake $0.042/$0.084; Tester Relace $0.0352/$0.50. No provider is cheapest for every input/output ratio: Main Relace costs $0.03/$1.28; Tester DeepInfra costs $0.075/$0.25. Main StreamLake is cheaper than Relace below about 99.67 input tokens per output token. Tester Relace is cheaper than DeepInfra above about 6.28 input tokens per output token. These are selection assumptions, not measured Baseline results. Prices can change even when endpoints remain pinned.
 
 Sources: [Main endpoints](https://openrouter.ai/api/v1/models/deepseek/deepseek-v4-flash/endpoints), [Tester endpoints](https://openrouter.ai/api/v1/models/z-ai/glm-5.3-flash/endpoints), [provider pinning](https://openrouter.ai/docs/guides/routing/provider-selection).
 
-Main and Tester use tool calls rather than JSON response-format output. Selected endpoints advertise tools and tool-choice support. Free/routing model variants are rejected. Fake providers remain available for deterministic tests.
+Main and Tester use tool calls rather than JSON response-format output. The normal Tester request exposes only execute_test_plan with tool_choice=auto because Relace and the Qwen backup do not support required/named tool selection. Python validates the complete plan and required checks before execution. Free/routing model variants are rejected. Fake providers remain available for deterministic tests.
 
 ## Workflow and task outcomes
 
@@ -62,16 +62,17 @@ cost_and_performance includes final-summary usage and end-to-end wall time; llm_
 
 ## LangSmith observability
 
-Set LANGSMITH_API_KEY locally. Tracing is enabled when a key is present; LANGSMITH_TRACING=false disables it. LANGSMITH_PROJECT defaults to multi-agent-web-testing. The pinned official langsmith SDK handles span context, parallel task propagation and background upload; a bounded flush occurs after execution.
+Set LANGSMITH_API_KEY locally. Real formal Evaluation always enables tracing for every case; injected local tests may disable upload. Other runs honor LANGSMITH_TRACING. LANGSMITH_PROJECT defaults to multi-agent-web-testing. The pinned official langsmith SDK handles span context, parallel task propagation and background upload; a bounded flush occurs after execution.
 
     Run
     -> MainPlanning -> LLM / planning tools
-    -> concurrent Testers -> LLM / tools -> BrowserAction / Jev / Evidence / optional VisualLLM
+    -> concurrent Testers -> LLM / tools -> TesterInitialPlan / TesterExceptionReplan
+        -> Jev decisions / BrowserAction / Evidence / optional VisualLLM
     -> conditional MainReplan -> LLM / planning tools
     -> Reproduction / Verification -> BrowserAction
     -> MainFinalSummary -> one LLM request
 
-Only safe metadata is uploaded: run/scenario/task/finding IDs, Agent role, Tester instance, fixed models/providers, action types, outcomes and model usage. Prompts, Tool arguments/results, browser content, screenshots, credentials, test values and natural summaries are omitted. Existing field redaction and registered-value replacement protect metadata; errors contain exception types rather than messages or tracebacks. Connection, span upload and flush failures do not alter Shared State, scheduling or results. There are no LangSmith datasets, judges or evaluation runners.
+Only safe metadata is uploaded: run/case/scenario/task/check/finding IDs, Agent role, Tester instance, fixed models/providers, action types, outcomes, failure codes and model usage. Prompts, Tool arguments/results, browser content, screenshots, credentials, test values and natural summaries are omitted. Existing field redaction and registered-value replacement protect metadata; errors contain exception types rather than messages or tracebacks. Connection, span upload and flush failures do not alter Shared State, scheduling or results. There are no LangSmith datasets, judges or evaluation runners.
 
 SDK documentation: [custom instrumentation](https://docs.langchain.com/langsmith/annotate-code), [sensitive trace data](https://docs.langchain.com/langsmith/mask-inputs-outputs), [LLM usage metadata](https://docs.langchain.com/langsmith/log-llm-trace).
 
@@ -96,3 +97,9 @@ The demo has B1-B6 switches, disabled by default. POST /test/reset is available 
 [Benchmark history](evaluation/benchmark_history.md) records the initial Baseline and later formal Benchmark results. Retained changes are documented in [Tester optimization](evaluation/optimization/tester_optimization.md) and [Main optimization](evaluation/optimization/main_optimization.md). The dataset and post-run answers remain in evaluation/scenarios.json and evaluation/ground_truth.json.
 
 artifacts/ is an ignored runtime output directory. Its databases, reports, summaries and evidence can be cleared after the useful formal numbers have been recorded in benchmark_history.md; historical runs are not maintained there.
+
+## Development Evaluation v2
+
+The Development Set contains ten cases: D01-D08, D12 and D13. They cover no-bug controls, registration/ownership, independent parallel workflows, B1-B6, pending submission, and coupled revocation/deletion. Eight holdout workflows remain unchanged. The ten development cases declare 74 stable required check IDs with identities and ordering dependencies. Reference behavior descriptions never authorize extra tests or unavailable data. Keep continuous workflows in one browser session and score their checks independently.
+
+Runtime, reports and formal Evaluation use one deterministic scorer. Check Completion reports observed required checks (for example, 3/4 checks completed); PASS additionally requires every check to pass or have correctly confirmed defect evidence. Historical errors remain visible as RECOVERED or UNRESOLVED_BLOCKING. Interrupted, never-started and failed tasks have distinct outcomes. Missing check IDs cannot be replaced by another assertion with the same behavior ID. E2E Success requires all tasks, all required checks and expected defects to be correctly completed. Historical v1 Baseline figures remain in evaluation/benchmark_history.md and are not directly comparable with v2. No new paid measurement has been run.

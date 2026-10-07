@@ -93,6 +93,19 @@ class MainAgentTools:
             parent_finding=parent_finding,
         )
         requirements = dict(data_requirements)
+        run_checks = (self.store.get_run(self.run_id) or {}).get("scope", {}).get("required_checks", [])
+        if run_checks:
+            available = {check["check_id"]: check for check in run_checks}
+            check_ids = requirements.get("check_ids")
+            if check_ids is None:
+                check_ids = [check["check_id"] for check in run_checks if check["identity_reference"] == requirements.get("identity_reference") and check["behavior_id"] in requirements.get("expected_behavior_ids", [])]
+            if not check_ids or len(set(check_ids)) != len(check_ids) or any(check_id not in available for check_id in check_ids):
+                raise ValueError("Task must assign explicit configured check IDs")
+            checks = [available[check_id] for check_id in check_ids]
+            if any(check["identity_reference"] != requirements.get("identity_reference") or check["behavior_id"] not in requirements.get("expected_behavior_ids", []) for check in checks):
+                raise ValueError("Task check IDs must match its assigned identity and behaviors")
+            requirements["check_ids"] = check_ids
+            requirements["required_checks"] = checks
         requirements.update(
             {
                 "feature": feature,
@@ -421,6 +434,7 @@ def create_main_agent(
         agent_instructions=(
             "You are the Main Agent and Manager. Understand the user goal, delegate Tasks, monitor progress, and give the final user response. Build and update the plan only through the provided State tools. "
             "Use data_requirements to pass identity_reference, expected_behavior_ids and test_data_keys needed by each Task. "
+            "When required_checks are configured, assign their exact check_ids through data_requirements. Every required check must be covered. Keep a continuous same-session workflow within one Task; checks are scored separately. Reference behavior descriptions do not authorize additional tests outside the explicit checks or available inputs. "
             "Keep Tasks independent when possible; use dependencies only for real prerequisites. "
             "Never operate a browser, call Playwright, save evidence, replay actions, verify findings, expand scope, or create another Agent. "
             "Read structured Shared State before replanning. A single copy, color, or minor layout observation is not a high-risk replanning trigger. "

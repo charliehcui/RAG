@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -155,4 +156,52 @@ async def test_paid_client_can_complete_more_than_forty_normal_tool_rounds(monke
     assert response.text == "completed"
     assert tool_count == 45
     assert request_count == 46
+    await http_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [404, 503, "connection", 400])
+async def test_tester_api_fallback_preserves_plan_request_and_records_each_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: int | str) -> None:
+    requests: list[dict[str, Any]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        if len(requests) == 1:
+            if failure == "connection":
+                raise httpx.ConnectError("primary unavailable", request=request)
+            return httpx.Response(int(failure), json={"error": {"message": "primary unavailable", "code": failure}})
+        return httpx.Response(200, json={"id": "backup-response", "object": "chat.completion", "created": 1, "model": body["model"], "provider": "Alibaba", "choices": [{"index": 0, "message": {"role": "assistant", "content": "ready"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 17, "completion_tokens": 5, "total_tokens": 22, "cost": 0.00023}})
+
+    http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    real_constructor = AsyncOpenAI
+    monkeypatch.setattr("web_testing_system.providers.AsyncOpenAI", lambda **kwargs: real_constructor(**kwargs, http_client=http_client))
+    store = StateStore(tmp_path / "state.db")
+    store.initialize()
+    limits = BudgetConfig().model_dump()
+    store.create_run(run_id="tester-fallback", application="http://app.test", application_version="test", test_goal="plan", scope={}, status="RUNNING", global_budget=limits, remaining_budget=limits)
+    store.create_budget(budget_id="tester-budget", run_id="tester-fallback")
+    settings = Settings(_env_file=None, openrouter_api_key="fake-key")
+    usage = ProviderUsageMiddleware(store=store, run_id="tester-fallback", budget_id="tester-budget", provider="openrouter", model=settings.tester_agent_model, agent="tester")
+    agent = Agent(client=create_tester_chat_client(settings, usage=usage), tools=[FunctionTool(name="execute_test_plan", func=lambda: "done")])
+    options = {"tool_choice": "auto"}
+    if failure == 400:
+        with pytest.raises(Exception, match="primary unavailable"):
+            await agent.run("Plan", options=options)
+        assert len(requests) == 1
+    else:
+        assert (await agent.run("Plan", options=options)).text == "ready"
+        assert (await agent.run("Exceptional replan", options=options)).text == "ready"
+        assert len(requests) == 3
+        assert all(body["model"] == "qwen/qwen3.8-flash" and body["provider"] == {"allow_fallbacks": True, "require_parameters": True} for body in requests[1:])
+    assert requests[0]["model"] == settings.tester_agent_model
+    assert requests[0]["provider"]["only"] == ["relace"]
+    assert all(body["tool_choice"] == "auto" and [tool["function"]["name"] for tool in body["tools"]] == ["execute_test_plan"] for body in requests)
+    assert all("reasoning" not in body and "reasoning_effort" not in body for body in requests)
+    events = store.list_events("tester-fallback", event_types=("LLM_CALL",))
+    assert len(events) == len(requests)
+    assert events[0]["result"]["success"] is False
+    assert events[0]["result"]["requested_provider"] == "relace"
+    if failure != 400:
+        assert all(event["result"]["model"] == "qwen/qwen3.8-flash" and event["result"]["requested_provider"] is None and event["result"]["served_provider"] == "Alibaba" for event in events[1:])
     await http_client.aclose()

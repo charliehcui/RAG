@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import (
     AnyHttpUrl,
@@ -13,6 +13,7 @@ from pydantic import (
     Field,
     SecretStr,
     field_validator,
+    model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -35,8 +36,8 @@ class Settings(BaseSettings):
     main_agent_backup_provider: str = "deepinfra/fp4"
     tester_agent_model: str = "z-ai/glm-5.3-flash"
     tester_agent_provider: str = "relace"
-    tester_agent_backup_model: str = "openai/gpt-oss-20b"
-    tester_agent_backup_provider: str = "darkbloom/fp8"
+    tester_agent_backup_model: str = "qwen/qwen3.8-flash"
+    tester_agent_backup_provider: str | None = None
     jev_model: str = "typesafe/jev-1.13"
     computer_use_provider: str = "relace"
     computer_use_model: str | None = None
@@ -50,6 +51,11 @@ class Settings(BaseSettings):
     def empty_visual_model_disables_gateway(cls, value: str | None) -> str | None:
         return value or None
 
+    @field_validator("tester_agent_backup_provider", mode="before")
+    @classmethod
+    def empty_backup_provider_uses_automatic_routing(cls, value: str | None) -> str | None:
+        return value.strip() or None if value is not None else None
+
     @field_validator("main_agent_model", "tester_agent_model", "main_agent_backup_model", "tester_agent_backup_model", "computer_use_model")
     @classmethod
     def reject_free_or_routed_models(cls, value: str | None) -> str | None:
@@ -60,7 +66,7 @@ class Settings(BaseSettings):
             raise ValueError("use a fixed paid model ID without free or routing variants")
         return model
 
-    @field_validator("main_agent_provider", "tester_agent_provider", "main_agent_backup_provider", "tester_agent_backup_provider", "computer_use_provider")
+    @field_validator("main_agent_provider", "tester_agent_provider", "main_agent_backup_provider", "computer_use_provider")
     @classmethod
     def require_fixed_provider(cls, value: str) -> str:
         if not value.strip() or value.casefold() in {"auto", "free", "gemini", "groq"}:
@@ -97,6 +103,20 @@ class AccountReference(BaseModel):
     role: str = Field(min_length=1)
     permissions: list[str] = Field(min_length=1)
     secret_reference: str | None = None
+
+
+class RequiredCheck(BaseModel):
+    """One explicit, independently scored check; behavior descriptions are reference only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    check_id: str = Field(min_length=1)
+    goal_id: str = Field(min_length=1)
+    behavior_id: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    identity_reference: str = Field(min_length=1)
+    depends_on: list[str] = Field(default_factory=list)
+    action_type: Literal["assertion", "repeat_submit"] = "assertion"
 
 
 class ResetHookConfig(BaseModel):
@@ -136,9 +156,40 @@ class RunConfig(BaseModel):
     test_data: dict[str, Any]
     denied_operations: list[str] = Field(min_length=1)
     expected_behaviors: list[ExpectedBehavior] = Field(default_factory=list)
+    required_checks: list[RequiredCheck] = Field(default_factory=list)
+    evaluation_version: str | None = None
     application_version: str | None = None
     reset_hook: ResetHookConfig | None = None
     budget: BudgetConfig = Field(default_factory=BudgetConfig)
+
+    @model_validator(mode="after")
+    def validate_required_checks(self) -> RunConfig:
+        checks = {check.check_id: check for check in self.required_checks}
+        if len(checks) != len(self.required_checks):
+            raise ValueError("required check IDs must be unique")
+        behaviors = {behavior.behavior_id for behavior in self.expected_behaviors}
+        identities = {account.identity_reference for account in self.account_references}
+        visited: set[str] = set()
+        active: set[str] = set()
+
+        def visit(check_id: str) -> None:
+            if check_id in active:
+                raise ValueError("required check dependencies must be acyclic")
+            if check_id in visited:
+                return
+            active.add(check_id)
+            for dependency in checks[check_id].depends_on:
+                if dependency not in checks:
+                    raise ValueError("required check dependency is unavailable")
+                visit(dependency)
+            active.remove(check_id)
+            visited.add(check_id)
+
+        for check in self.required_checks:
+            if check.behavior_id not in behaviors or check.identity_reference not in identities:
+                raise ValueError("required check needs a configured behavior and identity")
+            visit(check.check_id)
+        return self
 
     @field_validator("test_goal", "application_version")
     @classmethod

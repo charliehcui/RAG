@@ -33,6 +33,7 @@ from web_testing_system.runtime.models import (
     WebAction,
 )
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
+from web_testing_system.scoring import score_task
 from web_testing_system.state import StateStore
 
 
@@ -78,6 +79,8 @@ class WebTestingRuntime:
         self.page_lock = asyncio.Lock()
         self.input_values = dict(input_values or {})
         self.expected_behavior_ids = expected_behavior_ids
+        task = store.get_task(task_id)
+        self.required_checks = (task or {}).get("data_requirements", {}).get("required_checks", [])
         self.evidence_store = evidence_store
         self.evidence_buffer = EvidenceBuffer()
         self.evidence_buffer.identity_reference = getattr(executor, "identity_reference", None)
@@ -103,6 +106,8 @@ class WebTestingRuntime:
                     self.assertion_targets.setdefault(key, {})[str(cell["target"])] = row.get("container_target")
 
     def _row_matches_context(self, row: Mapping[str, Any], context: str) -> bool:
+        if not context.startswith("env:") and context in self.input_values:
+            context = self.input_values[context]
         if context == row["target"] or f"={json.dumps(context)}]" in str(row["target"]):
             return True
         normalized = " ".join(context.casefold().split())
@@ -135,6 +140,12 @@ class WebTestingRuntime:
             return await self._execute_known_action(action)
 
     async def _execute_known_action(self, action: WebAction) -> ActionResult:
+        if self.required_checks and (action.check_id or action.action_type in {ActionType.ASSERTION, ActionType.URL_CHECK} and (action.goal_check or action.behavior_id)):
+            spec = next((check for check in self.required_checks if check["check_id"] == action.check_id), None)
+            expected_action = (spec or {}).get("action_type", "assertion")
+            allowed_actions = {"assertion", "url_check"} if expected_action == "assertion" else {expected_action}
+            if spec is None or spec["behavior_id"] != action.behavior_id or action.action_type.value not in allowed_actions:
+                return self._stopped_result("UNKNOWN_OR_MISSING_CHECK_ID")
         if action.action_type in {ActionType.ASSERTION, ActionType.URL_CHECK} and action.goal_check and action.behavior_id is None and len(self.expected_behavior_ids) == 1:
             action = replace(action, behavior_id=self.expected_behavior_ids[0])
         if self.browser_session_id is None:
@@ -209,10 +220,11 @@ class WebTestingRuntime:
                     if index in completed_inputs:
                         continue
                     for element in elements:
-                        if not element.enabled or element.kind not in {"input", "textarea", "select"} or element.label.casefold() != binding["control"].casefold():
+                        if not element.enabled or element.kind not in {"input", "textarea", "select"} or (element.label.casefold() != binding["control"].casefold() and element.target != binding["control"]):
                             continue
                         binding_context = binding.get("context", "")
-                        if binding_context and binding_context.casefold() not in element.context.casefold() and binding_context != element.context_target:
+                        exact_context = bool(binding_context) and any(binding_context in {item.context, item.context_target} for item in elements)
+                        if exact_context and binding_context not in {element.context, element.context_target}:
                             continue
                         action_type = ActionType.SELECT if element.kind == "select" else ActionType.INPUT
                         reference = binding["value_reference"]
@@ -227,7 +239,8 @@ class WebTestingRuntime:
                     candidates.append(ActionCandidate(candidate_id=f"candidate-stop-{page_state.state_id}", action="stop_current_path", label="Requested operations are complete; return for the supplied assertions. This does not declare Task success.", target=None, state_id=page_state.state_id))
                 if not candidates:
                     return {"success": False, "reason": "NO_NEW_LEGAL_ACTIONS", "pending_inputs": pending, "actions": actions}
-                current_goal = f"{goal}\nEntity context: {context}\nPending fields: {json.dumps(pending)}\nAlready executed in this subgoal: {json.dumps(actions)}\nChoose the next operation, or stop when the requested operations are complete. Never repeat an already executed operation."
+                pending_bindings = [binding for index, binding in enumerate(inputs) if index not in completed_inputs]
+                current_goal = f"{goal}\nEntity context: {context}\nPending fields: {json.dumps(pending)}\nInput bindings (context describes the intended form/row): {json.dumps(pending_bindings)}\nAlready executed in this subgoal: {json.dumps(actions)}\nFill the pending inputs in their intended form before submitting. Choose the next operation, or stop when the requested operations are complete. Never repeat an already executed operation."
                 decision = await self._select_and_execute(current_goal, page_state, candidates)
                 if decision.reason == "CANDIDATE_EXPIRED" and step_index + 1 < max_steps:
                     continue
@@ -306,7 +319,7 @@ class WebTestingRuntime:
                 permission = self.executor.permission_checker.check(resolved, current_url=page_state.url)
                 if not permission.allowed:
                     continue
-                candidate = ActionCandidate(candidate_id=self.candidate_builder._candidate_id(page_state.state_id, action.action_type.value, element.target), action=action.action_type.value, label=f"{element.label} ({element.context})", target=element.target, state_id=page_state.state_id, value=action.value, value_reference=action.value_reference, url=resolved_url, resource_id=action.resource_id, requires_resource=action.requires_resource, confirmed=action.confirmed, expected=action.expected, assertion=action.assertion, behavior_id=action.behavior_id, goal_check=action.goal_check)
+                candidate = ActionCandidate(candidate_id=self.candidate_builder._candidate_id(page_state.state_id, action.action_type.value, element.target), action=action.action_type.value, label=f"{element.label} ({element.context})", target=element.target, state_id=page_state.state_id, value=action.value, value_reference=action.value_reference, url=resolved_url, resource_id=action.resource_id, requires_resource=action.requires_resource, confirmed=action.confirmed, expected=action.expected, assertion=action.assertion, behavior_id=action.behavior_id, goal_check=action.goal_check, check_id=action.check_id)
                 candidates.append(candidate)
                 if element.label.casefold() == control.casefold():
                     exact.append(candidate)
@@ -345,9 +358,14 @@ class WebTestingRuntime:
             await self.stop_task("MAX_JEV_TOKENS_REACHED")
             return DecisionResult(source="STOP", reason="MAX_JEV_TOKENS_REACHED")
         self.store.update_budget(budget_id=self.budget_id, jev_calls=1)
-        with trace_span("Jev", "llm", metadata={"agent_role": "jev", "phase": "jev", "model": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "provider": "openrouter", "ls_model_name": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "ls_provider": "openrouter"}) as span:
+        with trace_span("Jev", "llm", metadata={"agent_role": "jev", "phase": "jev_decision", "model": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "provider": "openrouter", "ls_model_name": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "ls_provider": "openrouter"}) as span:
             selection = await self.jev_selector.select(current_goal=current_goal, page_state=page_state, candidates=candidates)
-            trace_result(span, input_tokens=selection.input_tokens, output_tokens=selection.output_tokens, cost=selection.cost, success=selection.error is None, error_type=selection.error)
+            failure_reason = selection.error
+            if failure_reason is None and selection.selected_candidate_id not in {candidate.candidate_id for candidate in candidates}:
+                failure_reason = "ILLEGAL_CANDIDATE_ID"
+            if failure_reason is None and selection.confidence < self.jev_confidence_threshold:
+                failure_reason = "LOW_JEV_CONFIDENCE"
+            trace_result(span, input_tokens=selection.input_tokens, output_tokens=selection.output_tokens, cost=selection.cost, success=failure_reason is None, error_type=failure_reason, failure_reason=failure_reason)
         self.budget.record_jev_call(
             runtime_seconds=selection.latency_ms / 1_000,
             cost=selection.cost,
@@ -483,48 +501,15 @@ class WebTestingRuntime:
     async def record_task_outcome(self, *, finish: bool = False) -> dict[str, object]:
         """Only goal assertions establish success; ordinary completion text establishes nothing."""
         async with self.page_lock:
-            histories = self.store.list_action_history(run_id=self.run_id, task_id=self.task_id)
-            latest: dict[str, dict[str, object]] = {}
-            for history in histories:
-                action = history["action_data"]
-                if history["browser_session_id"] != self.browser_session_id or action.get("action_type") not in {"assertion", "url_check"}:
-                    continue
-                behavior_id = action.get("behavior_id")
-                if not action.get("goal_check") and behavior_id not in self.expected_behavior_ids:
-                    continue
-                key = str(history["event_id"])
-                latest[key] = {"event_id": history["event_id"], "behavior_id": behavior_id, "success": bool(history["success"]), "error_type": history["result"].get("error_type")}
-            results = list(latest.values())
-            covered = {item["behavior_id"] for item in results}
-            execution_failed = any(not history["success"] and history["result"].get("error_type") != "ASSERTION_FAILURE" for history in histories if history["browser_session_id"] == self.browser_session_id)
-            failed_assertions = [item for item in results if not item["success"]]
-            deviations: set[str] = set()
-            reported_behaviors: set[str] = set()
-            for event in self.store.list_events(self.run_id, event_types=("FINDING_CREATED",), task_id=self.task_id):
-                finding = self.store.get_finding(str(event["result"].get("finding_id")))
-                if finding is not None and finding["expected_result"].strip() and finding["actual_result"].strip():
-                    deviations.add(str(event["result"].get("boundary_event_id")))
-                    behavior = event["result"].get("behavior_id")
-                    if behavior is None:
-                        behavior = next((history["action_data"].get("behavior_id") for history in histories if history["event_id"] == event["result"].get("boundary_event_id")), None)
-                    if behavior is not None:
-                        reported_behaviors.add(str(behavior))
-            if execution_failed:
-                status, reason = "FAIL", "AGENT_EXECUTION_FAILURE"
-            elif not results or not set(self.expected_behavior_ids).issubset(covered):
-                status, reason = "UNKNOWN", "GOAL_ASSERTION_MISSING"
-            elif failed_assertions and not all(item["event_id"] in deviations or item["behavior_id"] in reported_behaviors for item in failed_assertions):
-                status, reason = "UNKNOWN", "APPLICATION_DEVIATION_UNREPORTED"
-            elif failed_assertions:
-                status, reason = "PASS", "APPLICATION_BUG_DETECTED"
-            else:
-                status, reason = "PASS", "GOAL_ASSERTIONS_PASSED"
-            application_behavior = "UNKNOWN" if execution_failed else "FAIL" if failed_assertions else "PASS" if status == "PASS" else "UNKNOWN"
-            self.store.record_task_outcome(task_id=self.task_id, success_status=status, reason=reason, assertion_results=results)
-            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="TASK_OUTCOME", tool="Python", action="evaluate_goal_assertions", result={"success_status": status, "reason": reason, "application_behavior": application_behavior, "assertions": results}, latency_ms=0)
+            task = self.store.get_task(self.task_id)
+            assert task is not None
+            task["data_requirements"].setdefault("expected_behavior_ids", list(self.expected_behavior_ids))
+            outcome = score_task(self.store, task, live=True)
+            self.store.record_task_outcome(task_id=self.task_id, success_status=outcome["success_status"], reason=outcome["reason"], assertion_results=outcome["assertions"])
+            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="TASK_OUTCOME", tool="Python", action="evaluate_goal_assertions", result=outcome, latency_ms=0)
             if finish:
                 self.task_finished = True
-            return {"success_status": status, "reason": reason, "application_behavior": application_behavior, "assertions": results}
+            return outcome
 
     def save_checkpoint(self, *, url: str, last_action: str) -> dict[str, object]:
         if self.browser_session_id is None:

@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from agent_framework import BaseChatClient, ChatResponse, Content, Message
@@ -15,6 +16,7 @@ from agent_framework._tools import FunctionInvocationLayer
 
 from demo_app.app import DemoAppServer
 from demo_app.bugs import SeededBugs
+from web_testing_system.agents.tester_agent import TesterRunner as WorkerRunner
 from web_testing_system.config import (
     AccountReference,
     BudgetConfig,
@@ -24,12 +26,23 @@ from web_testing_system.config import (
     RunConfig,
     Settings,
 )
-from web_testing_system.orchestration.runner import run
+from web_testing_system.orchestration.runner import run as run_system
 from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
 from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.runtime.models import ActionResult, ActionType, WebAction
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
 from web_testing_system.state import StateStore
+
+
+async def run(run_config: RunConfig, run_settings: Settings, **kwargs: Any) -> Path:
+    """Exercise retained tool APIs; complete-plan fixtures use the normal run entry."""
+    original = WorkerRunner.ask_tester_llm
+
+    async def retained_tools(self: WorkerRunner, prompt: str) -> str:
+        return await original(self, "Exercise retained tool interfaces.\n" + prompt)
+
+    with patch.object(WorkerRunner, "ask_tester_llm", retained_tools):
+        return await run_system(run_config, run_settings, **kwargs)
 
 
 class PlanningClient(FunctionInvocationLayer, ChatMiddlewareLayer, BaseChatClient):

@@ -45,15 +45,26 @@ def test_formal_scenario_uses_model_headroom_and_keeps_runaway_limits() -> None:
     assert path.read_bytes() == original
 
 
-@pytest.mark.parametrize("mode", ["canonical", "annotated", "wrong_page", "unverified_page", "wrong_role", "wrong_behavior", "wrong_identity", "wrong_entity", "owner_delete", "denied_delete", "project_remains", "unstable"])
+@pytest.mark.parametrize("mode", ["canonical", "annotated", "wrong_page", "unverified_page", "wrong_role", "wrong_behavior", "wrong_identity", "wrong_entity", "owner_delete", "denied_delete", "project_remains", "unstable", "admin_observer", "admin_observer_wrong_actor", "admin_observer_owner_delete", "admin_observer_denied_delete"])
 def test_matching_annotated_page_requires_verified_path_and_exact_bug_evidence(tmp_path: Path, mode: str) -> None:
     bug = {"bug_id": "B2", "behavior_id": "EB-PROJECT-DELETE-AUTH", "applicable_role": "member", "identity_reference": "member", "page": "/", "project_reference": "project-1"}
+    if mode.startswith("admin_observer"):
+        bug.update(assertion_identity_references=["member", "admin"], assertion_roles=["member", "admin"])
     answers = tmp_path / "answers.json"
     answers.write_text(json.dumps({"demo_version": "demo-1", "scenarios": [{"scenario_id": "D05", "bugs": [bug], "enabled_bug_ids": ["B2"]}]}), encoding="utf-8")
     steps = [{"action_type": "navigation", "url": "http://app.test/", "identity_reference": "member"}, {"action_type": "assertion", "behavior_id": "EB-PROJECT-DELETE-AUTH", "identity_reference": "member"}]
     results = [{"success": True, "data": {"url": "http://app.test/"}}, {"success": False, "error_type": "ASSERTION_FAILURE", "data": {"matched": False}}]
     finding = {"finding_id": "finding", "task_id": "task", "status": "CONFIRMED_BUG", "verification_result": "FAIL", "reproduction_success_count": 2, "verification_details": {"attempt_id": "verify"}, "reproduction_steps": steps, "affected_role": "member", "affected_page": "/ (Projects list) and /api/projects"}
     records = [{"identity_reference": "member", "url": "http://app.test/api/login", "response_data": {"user": {"username": "member"}}, "captured_at": "1"}, {"identity_reference": "member", "url": "http://app.test/api/projects", "method": "GET", "response_data": {"projects": [{"project_id": "project-1", "owner": "admin"}]}, "captured_at": "2"}, {"identity_reference": "member", "url": "http://app.test/api/projects/project-1", "method": "DELETE", "status": 200, "captured_at": "3"}, {"identity_reference": "member", "url": "http://app.test/api/projects", "method": "GET", "response_data": {"projects": []}, "captured_at": "4"}]
+    if mode.startswith("admin_observer"):
+        finding["affected_role"] = "admin"
+        steps[-1]["identity_reference"] = "admin"
+        if mode == "admin_observer_wrong_actor":
+            records[2]["identity_reference"] = "admin"
+        elif mode == "admin_observer_owner_delete":
+            records[1]["response_data"]["projects"][0]["owner"] = "member"
+        elif mode == "admin_observer_denied_delete":
+            records[2]["status"] = 403
     if mode == "canonical":
         finding["affected_page"] = "/"
     elif mode == "wrong_page":
@@ -83,7 +94,7 @@ def test_matching_annotated_page_requires_verified_path_and_exact_bug_evidence(t
     store.list_events.return_value = [{"result": {"finding_id": "finding", "attempt_id": "verify", "action_results": results, "assertion_positions": [1]}, "evidence_references": ["network"]}]
     store.list_evidence.return_value = [{"evidence_type": "NETWORK", "evidence_id": "network", "relative_file_path": "network.json", "browser_session_id": "fresh-session"}]
     _, matching = match_ground_truth(answers, scenario_id="D05", run_id="run", store=store, artifacts_root=tmp_path, test_data={})
-    expected = "B2" if mode in {"canonical", "annotated"} else "unmatched"
+    expected = "B2" if mode in {"canonical", "annotated", "admin_observer"} else "unmatched"
     assert matching["finding_to_bug"] == {"finding": expected}
     assert matching["tp"] == int(expected == "B2")
     assert matching["fp"] == int(expected == "unmatched")
@@ -259,6 +270,7 @@ async def test_all_fake_evaluation_modes_dispatch_to_formal_run(tmp_path: Path, 
 
     monkeypatch.setattr("web_testing_system.orchestration.runner.run", fake_run)
     monkeypatch.setattr("web_testing_system.evaluation.runner.MetricsCalculator.calculate", lambda self, run_id, **kwargs: {"score": 1.0})
+    monkeypatch.setattr("web_testing_system.evaluation.runner.FinalReportBuilder.build", lambda self, run_id, **kwargs: {"test_summary": {"run_status": "COMPLETED"}, "task_outcomes": []})
     executor = FormalRunExecutor(config, settings, main_client_factory=lambda: object(), tester_client_factory=lambda: object(), jev_selector_factory=lambda: object(), computer_use_client_factory=lambda: object())  # type: ignore[arg-type]
     assert executor.is_fake
 

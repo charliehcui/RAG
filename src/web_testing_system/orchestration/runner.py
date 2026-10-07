@@ -55,6 +55,7 @@ from web_testing_system.runtime.models import ActionType, WebAction
 from web_testing_system.runtime.permissions import ExecutionPolicy, PermissionChecker
 from web_testing_system.runtime.playwright_executor import PlaywrightExecutor
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
+from web_testing_system.scoring import score_run_tasks
 from web_testing_system.state import StateStore, build_data_namespace
 from web_testing_system.verification import VerificationRunner
 
@@ -121,8 +122,8 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
     store = StateStore(settings.state_db_path)
     store.initialize()
     budget_config = config.budget.model_dump()
-    model_configuration = {"transport": "openrouter", "main_model": settings.main_agent_model, "main_provider": settings.main_agent_provider, "tester_model": settings.tester_agent_model, "tester_provider": settings.tester_agent_provider, "jev_model": settings.jev_model, "automatic_fallback": False}
-    store.create_run(run_id=run_id, application=str(config.target_url), application_version=resolve_application_version(config.application_version, None, None), test_goal=config.test_goal, scope={"focus_features": config.focus_features, "allowed_scope": config.allowed_scope, "configured_tester_capacity": min(tester_count, config.budget.max_parallel_browser_contexts), "model_configuration": model_configuration}, status="RUNNING", global_budget=budget_config, remaining_budget=budget_config)
+    model_configuration = {"transport": "openrouter", "main_model": settings.main_agent_model, "main_provider": settings.main_agent_provider, "tester_model": settings.tester_agent_model, "tester_provider": settings.tester_agent_provider, "tester_backup_model": settings.tester_agent_backup_model, "tester_backup_provider": settings.tester_agent_backup_provider, "jev_model": settings.jev_model, "automatic_fallback": "TESTER_API_FAILURE_ONLY"}
+    store.create_run(run_id=run_id, application=str(config.target_url), application_version=resolve_application_version(config.application_version, None, None), test_goal=config.test_goal, scope={"focus_features": config.focus_features, "allowed_scope": config.allowed_scope, "configured_tester_capacity": min(tester_count, config.budget.max_parallel_browser_contexts), "model_configuration": model_configuration, "required_checks": [check.model_dump(mode="json") for check in config.required_checks], "evaluation_version": config.evaluation_version}, status="RUNNING", global_budget=budget_config, remaining_budget=budget_config)
     main_budget_id = f"budget-{uuid4().hex}"
     store.create_budget(budget_id=main_budget_id, run_id=run_id)
     manager = browser_manager or BrowserManager(BudgetGuard(_budget_limits(config, task_steps=config.budget.max_browser_steps_per_task, remaining=budget_config)))
@@ -188,6 +189,7 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
                 raise ValueError(f"Task {task_id} references unavailable test data")
             context = {"goal": task["goal"], "feature": feature, "role": role, "identity_reference": selected_account.identity_reference, "secret_reference": selected_account.secret_reference, "expected_behaviors": [behavior.model_dump(mode="json") for behavior in behaviors], "test_data_references": selected_keys or list(config.test_data), "scope": requirements.get("scope_targets", config.allowed_scope), "denied_operations": config.denied_operations, "required_operations": requirements.get("required_operations", []), "step_budget": task["step_budget"]}
             context["target_url"] = str(config.target_url)
+            context["required_checks"] = requirements.get("required_checks", [])
             current_run = store.get_run(run_id)
             assert current_run is not None
             tester_id = f"tester-{uuid4().hex}"
@@ -311,6 +313,8 @@ async def _run(config: RunConfig, settings: Settings, *, route: ExecutionRoute |
     finally:
         await manager.close()
         tasks = store.list_tasks(run_id)
+        for outcome in score_run_tasks(store, run_id):
+            store.record_task_outcome(task_id=outcome["task_id"], success_status=outcome["success_status"], reason=outcome["reason"], assertion_results=outcome["assertions"])
         status = "FAILED" if failure is not None or any(task["status"] == "FAILED" for task in tasks) else "STOPPED" if any(task["status"] not in {"COMPLETED", "CANCELLED"} for task in tasks) else "COMPLETED"
         report_path = settings.artifacts_dir / run_id / "report.json"
         report_path.parent.mkdir(parents=True, exist_ok=True)

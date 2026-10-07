@@ -240,6 +240,7 @@ class CandidateBuilder:
                 assertion=action.assertion,
                 behavior_id=action.behavior_id,
                 goal_check=action.goal_check,
+                check_id=action.check_id,
             )
             label_words = {
                 word.lower() for word in business_action.label.split() if len(word) > 2
@@ -297,6 +298,7 @@ class CandidateBuilder:
             assertion=candidate.assertion,
             behavior_id=candidate.behavior_id,
             goal_check=candidate.goal_check,
+            check_id=candidate.check_id,
             url=candidate.url,
             resource_id=candidate.resource_id,
             requires_resource=candidate.requires_resource,

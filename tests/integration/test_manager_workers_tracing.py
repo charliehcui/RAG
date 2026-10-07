@@ -22,7 +22,6 @@ from tests.integration.test_architecture_fixes import (
 )
 from web_testing_system import observability
 from web_testing_system.config import BudgetConfig, Settings
-from web_testing_system.orchestration.runner import run
 from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.state import StateStore
 
@@ -106,7 +105,7 @@ async def test_three_workers_share_sqlite_and_tracing_is_nonfatal(tmp_path: Path
         run_config = config(app.base_url)
         run_config.budget = BudgetConfig()
         run_config.test_data = {"email": "private-test-value@example.test"}
-        report_path = await run(run_config, settings, run_id="trace-worker-smoke", scenario_id="three-workers", main_client=main_client, tester_client_factory=WorkerClient, jev_selector=JevSelector(FakeJev()))
+        report_path = await test_architecture_fixes.run(run_config, settings, run_id="trace-worker-smoke", scenario_id="three-workers", main_client=main_client, tester_client_factory=WorkerClient, jev_selector=JevSelector(FakeJev()))
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert run_config.budget.max_testers == run_config.budget.max_parallel_browser_contexts == 3
     assert started == len(worker_sessions) == 3

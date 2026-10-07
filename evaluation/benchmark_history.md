@@ -10,7 +10,7 @@
 - LangSmith 追踪（tracing）设置保持一致。
 - 有效失败保留在分母中。
 
-## 初始基线（Baseline）— 2026-10-07
+## 历史 Evaluation Version v1 — 初始基线（Baseline）— 2026-10-07
 
 状态：已完成。日期采用 Australia/Sydney。
 
@@ -84,6 +84,16 @@
 - 正确检出缺陷可以算任务成功（Task Success）；执行状态 COMPLETED 不等于端到端成功（E2E Success）。
 - 大语言模型请求总数（LLM Requests）为 Main 加 Tester，Jev 单独计数；Tester 的 Token 与费用不含 Jev，Overall 包含 Jev。
 - 模型服务耗时和并行任务耗时不能当作实际总耗时（Wall-clock Time）。
+
+## Evaluation Version v2 — 2026-10-08
+
+版本：`development-v2-checks-20261008`。开发集（Development Set）从 16 个 Case 精简为 10 个，保留 D01–D08、D12、D13，共 74 个稳定检查 ID（Check ID）。8 个保留用例（Holdout）的业务内容保持不变。
+
+评分增加检查完成度（Check Completion），并区分已恢复错误（Recovered Error）、仍阻塞错误（Unresolved / Blocking Error）、中止任务（Interrupted Task）和未启动任务（Not Started Task）。任务成功（Task Success）与端到端成功（E2E Success）仍严格要求必要检查全部正确完成。运行时（Runtime）、报告（Report）和正式评分使用同一个确定性评分函数（Deterministic Scorer）。所有真实正式 Evaluation 都开启 LangSmith tracing。
+
+上方旧 Baseline 的测量数字原样保留，属于 v1 历史结果。v2 的 Evaluation Set 和评分规则已经改变，不能与 v1 直接相减或据此宣称性能收益。当前没有运行 v2 Baseline、真实模型验证或新 Benchmark；待用户 Token 充足并另行授权后再安排。
+
+删除与合并：D09 的双会话撤销检查由 D12 保留；D10 的验证与生命周期组合已由 D02、D03、D04、D06 覆盖；D11、D14 的保存与删除组合与 D04、D05、D07、D12 重复；D15、D16 的并行组合与 D03、D13 及聚焦缺陷用例重复。保留 D12 的耦合多缺陷流程和 D13 的独立并行多缺陷流程，必要的顺序、刷新和双会话要求仍在。
 
 ## 后续正式基准（Benchmark）
 

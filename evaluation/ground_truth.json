@@ -17,15 +17,16 @@
   },
   "evaluation_rules": {
     "planning_success": "Inspect TASK_CREATED/PLAN_CHANGE and final tasks. Every required_goal_id must be covered by executable checks with correct identity/data, scope, order and dependencies. Paired cases need at least three independent ready goal groups. Do not require predetermined task IDs or a pasted plan.",
-    "tester_task_success": "Attempted tasks are the denominator. A task succeeds when assigned checks are completed and results correctly evidenced, including a real reported defect. Missing checks, invalid role/data, unsupported preconditions and interrupted checks are unsuccessful/unknown. Raw success_status=FAIL on a discovered defect must not be used alone as testing failure.",
-    "end_to_end_success": "All required goals must be correctly completed, every expected defect must have one evidenced canonical confirmed finding, controls must have none, and the summary must faithfully preserve statuses/results. A COMPLETED run alone is insufficient; keep failed/interrupted runs in the denominator.",
+    "tester_task_success": "Score explicit stable check IDs, their assigned identity, behavior and dependencies. All required checks must be completed and passed or linked to a correctly confirmed defect. Keep historical errors; successful retries or evidenced completion after recovery are recovered errors, while unresolved blocking errors fail the Task. Interrupted and never-started tasks are distinct. Runtime, report and formal metrics share the same deterministic scoring function.",
+    "end_to_end_success": "All tasks and all explicit required checks must be correctly completed, including configured dependencies, every expected defect must have one evidenced canonical confirmed finding, controls must have none. Failed, interrupted and omitted work cannot pass. Completion text alone is insufficient.",
     "bug_precision": "Correct canonical confirmed findings / all canonical confirmed findings, with duplicates retained separately. Unmatched confirmed findings do not increase the numerator; use N/A for a zero denominator.",
     "bug_recall": "Unique matched enabled bug_ids / expected_bug_count. Count a repeated bug in each scenario independently. Use N/A for controls and never remove difficult or blocked enabled defects from the denominator.",
     "reproduction_success": "Successfully stably reproduced findings / findings attempted for reproduction, requiring two matches within three reset/fresh attempts. Independent verification is also required for confirmation; per-attempt reproduction success is a different supporting metric.",
     "tester_metrics": "Use LLM_CALL events with result.agent=tester grouped by task_id for requests/tokens/cost and JEV_CALL events grouped by task_id for Jev requests. Task latency uses TASK_STARTED and TASK_FINISHED or TESTER_FAILED, with terminal task.finished_at as a fallback. Count attempted tasks including failed/interrupted tasks, keep task latency distinct from summed LLM latency, and mark unavailable data explicitly.",
     "parallelism": "Only compare cases with expected_parallelism.compare_1_vs_3=true. Change both tester/browser-context capacity from 1 to 3, keeping scenario, switches, reset, data, model/provider, tracing and every other budget unchanged. Wall clock includes planning through final summary. Peak uses TASK_STARTED and TASK_FINISHED/TESTER_FAILED or terminal task.finished_at; utilization is active Tester time divided by capacity times the exploration window. Failed and interrupted intervals are not discarded.",
     "resume_metrics": "Design/static/local checks are not measured Baseline or resume results. Main planning/summary latencies and provider efficiency come from phase-tagged LLM_CALL events; judge plan and summary correctness only against completed-run evidence.",
-    "current_metric_gap": "Resolved: FormalRunExecutor performs post-run evidence matching and supplies GroundTruthComparison. Task evaluation distinguishes execution failure, correctly detected application defects, normal behavior and incomplete checks. Reproduction success is per finding; the attempt rate remains separately named. Failed/interrupted runs retain matching counts."
+    "current_metric_gap": "v2 uses shared deterministic check scoring; recovered errors do not permanently poison task success. Historical v1 runs have no explicit check IDs and are not directly comparable.",
+    "check_completion": "Count unique correctly identified, ordered executed assertions / explicit required checks, including observed application assertion failures. Completion alone is not Task Success; unsupported deviations cannot pass. Duplicate assertions do not complete another check."
   },
   "seeded_bug_audit": [
     {
@@ -35,9 +36,6 @@
       "reset_supported": true,
       "multiple_contexts": [
         "D04",
-        "D10",
-        "D11",
-        "D15",
         "H07"
       ],
       "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
@@ -51,7 +49,6 @@
       "multiple_contexts": [
         "D05",
         "D12",
-        "D14",
         "H03",
         "H07"
       ],
@@ -65,9 +62,7 @@
       "reset_supported": true,
       "multiple_contexts": [
         "D06",
-        "D10",
         "D13",
-        "D16",
         "H05"
       ],
       "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
@@ -80,9 +75,6 @@
       "reset_supported": true,
       "multiple_contexts": [
         "D07",
-        "D11",
-        "D14",
-        "D16",
         "H08"
       ],
       "local_reproduction": "Deterministic API/browser and fake-provider validation; B5/B6 paths include two stable fresh reproductions and independent verification.",
@@ -96,7 +88,6 @@
       "multiple_contexts": [
         "D08",
         "D13",
-        "D15",
         "H06",
         "H08"
       ],
@@ -109,7 +100,6 @@
       "explicit_expected_behavior": "EB-MEMBER-ACCESS",
       "reset_supported": true,
       "multiple_contexts": [
-        "D09",
         "D12",
         "H04",
         "H06"
@@ -134,7 +124,48 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D01.login",
+        "D01.session-refresh",
+        "D01.empty-title",
+        "D01.task-created",
+        "D01.task-edited",
+        "D01.task-edit-persisted",
+        "D01.task-deleted-immediate",
+        "D01.task-deleted-refresh",
+        "D01.task-deleted-reopen",
+        "D01.logout"
+      ],
+      "check_dependencies": {
+        "D01.session-refresh": [
+          "D01.login"
+        ],
+        "D01.empty-title": [
+          "D01.session-refresh"
+        ],
+        "D01.task-created": [
+          "D01.empty-title"
+        ],
+        "D01.task-edited": [
+          "D01.task-created"
+        ],
+        "D01.task-edit-persisted": [
+          "D01.task-edited"
+        ],
+        "D01.task-deleted-immediate": [
+          "D01.task-edit-persisted"
+        ],
+        "D01.task-deleted-refresh": [
+          "D01.task-deleted-immediate"
+        ],
+        "D01.task-deleted-reopen": [
+          "D01.task-deleted-refresh"
+        ],
+        "D01.logout": [
+          "D01.task-deleted-reopen"
+        ]
+      }
     },
     {
       "scenario_id": "D02",
@@ -151,7 +182,44 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D02.registered",
+        "D02.login",
+        "D02.initial-empty",
+        "D02.owned-created",
+        "D02.saved-immediate",
+        "D02.logout",
+        "D02.later-login",
+        "D02.saved-persisted",
+        "D02.owned-deleted"
+      ],
+      "check_dependencies": {
+        "D02.login": [
+          "D02.registered"
+        ],
+        "D02.initial-empty": [
+          "D02.login"
+        ],
+        "D02.owned-created": [
+          "D02.initial-empty"
+        ],
+        "D02.saved-immediate": [
+          "D02.owned-created"
+        ],
+        "D02.logout": [
+          "D02.saved-immediate"
+        ],
+        "D02.later-login": [
+          "D02.logout"
+        ],
+        "D02.saved-persisted": [
+          "D02.later-login"
+        ],
+        "D02.owned-deleted": [
+          "D02.saved-persisted"
+        ]
+      }
     },
     {
       "scenario_id": "D03",
@@ -170,7 +238,74 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D03.project-created",
+        "D03.project-saved-immediate",
+        "D03.project-saved-persisted",
+        "D03.project-deleted",
+        "D03.task-project-created",
+        "D03.task-created",
+        "D03.task-edited",
+        "D03.task-edit-persisted",
+        "D03.task-deleted-immediate",
+        "D03.task-deleted-refresh",
+        "D03.task-deleted-reopen",
+        "D03.task-project-cleanup",
+        "D03.member-project-created",
+        "D03.member-added",
+        "D03.member-edited",
+        "D03.member-edit-persisted",
+        "D03.member-removed",
+        "D03.member-removal-persisted"
+      ],
+      "check_dependencies": {
+        "D03.project-saved-immediate": [
+          "D03.project-created"
+        ],
+        "D03.project-saved-persisted": [
+          "D03.project-saved-immediate"
+        ],
+        "D03.project-deleted": [
+          "D03.project-saved-persisted"
+        ],
+        "D03.task-created": [
+          "D03.task-project-created"
+        ],
+        "D03.task-edited": [
+          "D03.task-created"
+        ],
+        "D03.task-edit-persisted": [
+          "D03.task-edited"
+        ],
+        "D03.task-deleted-immediate": [
+          "D03.task-edit-persisted"
+        ],
+        "D03.task-deleted-refresh": [
+          "D03.task-deleted-immediate"
+        ],
+        "D03.task-deleted-reopen": [
+          "D03.task-deleted-refresh"
+        ],
+        "D03.task-project-cleanup": [
+          "D03.task-deleted-reopen"
+        ],
+        "D03.member-added": [
+          "D03.member-project-created"
+        ],
+        "D03.member-edited": [
+          "D03.member-added"
+        ],
+        "D03.member-edit-persisted": [
+          "D03.member-edited"
+        ],
+        "D03.member-removed": [
+          "D03.member-edit-persisted"
+        ],
+        "D03.member-removal-persisted": [
+          "D03.member-removed"
+        ]
+      }
     },
     {
       "scenario_id": "D04",
@@ -216,7 +351,20 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D04.delete-immediate",
+        "D04.delete-refresh",
+        "D04.delete-reopen"
+      ],
+      "check_dependencies": {
+        "D04.delete-refresh": [
+          "D04.delete-immediate"
+        ],
+        "D04.delete-reopen": [
+          "D04.delete-refresh"
+        ]
+      }
     },
     {
       "scenario_id": "D05",
@@ -262,7 +410,20 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D05.delete-rejected",
+        "D05.project-preserved",
+        "D05.task-preserved"
+      ],
+      "check_dependencies": {
+        "D05.project-preserved": [
+          "D05.delete-rejected"
+        ],
+        "D05.task-preserved": [
+          "D05.project-preserved"
+        ]
+      }
     },
     {
       "scenario_id": "D06",
@@ -309,7 +470,20 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D06.empty-rejected",
+        "D06.empty-no-row",
+        "D06.valid-created"
+      ],
+      "check_dependencies": {
+        "D06.empty-no-row": [
+          "D06.empty-rejected"
+        ],
+        "D06.valid-created": [
+          "D06.empty-no-row"
+        ]
+      }
     },
     {
       "scenario_id": "D07",
@@ -355,7 +529,16 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D07.save-immediate",
+        "D07.save-persisted"
+      ],
+      "check_dependencies": {
+        "D07.save-persisted": [
+          "D07.save-immediate"
+        ]
+      }
     },
     {
       "scenario_id": "D08",
@@ -401,203 +584,28 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
-    },
-    {
-      "scenario_id": "D09",
-      "enabled_bug_ids": [
-        "B6"
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D08.pending-operation",
+        "D08.pending-settled",
+        "D08.pending-refresh",
+        "D08.intentional-two",
+        "D08.intentional-refresh"
       ],
-      "expected_bug_count": 1,
-      "bugs": [
-        {
-          "behavior_id": "EB-MEMBER-ACCESS",
-          "true_behavior": "Member project access is evaluated using the login-time project_access_snapshot instead of current memberships; removal does not revoke an existing session snapshot.",
-          "expected": "The removed member session no longer lists the project and receives 403 for its task/member data without needing logout.",
-          "actual": "After a confirmed Admin/owner removal, the same earlier member session still lists the project and reads its task/member endpoints with 200. A later fresh login no longer includes that project.",
-          "difference": "Authorization revocation is delayed until the member creates a new session, though the old session remains logged in normally.",
-          "affected_feature": "Permission",
-          "page": "/",
-          "view": "Projects / Tasks / Members",
-          "paths": [
-            "DELETE /api/projects/{project_id}/members/{username}",
-            "GET /api/projects",
-            "GET /api/projects/{project_id}/tasks",
-            "GET /api/projects/{project_id}/members"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.login; DemoState.remove_member; DemoState._has_access",
-          "matching_evidence": [
-            "The acting member session is established while membership/access exists; invitation precedes login for a newly added member.",
-            "Independent owner/Admin context removes that exact membership, with successful DELETE and Members-list evidence.",
-            "The SAME retained member context later accesses the same project data with 200 or matching visible rows. Continued login alone is expected; a fresh post-removal login or unrelated project does not match."
-          ],
-          "bug_id": "B6",
-          "project_reference": "project-1",
-          "task_reference": null,
-          "applicable_role": "member",
-          "identity_reference": "member",
-          "trigger_context": "Retain a member login established before the Admin removes membership; observe project/task access after the confirmed removal."
-        }
-      ],
-      "required_goal_ids": [
-        "observe-revocation",
-        "remove-membership"
-      ],
-      "stable_reproduction": {
-        "matching_attempts": 2,
-        "max_attempts": 3,
-        "reset_before_each_attempt": true,
-        "fresh_verification_required": true
-      },
-      "current_formal_readiness": "ready",
-      "readiness_issues": []
-    },
-    {
-      "scenario_id": "D10",
-      "enabled_bug_ids": [
-        "B1",
-        "B3"
-      ],
-      "expected_bug_count": 2,
-      "bugs": [
-        {
-          "behavior_id": "EB-TASK-DELETE",
-          "true_behavior": "delete_task validates the target but does not remove it from stored tasks. The UI removes the row optimistically; reloading the task list restores it.",
-          "expected": "A successfully deleted task stays absent in subsequent reads and after browser refresh.",
-          "actual": "DELETE returns 200 and the row initially disappears, but the same task_id remains in storage and returns after GET/reload.",
-          "difference": "Successful-looking deletion changes the immediate UI only, not persisted task data.",
-          "affected_feature": "Task",
-          "page": "/",
-          "view": "Tasks",
-          "paths": [
-            "DELETE /api/projects/{project_id}/tasks/{task_id}",
-            "GET /api/projects/{project_id}/tasks"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.delete_task; APP_HTML:loadTasks",
-          "matching_evidence": [
-            "Successful deletion action for the named task and project, with task_id or a unique task-title-to-id link.",
-            "Timestamped task list or DOM after refresh/reopen shows that same task still present.",
-            "Identity had authorized task access before deletion. A different task or a failed delete does not match."
-          ],
-          "bug_id": "B1",
-          "project_reference": "project created from project_name",
-          "task_reference": "task created from task_title",
-          "applicable_role": "member",
-          "identity_reference": "member",
-          "trigger_context": "Delete a newly created task as project owner, inspect after refresh before final project deletion."
-        },
-        {
-          "behavior_id": "EB-PROJECT-NAME",
-          "true_behavior": "create_project and update_project strip input but bypass rejection when the normalized name is empty.",
-          "expected": "Create or Edit rejects an empty normalized name with 400/project name is required and leaves data unchanged.",
-          "actual": "POST returns 201 or PATCH returns 200, and a project is stored with an empty name; refresh preserves the empty name.",
-          "difference": "Required-name validation is missing on both creation and editing.",
-          "affected_feature": "Project",
-          "page": "/",
-          "view": "Projects / Edit item",
-          "paths": [
-            "POST /api/projects",
-            "PATCH /api/projects/{project_id}",
-            "GET /api/projects"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.create_project; DemoState.update_project",
-          "matching_evidence": [
-            "Empty or whitespace-only submitted input established by configured data reference and recorded action.",
-            "Successful corresponding create/update and an empty project-name row linked to the same project_id after settling/refresh.",
-            "No validation message alone is insufficient. Different empty inputs on the same behavior deduplicate to this one bug."
-          ],
-          "bug_id": "B3",
-          "project_reference": "new project created with whitespace_project_name",
-          "task_reference": null,
-          "applicable_role": "member",
-          "identity_reference": "member",
-          "trigger_context": "Submit a whitespace-only name before the valid owner lifecycle."
-        }
-      ],
-      "required_goal_ids": [
-        "owner-lifecycle"
-      ],
-      "stable_reproduction": {
-        "matching_attempts": 2,
-        "max_attempts": 3,
-        "reset_before_each_attempt": true,
-        "fresh_verification_required": true
-      },
-      "current_formal_readiness": "ready",
-      "readiness_issues": []
-    },
-    {
-      "scenario_id": "D11",
-      "enabled_bug_ids": [
-        "B1",
-        "B4"
-      ],
-      "expected_bug_count": 2,
-      "bugs": [
-        {
-          "behavior_id": "EB-TASK-DELETE",
-          "true_behavior": "delete_task validates the target but does not remove it from stored tasks. The UI removes the row optimistically; reloading the task list restores it.",
-          "expected": "A successfully deleted task stays absent in subsequent reads and after browser refresh.",
-          "actual": "DELETE returns 200 and the row initially disappears, but the same task_id remains in storage and returns after GET/reload.",
-          "difference": "Successful-looking deletion changes the immediate UI only, not persisted task data.",
-          "affected_feature": "Task",
-          "page": "/",
-          "view": "Tasks",
-          "paths": [
-            "DELETE /api/projects/{project_id}/tasks/{task_id}",
-            "GET /api/projects/{project_id}/tasks"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.delete_task; APP_HTML:loadTasks",
-          "matching_evidence": [
-            "Successful deletion action for the named task and project, with task_id or a unique task-title-to-id link.",
-            "Timestamped task list or DOM after refresh/reopen shows that same task still present.",
-            "Identity had authorized task access before deletion. A different task or a failed delete does not match."
-          ],
-          "bug_id": "B1",
-          "project_reference": "project-2",
-          "task_reference": "task created from task_title",
-          "applicable_role": "admin",
-          "identity_reference": "admin",
-          "trigger_context": "Delete a new task in the renamed private project as Admin; select project-2 again after refresh."
-        },
-        {
-          "behavior_id": "EB-PROJECT-SAVE",
-          "true_behavior": "update_project persists the new name but returns a snapshot with the old name; the frontend copies that old response into the saved project row.",
-          "expected": "Immediately after successful Save, the row and persisted reads both show the new name.",
-          "actual": "PATCH succeeds and the dialog closes, yet the row still shows the old name. GET/refresh shows the newly saved name.",
-          "difference": "Immediate UI/PATCH response disagrees with persisted data. The rename is saved, not lost.",
-          "affected_feature": "Project",
-          "page": "/",
-          "view": "Projects / Edit item",
-          "paths": [
-            "PATCH /api/projects/{project_id}",
-            "GET /api/projects"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.update_project; APP_HTML:loadProjects edit callback",
-          "matching_evidence": [
-            "Old and submitted new names linked to one owned/Admin-editable project and a completed Save action.",
-            "DOM/screenshot of the old row name after the dialog closes and before navigation/reload.",
-            "Later DOM/read of the same project showing the new saved name. A genuinely unsaved rename or only post-refresh evidence does not match."
-          ],
-          "bug_id": "B4",
-          "project_reference": "project-2",
-          "task_reference": null,
-          "applicable_role": "admin",
-          "identity_reference": "admin",
-          "trigger_context": "Check the saved name before leaving Projects; later navigation must not erase the immediate evidence."
-        }
-      ],
-      "required_goal_ids": [
-        "private-lifecycle"
-      ],
-      "stable_reproduction": {
-        "matching_attempts": 2,
-        "max_attempts": 3,
-        "reset_before_each_attempt": true,
-        "fresh_verification_required": true
-      },
-      "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "check_dependencies": {
+        "D08.pending-settled": [
+          "D08.pending-operation"
+        ],
+        "D08.pending-refresh": [
+          "D08.pending-settled"
+        ],
+        "D08.intentional-two": [
+          "D08.pending-refresh"
+        ],
+        "D08.intentional-refresh": [
+          "D08.intentional-two"
+        ]
+      }
     },
     {
       "scenario_id": "D12",
@@ -631,7 +639,15 @@
           "task_reference": null,
           "applicable_role": "member",
           "identity_reference": "member",
-          "trigger_context": "After removal, a non-owner member attempts project deletion while the retained session still exposes the project. The successful destructive request is distinct from the preceding read-access defect."
+          "trigger_context": "The non-owner member attempts deletion only after its retained-session read checkpoint. The retained Admin session verifies project/task preservation afterwards; observer identity may differ from the actor, but ordered network evidence must still establish a successful non-owner member DELETE.",
+          "assertion_identity_references": [
+            "member",
+            "admin"
+          ],
+          "assertion_roles": [
+            "member",
+            "admin"
+          ]
         },
         {
           "behavior_id": "EB-MEMBER-ACCESS",
@@ -673,7 +689,36 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D12.member-ready",
+        "D12.revoked-project",
+        "D12.revoked-tasks",
+        "D12.delete-rejected",
+        "D12.delete-preservation",
+        "D12.membership-removed",
+        "D12.removal-persisted"
+      ],
+      "check_dependencies": {
+        "D12.revoked-project": [
+          "D12.removal-persisted"
+        ],
+        "D12.revoked-tasks": [
+          "D12.revoked-project"
+        ],
+        "D12.delete-rejected": [
+          "D12.revoked-tasks"
+        ],
+        "D12.delete-preservation": [
+          "D12.delete-rejected"
+        ],
+        "D12.membership-removed": [
+          "D12.member-ready"
+        ],
+        "D12.removal-persisted": [
+          "D12.membership-removed"
+        ]
+      }
     },
     {
       "scenario_id": "D13",
@@ -749,232 +794,58 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
-    },
-    {
-      "scenario_id": "D14",
-      "enabled_bug_ids": [
-        "B2",
-        "B4"
+      "readiness_issues": [],
+      "required_check_ids": [
+        "D13.empty-rejected",
+        "D13.empty-no-row",
+        "D13.whitespace-rejected",
+        "D13.whitespace-no-row",
+        "D13.pending-operation",
+        "D13.pending-settled",
+        "D13.pending-refresh",
+        "D13.task-project-created",
+        "D13.task-created",
+        "D13.task-edited",
+        "D13.task-edit-persisted",
+        "D13.task-deleted-immediate",
+        "D13.task-deleted-refresh",
+        "D13.task-deleted-reopen"
       ],
-      "expected_bug_count": 2,
-      "bugs": [
-        {
-          "behavior_id": "EB-PROJECT-DELETE-AUTH",
-          "true_behavior": "delete_project permits a member who has project access to delete a project owned by another user. The project and all its tasks are removed.",
-          "expected": "A non-owner member deletion is rejected with 403 and preserves the project and tasks.",
-          "actual": "An accessible non-owner project DELETE returns 200; the project disappears from refreshed lists and its tasks are removed.",
-          "difference": "Membership or a retained access snapshot incorrectly grants an owner-only destructive operation.",
-          "affected_feature": "Permission",
-          "page": "/",
-          "view": "Projects",
-          "paths": [
-            "DELETE /api/projects/{project_id}",
-            "GET /api/projects"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.delete_project",
-          "matching_evidence": [
-            "Acting username is a member and differs from the target project owner; membership/access relationship is established before the attempt.",
-            "Successful DELETE for that project and later absence of the same project in a refreshed list or owner-side read.",
-            "Owner or Admin deletion is legitimate and does not match. Denied attempts or hidden buttons alone do not match."
-          ],
-          "bug_id": "B2",
-          "project_reference": "project-1",
-          "task_reference": null,
-          "applicable_role": "member",
-          "identity_reference": "member",
-          "trigger_context": "Attempt deletion of an Admin-owned project after a separately completed Admin rename."
-        },
-        {
-          "behavior_id": "EB-PROJECT-SAVE",
-          "true_behavior": "update_project persists the new name but returns a snapshot with the old name; the frontend copies that old response into the saved project row.",
-          "expected": "Immediately after successful Save, the row and persisted reads both show the new name.",
-          "actual": "PATCH succeeds and the dialog closes, yet the row still shows the old name. GET/refresh shows the newly saved name.",
-          "difference": "Immediate UI/PATCH response disagrees with persisted data. The rename is saved, not lost.",
-          "affected_feature": "Project",
-          "page": "/",
-          "view": "Projects / Edit item",
-          "paths": [
-            "PATCH /api/projects/{project_id}",
-            "GET /api/projects"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.update_project; APP_HTML:loadProjects edit callback",
-          "matching_evidence": [
-            "Old and submitted new names linked to one owned/Admin-editable project and a completed Save action.",
-            "DOM/screenshot of the old row name after the dialog closes and before navigation/reload.",
-            "Later DOM/read of the same project showing the new saved name. A genuinely unsaved rename or only post-refresh evidence does not match."
-          ],
-          "bug_id": "B4",
-          "project_reference": "project-1",
-          "task_reference": null,
-          "applicable_role": "admin",
-          "identity_reference": "admin",
-          "trigger_context": "Capture the immediate save mismatch before the member permission check can delete the shared project."
-        }
-      ],
-      "required_goal_ids": [
-        "owner-save",
-        "joined-delete"
-      ],
-      "stable_reproduction": {
-        "matching_attempts": 2,
-        "max_attempts": 3,
-        "reset_before_each_attempt": true,
-        "fresh_verification_required": true
-      },
-      "current_formal_readiness": "ready",
-      "readiness_issues": []
-    },
-    {
-      "scenario_id": "D15",
-      "enabled_bug_ids": [
-        "B1",
-        "B5"
-      ],
-      "expected_bug_count": 2,
-      "bugs": [
-        {
-          "behavior_id": "EB-TASK-DELETE",
-          "true_behavior": "delete_task validates the target but does not remove it from stored tasks. The UI removes the row optimistically; reloading the task list restores it.",
-          "expected": "A successfully deleted task stays absent in subsequent reads and after browser refresh.",
-          "actual": "DELETE returns 200 and the row initially disappears, but the same task_id remains in storage and returns after GET/reload.",
-          "difference": "Successful-looking deletion changes the immediate UI only, not persisted task data.",
-          "affected_feature": "Task",
-          "page": "/",
-          "view": "Tasks",
-          "paths": [
-            "DELETE /api/projects/{project_id}/tasks/{task_id}",
-            "GET /api/projects/{project_id}/tasks"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.delete_task; APP_HTML:loadTasks",
-          "matching_evidence": [
-            "Successful deletion action for the named task and project, with task_id or a unique task-title-to-id link.",
-            "Timestamped task list or DOM after refresh/reopen shows that same task still present.",
-            "Identity had authorized task access before deletion. A different task or a failed delete does not match."
-          ],
-          "bug_id": "B1",
-          "project_reference": "project-1",
-          "task_reference": "task created from task_title",
-          "applicable_role": "member",
-          "identity_reference": "member",
-          "trigger_context": "Delete a newly created and renamed joined-member task while other identities work in separate projects."
-        },
-        {
-          "behavior_id": "EB-PROJECT-SUBMIT",
-          "true_behavior": "create_project ignores its submission-id deduplication lookup and allocates a fresh project for each request, even when requests use the same operation identifier.",
-          "expected": "Repeating one create operation with the same nonempty submission_id returns the same project_id and creates one stored project.",
-          "actual": "Two requests with the same nonempty submission_id return different project_ids and leave two separate projects with the same supplied name.",
-          "difference": "Idempotence of one pending create operation is lost; separate completed create operations remain valid.",
-          "affected_feature": "Project",
-          "page": "/",
-          "view": "Projects / Create Project",
-          "paths": [
-            "POST /api/projects",
-            "GET /api/projects"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.create_project; APP_HTML:project-form submit listener",
-          "matching_evidence": [
-            "Two create requests carry the SAME nonempty submission_id for the scoped input name and acting username; preserve sanitized request-body evidence or equivalent verified operation identity.",
-            "Two successful responses or refreshed rows show distinct project_ids for those same-operation requests.",
-            "Same names or two ordinary sequential clicks alone do not match: the first completed response rotates projectSubmissionId. Current NETWORK evidence stores method/URL/status only, and TRACE sanitization strips request bodies."
-          ],
-          "bug_id": "B5",
-          "project_reference": "projects created from submission_project_name",
-          "task_reference": null,
-          "applicable_role": "admin",
-          "identity_reference": "admin",
-          "trigger_context": "Observe duplicate identities for one pending Admin creation, separately from member2 owned-team setup."
-        }
-      ],
-      "required_goal_ids": [
-        "task-cleanup",
-        "pending-submission",
-        "owner-members"
-      ],
-      "stable_reproduction": {
-        "matching_attempts": 2,
-        "max_attempts": 3,
-        "reset_before_each_attempt": true,
-        "fresh_verification_required": true
-      },
-      "current_formal_readiness": "ready",
-      "readiness_issues": []
-    },
-    {
-      "scenario_id": "D16",
-      "enabled_bug_ids": [
-        "B3",
-        "B4"
-      ],
-      "expected_bug_count": 2,
-      "bugs": [
-        {
-          "behavior_id": "EB-PROJECT-NAME",
-          "true_behavior": "create_project and update_project strip input but bypass rejection when the normalized name is empty.",
-          "expected": "Create or Edit rejects an empty normalized name with 400/project name is required and leaves data unchanged.",
-          "actual": "POST returns 201 or PATCH returns 200, and a project is stored with an empty name; refresh preserves the empty name.",
-          "difference": "Required-name validation is missing on both creation and editing.",
-          "affected_feature": "Project",
-          "page": "/",
-          "view": "Projects / Edit item",
-          "paths": [
-            "POST /api/projects",
-            "PATCH /api/projects/{project_id}",
-            "GET /api/projects"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.create_project; DemoState.update_project",
-          "matching_evidence": [
-            "Empty or whitespace-only submitted input established by configured data reference and recorded action.",
-            "Successful corresponding create/update and an empty project-name row linked to the same project_id after settling/refresh.",
-            "No validation message alone is insufficient. Different empty inputs on the same behavior deduplicate to this one bug."
-          ],
-          "bug_id": "B3",
-          "project_reference": "project created with whitespace_project_name",
-          "task_reference": null,
-          "applicable_role": "member",
-          "identity_reference": "member",
-          "trigger_context": "Create validation is checked by a different identity from the Admin save and member workflows."
-        },
-        {
-          "behavior_id": "EB-PROJECT-SAVE",
-          "true_behavior": "update_project persists the new name but returns a snapshot with the old name; the frontend copies that old response into the saved project row.",
-          "expected": "Immediately after successful Save, the row and persisted reads both show the new name.",
-          "actual": "PATCH succeeds and the dialog closes, yet the row still shows the old name. GET/refresh shows the newly saved name.",
-          "difference": "Immediate UI/PATCH response disagrees with persisted data. The rename is saved, not lost.",
-          "affected_feature": "Project",
-          "page": "/",
-          "view": "Projects / Edit item",
-          "paths": [
-            "PATCH /api/projects/{project_id}",
-            "GET /api/projects"
-          ],
-          "source_reference": "demo_app/app.py:DemoState.update_project; APP_HTML:loadProjects edit callback",
-          "matching_evidence": [
-            "Old and submitted new names linked to one owned/Admin-editable project and a completed Save action.",
-            "DOM/screenshot of the old row name after the dialog closes and before navigation/reload.",
-            "Later DOM/read of the same project showing the new saved name. A genuinely unsaved rename or only post-refresh evidence does not match."
-          ],
-          "bug_id": "B4",
-          "project_reference": "project-2",
-          "task_reference": null,
-          "applicable_role": "admin",
-          "identity_reference": "admin",
-          "trigger_context": "Check immediate save display while other independent project workflows run."
-        }
-      ],
-      "required_goal_ids": [
-        "private-save",
-        "invalid-name",
-        "member-management"
-      ],
-      "stable_reproduction": {
-        "matching_attempts": 2,
-        "max_attempts": 3,
-        "reset_before_each_attempt": true,
-        "fresh_verification_required": true
-      },
-      "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "check_dependencies": {
+        "D13.empty-no-row": [
+          "D13.empty-rejected"
+        ],
+        "D13.whitespace-rejected": [
+          "D13.empty-no-row"
+        ],
+        "D13.whitespace-no-row": [
+          "D13.whitespace-rejected"
+        ],
+        "D13.pending-settled": [
+          "D13.pending-operation"
+        ],
+        "D13.pending-refresh": [
+          "D13.pending-settled"
+        ],
+        "D13.task-created": [
+          "D13.task-project-created"
+        ],
+        "D13.task-edited": [
+          "D13.task-created"
+        ],
+        "D13.task-edit-persisted": [
+          "D13.task-edited"
+        ],
+        "D13.task-deleted-immediate": [
+          "D13.task-edit-persisted"
+        ],
+        "D13.task-deleted-refresh": [
+          "D13.task-deleted-immediate"
+        ],
+        "D13.task-deleted-reopen": [
+          "D13.task-deleted-refresh"
+        ]
+      }
     },
     {
       "scenario_id": "H01",
@@ -1383,5 +1254,6 @@
   ],
   "observed_unseeded_limitations": [
     "Resolved: Task and Member view loaders discard stale overlapping responses using per-view request sequence counters. Seeded defect semantics remain unchanged."
-  ]
+  ],
+  "evaluation_version": "development-v2-checks-20261008"
 }

@@ -45,7 +45,10 @@ class PlaywrightExecutor:
     async def execute(
         self, *, page: Page, browser_session_id: str, action: WebAction
     ) -> ActionResult:
-        with trace_span("BrowserAction", "tool", metadata={"task_id": self.task_id, "tester_id": self.tester_id, "action": action.action_type.value}) as span:
+        metadata = {"task_id": self.task_id, "tester_id": self.tester_id, "action": action.action_type.value}
+        if action.check_id is not None:
+            metadata["check_id"] = action.check_id
+        with trace_span("BrowserAction", "tool", metadata=metadata) as span:
             started_at = utc_now()
             started_timer = perf_counter()
             success = False
@@ -382,6 +385,7 @@ class PlaywrightExecutor:
                 "confirmed": action.confirmed,
                 "timeout_ms": action.timeout_ms,
                 "behavior_id": action.behavior_id,
+                "check_id": action.check_id,
                 "goal_check": action.goal_check,
                 "identity_reference": action.identity_reference or self.identity_reference,
             },

@@ -16,6 +16,7 @@ from agent_framework import BaseChatClient
 from web_testing_system.config import RunConfig, Settings
 from web_testing_system.evaluation.matching import match_ground_truth
 from web_testing_system.evaluation.metrics import MetricsCalculator
+from web_testing_system.reporting import FinalReportBuilder
 from web_testing_system.runtime.computer_use import ComputerUseClient
 from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.state import StateStore
@@ -225,7 +226,8 @@ class FormalRunExecutor:
         main_client = self.main_client_factory() if self.main_client_factory is not None else None
         jev_selector = self.jev_selector_factory() if self.jev_selector_factory is not None else None
         run_directory = evidence_directory.parent.parent
-        run_settings = self.settings.model_copy(update={"artifacts_dir": run_directory, "state_db_path": run_directory / "state.db", "temporary_sensitive_dir": run_directory / "temporary_sensitive"})
+        real_provider = self.main_client_factory is None or self.tester_client_factory is None or self.jev_selector_factory is None
+        run_settings = self.settings.model_copy(update={"artifacts_dir": run_directory, "state_db_path": run_directory / "state.db", "temporary_sensitive_dir": run_directory / "temporary_sensitive", "langsmith_tracing": True if real_provider else self.settings.langsmith_tracing})
         execution_error: str | None = None
         try:
             report_path = await run(self.run_config, run_settings, route=route, run_id=run_id, scenario_id=self.scenario_id, main_client=main_client, tester_client_factory=self.tester_client_factory, computer_use_client_factory=self.computer_use_client_factory, jev_selector=jev_selector)
@@ -243,6 +245,12 @@ class FormalRunExecutor:
             matching["task_outcomes"] = calculator.task_outcomes(run_id, ground_truth=comparison)
             report_path.with_name("ground_truth_matching.json").write_text(json.dumps(matching, ensure_ascii=False, indent=2), encoding="utf-8")
         metrics = calculator.calculate(run_id, ground_truth=comparison, final_report=report, expected_behavior_ids=frozenset(behavior.behavior_id for behavior in self.run_config.expected_behaviors))
+        correct_ids = {finding_id for finding_id, bug_id in comparison.finding_to_bug.items() if bug_id in comparison.enabled_bug_ids} if comparison is not None else None
+        scored_report = FinalReportBuilder(store).build(run_id, full_evaluation=route.full_evaluation, correct_finding_ids=correct_ids, required_check_ids=comparison.required_check_ids if comparison is not None else None)
+        report["test_summary"] = scored_report["test_summary"]
+        report["task_outcomes"] = scored_report["task_outcomes"]
+        for outcome in report["task_outcomes"]:
+            store.record_task_outcome(task_id=outcome["task_id"], success_status=outcome["success_status"], reason=outcome["reason"], assertion_results=outcome["assertions"])
         report["evaluation_metrics"] = metrics
         report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         status = str(report["test_summary"]["run_status"])

@@ -86,6 +86,7 @@ class ActionCandidate:
     assertion: str = "contains"
     behavior_id: str | None = None
     goal_check: bool = False
+    check_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ class WebAction:
     behavior_id: str | None = None
     goal_check: bool = False
     identity_reference: str | None = None
+    check_id: str | None = None
 
 
 @dataclass(frozen=True)

@@ -44,6 +44,7 @@ class ReplayStep:
     behavior_id: str | None = None
     goal_check: bool = False
     session_reference: str | None = None
+    check_id: str | None = None
 
     def to_action(self, input_values: Mapping[str, str]) -> WebAction:
         value = None
@@ -52,10 +53,10 @@ class ReplayStep:
                 value = input_values[self.value_reference]
             except KeyError as error:
                 raise ValueError(f"missing replay input reference: {self.value_reference}") from error
-        return WebAction(action_type=self.action_type, target=self.target, value=value, value_reference=self.value_reference, url=self.url, expected=self.expected, assertion=self.assertion, key=self.key, wait_ms=self.wait_ms, resource_id=self.resource_id, requires_resource=self.requires_resource, confirmed=self.confirmed, timeout_ms=self.timeout_ms, identity_reference=self.identity_reference, behavior_id=self.behavior_id, goal_check=self.goal_check)
+        return WebAction(action_type=self.action_type, target=self.target, value=value, value_reference=self.value_reference, url=self.url, expected=self.expected, assertion=self.assertion, key=self.key, wait_ms=self.wait_ms, resource_id=self.resource_id, requires_resource=self.requires_resource, confirmed=self.confirmed, timeout_ms=self.timeout_ms, identity_reference=self.identity_reference, behavior_id=self.behavior_id, goal_check=self.goal_check, check_id=self.check_id)
 
     def to_record(self) -> dict[str, Any]:
-        return {"action_type": self.action_type.value, "target": self.target, "value_reference": self.value_reference, "url": self.url, "expected": self.expected, "assertion": self.assertion, "key": self.key, "wait_ms": self.wait_ms, "resource_id": self.resource_id, "requires_resource": self.requires_resource, "confirmed": self.confirmed, "timeout_ms": self.timeout_ms, "expected_success": self.expected_success, "expected_error_type": self.expected_error_type, "identity_reference": self.identity_reference, "behavior_id": self.behavior_id, "goal_check": self.goal_check, "session_reference": self.session_reference}
+        return {"action_type": self.action_type.value, "target": self.target, "value_reference": self.value_reference, "url": self.url, "expected": self.expected, "assertion": self.assertion, "key": self.key, "wait_ms": self.wait_ms, "resource_id": self.resource_id, "requires_resource": self.requires_resource, "confirmed": self.confirmed, "timeout_ms": self.timeout_ms, "expected_success": self.expected_success, "expected_error_type": self.expected_error_type, "identity_reference": self.identity_reference, "behavior_id": self.behavior_id, "goal_check": self.goal_check, "session_reference": self.session_reference, "check_id": self.check_id}
 
 
 @dataclass(frozen=True)
@@ -148,7 +149,7 @@ class ReplayPlanBuilder:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "RECORDED_INPUT_REFERENCE_MISSING")
             if value_reference is not None and value_reference not in actor_values:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, f"INPUT_VALUE_UNAVAILABLE:{value_reference}")
-            steps.append(ReplayStep(action_type=ActionType(action_name), target=action_data.get("target"), value_reference=value_reference, url=action_data.get("url"), expected=action_data.get("expected"), assertion=str(action_data.get("assertion", "contains")), key=action_data.get("key"), wait_ms=int(action_data.get("wait_ms", 0)), resource_id=action_data.get("resource_id"), requires_resource=bool(action_data.get("requires_resource", False)), confirmed=bool(action_data.get("confirmed", False)), timeout_ms=int(action_data.get("timeout_ms", 2_000)), expected_success=bool(history["success"]), expected_error_type=history["result"].get("error_type"), identity_reference=identity_reference, behavior_id=action_data.get("behavior_id"), goal_check=bool(action_data.get("goal_check", False)), session_reference=str(history["browser_session_id"])))
+            steps.append(ReplayStep(action_type=ActionType(action_name), target=action_data.get("target"), value_reference=value_reference, url=action_data.get("url"), expected=action_data.get("expected"), assertion=str(action_data.get("assertion", "contains")), key=action_data.get("key"), wait_ms=int(action_data.get("wait_ms", 0)), resource_id=action_data.get("resource_id"), requires_resource=bool(action_data.get("requires_resource", False)), confirmed=bool(action_data.get("confirmed", False)), timeout_ms=int(action_data.get("timeout_ms", 2_000)), expected_success=bool(history["success"]), expected_error_type=history["result"].get("error_type"), identity_reference=identity_reference, behavior_id=action_data.get("behavior_id"), goal_check=bool(action_data.get("goal_check", False)), session_reference=str(history["browser_session_id"]), check_id=action_data.get("check_id")))
             if through_event_id is not None and history["event_id"] == through_event_id:
                 boundary_found = True
         if not steps or not boundary_found:
@@ -184,7 +185,7 @@ class ReplayPlanBuilder:
             actor_values = (identity_values or {}).get(str(identity_reference), input_values)
             if value_reference is not None and value_reference not in actor_values:
                 return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, f"INPUT_VALUE_UNAVAILABLE:{value_reference}")
-            steps.append(ReplayStep(action_type=ActionType(action_name), target=step_data.get("target"), value_reference=value_reference, url=step_data.get("url"), expected=step_data.get("expected"), assertion=str(step_data.get("assertion", "contains")), key=step_data.get("key"), wait_ms=int(step_data.get("wait_ms", 0)), resource_id=step_data.get("resource_id"), requires_resource=bool(step_data.get("requires_resource", False)), confirmed=bool(step_data.get("confirmed", False)), timeout_ms=int(step_data.get("timeout_ms", 2_000)), expected_success=bool(step_data.get("expected_success", True)), expected_error_type=step_data.get("expected_error_type"), identity_reference=identity_reference, behavior_id=step_data.get("behavior_id"), goal_check=bool(step_data.get("goal_check", False)), session_reference=step_data.get("session_reference")))
+            steps.append(ReplayStep(action_type=ActionType(action_name), target=step_data.get("target"), value_reference=value_reference, url=step_data.get("url"), expected=step_data.get("expected"), assertion=str(step_data.get("assertion", "contains")), key=step_data.get("key"), wait_ms=int(step_data.get("wait_ms", 0)), resource_id=step_data.get("resource_id"), requires_resource=bool(step_data.get("requires_resource", False)), confirmed=bool(step_data.get("confirmed", False)), timeout_ms=int(step_data.get("timeout_ms", 2_000)), expected_success=bool(step_data.get("expected_success", True)), expected_error_type=step_data.get("expected_error_type"), identity_reference=identity_reference, behavior_id=step_data.get("behavior_id"), goal_check=bool(step_data.get("goal_check", False)), session_reference=step_data.get("session_reference"), check_id=step_data.get("check_id")))
         if not steps:
             return ReplayBuildResult("NEEDS_AI_ASSISTANCE", None, "STABLE_REPRODUCTION_STEPS_MISSING")
         data_requirements = dict(task["data_requirements"])

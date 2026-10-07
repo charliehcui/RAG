@@ -47,7 +47,7 @@ def test_settings_pin_paid_models_and_providers_from_environment(monkeypatch: py
     assert not hasattr(settings, "groq_api_key")
 
 
-def test_verified_paid_defaults_and_manual_backups(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_verified_paid_defaults_and_tester_backup(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("OPENROUTER_API_KEY", "MAIN_AGENT_MODEL", "MAIN_AGENT_PROVIDER", "TESTER_AGENT_MODEL", "TESTER_AGENT_PROVIDER", "COMPUTER_USE_MODEL"):
         monkeypatch.delenv(name, raising=False)
     settings = Settings(_env_file=None)
@@ -56,7 +56,9 @@ def test_verified_paid_defaults_and_manual_backups(monkeypatch: pytest.MonkeyPat
     assert settings.tester_agent_model == "z-ai/glm-5.3-flash"
     assert settings.tester_agent_provider == "relace"
     assert settings.main_agent_backup_model == "deepseek/deepseek-v3.2"
-    assert settings.tester_agent_backup_model == "openai/gpt-oss-20b"
+    assert settings.tester_agent_backup_model == "qwen/qwen3.8-flash"
+    assert settings.tester_agent_backup_provider is None
+    assert Settings(_env_file=None, tester_agent_backup_provider="").tester_agent_backup_provider is None
     assert settings.computer_use_model is None
     assert Settings(_env_file=None, computer_use_model="").computer_use_model is None
 

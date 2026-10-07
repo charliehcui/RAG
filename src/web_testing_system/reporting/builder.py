@@ -7,6 +7,11 @@ from datetime import datetime
 from statistics import fmean
 from typing import Any
 
+from web_testing_system.scoring import (
+    SUCCESSFUL_OUTCOMES,
+    check_completion,
+    score_run_tasks,
+)
 from web_testing_system.security import redact_sensitive_data
 from web_testing_system.state import StateStore
 
@@ -16,7 +21,7 @@ class FinalReportBuilder:
         self.store = store
         self.secrets = tuple(secret for secret in secrets if secret)
 
-    def build(self, run_id: str, *, full_evaluation: bool = False) -> dict[str, Any]:
+    def build(self, run_id: str, *, full_evaluation: bool = False, correct_finding_ids: set[str] | None = None, required_check_ids: frozenset[str] | None = None) -> dict[str, Any]:
         run = self.store.get_run(run_id)
         if run is None:
             raise KeyError(f"unknown run: {run_id}")
@@ -27,6 +32,7 @@ class FinalReportBuilder:
         evidence = self.store.list_evidence(run_id=run_id)
         budgets = self.store.list_budgets(run_id)
         events = self.store.list_events(run_id)
+        scored_tasks = score_run_tasks(self.store, run_id, correct_finding_ids=correct_finding_ids)
         evidence_by_finding: dict[str, list[dict[str, Any]]] = {}
         for item in evidence:
             finding_id = item.get("finding_id")
@@ -42,12 +48,20 @@ class FinalReportBuilder:
             "needs_confirmation": needs_confirmation,
             "environment_issues": environment_issues,
             "findings": [{"finding_id": item["finding_id"], "status": item["status"], "title": item["title"], "expected": item["expected_result"], "actual": item["actual_result"], "screening_reason": item["screening_reason"], "verification": item["verification_result"], "reproduction_steps": item["reproduction_steps"], "reproduction_rate": item["reproduction_rate"], "evidence": self._evidence_references(item, evidence_by_finding)} for item in findings],
-            "task_outcomes": [{"task_id": task["task_id"], "goal": task["goal"], "feature": task["data_requirements"].get("feature"), "execution_status": task["status"], "success_status": task["success_status"], "reason": task["success_reason"], "application_behavior": "UNKNOWN" if task["success_reason"] == "AGENT_EXECUTION_FAILURE" else "FAIL" if any(not item["success"] for item in task["assertion_results"]) else "PASS" if task["success_status"] == "PASS" else "UNKNOWN", "assertions": task["assertion_results"]} for task in tasks],
+            "task_outcomes": scored_tasks,
             "model_configuration": run["scope"].get("model_configuration", {}),
             "cost_and_performance": self._cost_and_performance(run, budgets, events, len(confirmed)),
             "main_final_summary": self._final_summary(events),
             "full_evaluation": "Full Evaluation: RUN" if full_evaluation else "Full Evaluation: NOT RUN",
         }
+        summary = report["test_summary"]
+        summary["successful_tasks"] = sum(task["outcome"] in SUCCESSFUL_OUTCOMES for task in scored_tasks)
+        summary["unsuccessful_tasks"] = sum(task["success_status"] == "FAIL" for task in scored_tasks)
+        summary["unknown_success_tasks"] = sum(task["success_status"] == "UNKNOWN" for task in scored_tasks)
+        summary["not_started_tasks"] = sum(task["outcome"] == "NOT_STARTED" for task in scored_tasks)
+        summary["interrupted_tasks"] = sum(task["outcome"] == "INTERRUPTED" for task in scored_tasks)
+        completed, required = check_completion(scored_tasks, run["scope"].get("required_checks", []), required_check_ids=required_check_ids)
+        summary.update(completed_check_count=completed, required_check_count=required, check_completion=f"{completed}/{required} checks completed", evaluation_version=run["scope"].get("evaluation_version"))
         sanitized = redact_sensitive_data(report)
         assert isinstance(sanitized, dict)
         redacted = self._redact_registered_secrets(sanitized)

@@ -32,7 +32,7 @@ from web_testing_system.security import redact_sensitive_data
 
 logger = logging.getLogger(__name__)
 _trace_secrets: ContextVar[tuple[str, ...]] = ContextVar("trace_secrets", default=())
-_METADATA_KEYS = frozenset({"run_id", "scenario_id", "agent_role", "tester_id", "model", "provider", "main_model", "main_provider", "tester_model", "tester_provider", "task_id", "finding_id", "phase", "action", "success", "status", "error_type", "input_tokens", "output_tokens", "total_tokens", "total_cost", "cost_known", "ls_provider", "ls_model_name", "llm_request_count"})
+_METADATA_KEYS = frozenset({"run_id", "scenario_id", "case_id", "check_id", "failure_reason", "agent_role", "tester_id", "model", "provider", "main_model", "main_provider", "tester_model", "tester_provider", "task_id", "finding_id", "phase", "action", "success", "status", "error_type", "input_tokens", "output_tokens", "total_tokens", "total_cost", "cost_known", "ls_provider", "ls_model_name", "llm_request_count"})
 
 
 def safe_metadata(values: Mapping[str, Any]) -> dict[str, Any]:
@@ -112,7 +112,7 @@ async def trace_run(settings: Settings, run_id: str, *, scenario_id: str | None 
         except Exception as error:
             logger.warning("LangSmith unavailable: %s", type(error).__name__)
     try:
-        with tracing_context(enabled=client is not None, client=client, project_name=settings.langsmith_project, parent=False, metadata=safe_metadata({"run_id": run_id, "scenario_id": scenario_id or run_id, "agent_role": "orchestration", "main_model": settings.main_agent_model, "main_provider": settings.main_agent_provider, "tester_model": settings.tester_agent_model, "tester_provider": settings.tester_agent_provider})):
+        with tracing_context(enabled=client is not None, client=client, project_name=settings.langsmith_project, parent=False, metadata=safe_metadata({"run_id": run_id, "scenario_id": scenario_id or run_id, "case_id": scenario_id, "agent_role": "orchestration", "main_model": settings.main_agent_model, "main_provider": settings.main_agent_provider, "tester_model": settings.tester_agent_model, "tester_provider": settings.tester_agent_provider})):
             with trace_span("Run"):
                 yield
     finally:
@@ -146,6 +146,8 @@ class TraceToolMiddleware(FunctionMiddleware):
             try:
                 await call_next()
             except MiddlewareTermination:
-                trace_result(span, success=True)
+                result = context.result if isinstance(context.result, dict) else {}
+                trace_result(span, success=result.get("success", True), failure_reason=result.get("reason"))
                 raise
-            trace_result(span, success=True)
+            result = context.result if isinstance(context.result, dict) else {}
+            trace_result(span, success=result.get("success", True), failure_reason=result.get("reason"))

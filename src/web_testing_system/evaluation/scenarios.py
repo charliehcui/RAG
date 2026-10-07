@@ -39,6 +39,8 @@ def load_run_config(path: Path, *, scenario_id: str, target_url: str, tester_cou
         "test_data": case["required_test_data"],
         "denied_operations": dataset["denied_operations"],
         "expected_behaviors": case["expected_behaviors"],
+        "required_checks": case.get("required_checks", []),
+        "evaluation_version": dataset.get("evaluation_version"),
         "application_version": dataset["demo_version"],
         "reset_hook": {key: case["reset_requirements"][key] for key in ("hook_type", "target")},
         "budget": budget,

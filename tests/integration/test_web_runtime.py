@@ -132,7 +132,31 @@ async def test_jev_stop_is_local_and_cannot_declare_task_success(phase2_store: S
 
 
 @pytest.mark.asyncio
-async def test_page_goal_filters_other_accounts_and_revalidates_changed_page(phase2_store: StateStore) -> None:
+async def test_page_goal_uses_observed_input_locator_and_jev_resolves_descriptive_context(phase2_store: StateStore) -> None:
+    selector = GoalJevClient()
+    runtime = build_runtime(phase2_store, make_budget(), selector)  # type: ignore[arg-type]
+    runtime.input_values = {"name": "Example", "env:PROJECT_SECRET": "never-return-this"}
+    session_id = await runtime.start_session()
+    page = runtime.browser_manager.get_session(session_id).page
+    await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body=GOAL_HTML))
+    try:
+        await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/"))
+        await page.locator("form").evaluate("form => form.hidden = false")
+        observed = await runtime.page_state_reader.read(page)
+        target = next(element.target for element in observed.interactive_elements if element.label == "Project name")
+        result = await runtime.execute_page_goal("Create a project", inputs=[{"control": target, "value_reference": "name", "context": "the project creation form"}, {"control": "Project secret", "value_reference": "env:PROJECT_SECRET", "context": "the project creation form"}])
+        assert result["success"] and await page.locator("#status").inner_text() == "Created Example"
+        history = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+        assert [item["action_data"]["value_reference"] for item in history if item["action"] == "input"] == ["name", "env:PROJECT_SECRET"]
+        assert "the project creation form" in selector.states[0]["current_goal"]
+        assert "never-return-this" not in json.dumps(selector.states)
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("context", ["member2", "invited_username"])
+async def test_page_goal_filters_other_accounts_and_revalidates_changed_page(phase2_store: StateStore, context: str) -> None:
     class MemberJevClient:
         def __init__(self) -> None:
             self.states: list[Mapping[str, Any]] = []
@@ -154,7 +178,7 @@ async def test_page_goal_filters_other_accounts_and_revalidates_changed_page(pha
     await page.route("http://app.test/**", lambda route: route.fulfill(status=200, content_type="text/html", body=html))
     try:
         await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/members"))
-        result = await runtime.execute_page_goal("Edit invited member", context="member2", max_steps=1)
+        result = await runtime.execute_page_goal("Edit invited member", context=context, max_steps=1)
         assert result["reason"] == "PAGE_GOAL_STEP_LIMIT"
         assert await page.locator('tr[data-username="member2"] button').inner_text() == "Correct"
         assert await page.locator('tr[data-username="admin"] button').inner_text() == "Edit"
@@ -169,7 +193,7 @@ async def test_page_goal_filters_other_accounts_and_revalidates_changed_page(pha
             return selection
 
         runtime.jev_selector.select = change_page  # type: ignore[method-assign]
-        stale = await runtime.execute_page_goal("Edit invited member", context="member2", max_steps=1)
+        stale = await runtime.execute_page_goal("Edit invited member", context=context, max_steps=1)
         assert stale["reason"] == "CANDIDATE_EXPIRED"
         assert await page.locator('tr[data-username="member2"] button').inner_text() == "Edit"
     finally:
@@ -598,7 +622,7 @@ async def test_semantic_steps_execute_in_one_model_request_and_record_failed_che
         assert plan.plan is not None
         assert plan.plan.steps[-1].expected_success is False
         assert plan.plan.steps[-1].behavior_id == "EB-check"
-        assert phase2_store.get_task("task-1")["success_reason"] == "APPLICATION_BUG_DETECTED"  # type: ignore[index]
+        assert phase2_store.get_task("task-1")["success_reason"] == "APPLICATION_DEVIATION_PENDING"  # type: ignore[index]
     finally:
         await runtime.browser_manager.close()
 
@@ -745,7 +769,7 @@ async def test_prepared_login_handoff_finishes_with_one_fake_model_call_and_keep
             assert "member (member)" in text
             assert "secret-value" not in text
             step = {"action_type": "assertion", "control": "Name", "context": "entity-7", "expected_reference": "name", "assertion": "equals", "behavior_id": "EB-check"}
-            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("prepared", "execute_page_steps", arguments={"steps": [step], "finish": True})])])
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("prepared", "execute_test_plan", arguments={"goals": [{"goal": "Check the prepared project", "run_operations": False, "checks": [step]}]})])])
 
     runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
     runtime.expected_behavior_ids = ("EB-check",)
@@ -800,7 +824,7 @@ async def test_removed_member_assertion_does_not_bind_to_member2(phase2_store: S
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["normal", "exception", "assertion_failure", "infrastructure_failure"])
+@pytest.mark.parametrize("mode", ["normal", "exception", "assertion_failure", "infrastructure_failure", "no_plan"])
 async def test_complete_plan_keeps_multiple_goals_inside_jev_and_replans_only_on_exception(phase2_store: StateStore, mode: str) -> None:
     from web_testing_system.agents.tester_agent import TesterRunner
 
@@ -826,10 +850,12 @@ async def test_complete_plan_keeps_multiple_goals_inside_jev_and_replans_only_on
 
         async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
             self.calls += 1
-            assert self.calls <= (2 if mode == "exception" else 1), "Normal goal boundaries, assertions and API errors must not call Tester again"
-            if self.calls == 1:
-                assert options["tool_choice"] == {"mode": "required", "required_function_name": "execute_test_plan"}
+            assert self.calls <= (2 if mode in {"exception", "no_plan"} else 1), "Only genuine execution exceptions or a missing plan can call Tester again"
+            assert options["tool_choice"] == "auto"
+            assert [tool.name for tool in options["tools"]] == ["execute_test_plan"]
             assert "never-return-this" not in "\n".join(message.text for message in messages)
+            if mode == "no_plan":
+                return ChatResponse(messages=[Message(role="assistant", contents=["The task is done."])])
             goals = [create_goal, review_goal] if self.calls == 1 else [review_goal]
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call(f"plan-{self.calls}", "execute_test_plan", arguments={"goals": goals})])], usage_details={"input_token_count": 10, "output_token_count": 5})
 
@@ -849,8 +875,15 @@ async def test_complete_plan_keeps_multiple_goals_inside_jev_and_replans_only_on
         await runtime.execute_known_action(WebAction(action_type=ActionType.NAVIGATION, url="http://app.test/projects"))
         await runner.ask_tester_llm("Execute assigned Task task-1: create and review a public project")
         assert runtime.task_finished
-        assert client.calls == (2 if mode == "exception" else 1)
+        assert client.calls == (2 if mode in {"exception", "no_plan"} else 1)
         plans = phase2_store.list_events("run-1", event_types=("TESTER_PLAN",))
+        if mode == "no_plan":
+            assert not plans and not selector.states
+            rejected = phase2_store.list_events("run-1", task_id="task-1", event_types=("TESTER_PLAN_REJECTED",))
+            assert len(rejected) == 1 and rejected[0]["result"]["reason"] == "TEST_PLAN_REQUIRED"
+            assert phase2_store.get_task("task-1")["status"] == "STOPPED"  # type: ignore[index]
+            assert not phase2_store.list_recent_findings("run-1")
+            return
         assert [event["action"] for event in plans] == (["initial_plan", "exception_replan"] if mode == "exception" else ["initial_plan"])
         if mode == "infrastructure_failure":
             assert phase2_store.get_task("task-1")["status"] == "STOPPED"  # type: ignore[index]
@@ -868,7 +901,7 @@ async def test_complete_plan_keeps_multiple_goals_inside_jev_and_replans_only_on
 
 @pytest.mark.asyncio
 async def test_complete_plan_rejects_missing_checks_and_individual_action_sequences_before_execution(phase2_store: StateStore) -> None:
-    from web_testing_system.agents.tester_agent import PageGoal, PageStep
+    from web_testing_system.agents.tester_agent import PageGoal, PageInput, PageStep
 
     runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
     runtime.expected_behavior_ids = ("EB-check",)
@@ -879,7 +912,68 @@ async def test_complete_plan_rejects_missing_checks_and_individual_action_sequen
     assert result["missing_behavior_ids"] == ["EB-check"]
     invalid = await tools.execute_test_plan([PageGoal("Click instead of delegating", before_steps=[PageStep(ActionType.CLICK, target="#open")], checks=[PageStep(ActionType.ASSERTION, target="#status", behavior_id="EB-check")])])
     assert invalid["reason"] == "PLAN_BOUNDARY_ACTION_REQUIRED"
+    unavailable = await tools.execute_test_plan([PageGoal("An unsupported extra check", inputs=[PageInput("Login password", "invented-password")], checks=[PageStep(ActionType.ASSERTION, target="#status", behavior_id="EB-check")])])
+    assert unavailable["reason"] == "INPUT_VALUE_UNAVAILABLE"
+    assert unavailable["unavailable_references"] == ["invented-password"]
+    assert "available_references" in unavailable
     assert not phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+
+
+@pytest.mark.asyncio
+async def test_complete_plan_rejects_scope_expansion_with_unavailable_inputs_and_repairs_only_assigned_goal(phase2_store: StateStore) -> None:
+    from demo_app import DemoAppServer
+    from web_testing_system.agents.tester_agent import TesterRunner
+
+    class ScopedPlanClient(FunctionInvocationLayer, BaseChatClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+
+        async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
+            self.calls += 1
+            assert self.calls <= 2, "Only the invalid initial plan needs repair"
+            prompt = "\n".join(message.text for message in messages)
+            assert "Finish with finish_task." not in prompt
+            assert "demo-member" not in prompt
+            assert "Test ONLY the operations and checks in the assigned Task goal" in options["instructions"]
+            assigned_goal = {"goal": "Verify the prepared member login persists after refresh", "run_operations": False, "before_steps": [{"action_type": "refresh"}], "checks": [{"action_type": "assertion", "target": "body", "assertion": "contains", "expected_reference": "member_username", "behavior_id": "EB-AUTH-SESSION"}]}
+            if self.calls == 1:
+                goals = [assigned_goal, {"goal": "An unassigned invalid-password test", "inputs": [{"control": "Login password", "value_reference": "invented-invalid-password"}]}]
+            else:
+                results = [content.result for message in messages for content in message.contents if content.type == "function_result"]
+                rejected = results[-1]
+                if isinstance(rejected, str):
+                    rejected = json.loads(rejected)
+                assert rejected["reason"] == "INPUT_VALUE_UNAVAILABLE"
+                assert rejected["unavailable_references"] == ["invented-invalid-password"]
+                assert set(rejected["available_references"]) == {"member_username", "env:TEST_PASSWORD"}
+                assert len(phase2_store.list_action_history(run_id="run-1", task_id="task-1")) == 5, "No initial-plan operation may run before all inputs validate"
+                goals = [assigned_goal]
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call(f"scoped-{self.calls}", "execute_test_plan", arguments={"goals": goals})])])
+
+    runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
+    runtime.input_values = {"member_username": "member", "env:TEST_PASSWORD": "demo-member"}
+    runtime.expected_behavior_ids = ("EB-AUTH-SESSION",)
+    runtime.executor.identity_reference = "member"
+    assignment = Assignment(run_id="run-1", task_id="task-1", tester_id="tester-1", identity_id="identity-1", role="member", data_namespace="test", scope=("/",), step_budget=20)
+    try:
+        with DemoAppServer() as app:
+            runtime.executor.permission_checker.policy = ExecutionPolicy(allowed_url_prefixes=(app.base_url + "/",))
+            tools = AgentTools(assignment=assignment, runtime=runtime, store=phase2_store, task_context={"goal": "Log in as member and verify the accepted session persists after refresh", "identity_reference": "member", "secret_reference": "env:TEST_PASSWORD", "required_operations": ["login", "read"]})
+            client = ScopedPlanClient()
+            runner = TesterRunner(agent=create_tester_agent(client=client, assignment=assignment, tools=tools), assignment=assignment, runtime=runtime, store=phase2_store, budget=runtime.budget, budget_id="budget-1", prepare_task_page=True)
+            await runtime.start_session()
+            await runner.execute_known(WebAction(action_type=ActionType.NAVIGATION, url=app.base_url))
+            await runner.ask_tester_llm("Execute assigned Task task-1: check accepted member login and refresh persistence. Finish with finish_task.")
+            assert client.calls == 2 and runtime.task_finished
+            task = phase2_store.get_task("task-1")
+            assert task is not None and task["success_status"] == "PASS"
+            assert len(task["assertion_results"]) == 1 and task["assertion_results"][0]["behavior_id"] == "EB-AUTH-SESSION"
+            history = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+            assert [item["action_data"]["value_reference"] for item in history if item["action"] == "input"] == ["member_username", "env:TEST_PASSWORD"]
+            assert not phase2_store.list_recent_findings("run-1")
+    finally:
+        await runtime.browser_manager.close()
 
 
 @pytest.mark.asyncio

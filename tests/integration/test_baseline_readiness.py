@@ -14,6 +14,7 @@ from agent_framework._middleware import ChatMiddlewareLayer
 from agent_framework._tools import FunctionInvocationLayer
 from playwright.async_api import Route, async_playwright
 from test_architecture_fixes import FakeJev, PlanningClient
+from test_architecture_fixes import run as run_retained_tools
 
 from demo_app import DemoAppServer, SeededBugs
 from web_testing_system.config import Settings
@@ -47,7 +48,7 @@ from web_testing_system.state import StateStore
 ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = ROOT / "evaluation/scenarios.json"
 ANSWERS = ROOT / "evaluation/ground_truth.json"
-BLOCKED_IDS = ["D08", "D09", "D12", "D13", "D15", "H04", "H06", "H08"]
+BLOCKED_IDS = ["D08", "D12", "D13", "H04", "H06", "H08"]
 
 
 def known(action_type: str, **arguments: Any) -> tuple[str, dict[str, Any]]:
@@ -177,7 +178,7 @@ class ScriptedWorker(FunctionInvocationLayer, ChatMiddlewareLayer, BaseChatClien
         raise AssertionError("finish_task did not terminate the worker")
 
 
-def test_all_24_scenarios_prepare_without_answer_loading(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_all_18_scenarios_prepare_without_answer_loading(monkeypatch: pytest.MonkeyPatch) -> None:
     original = Path.read_text
 
     def read(path: Path, *args: Any, **kwargs: Any) -> str:
@@ -186,8 +187,8 @@ def test_all_24_scenarios_prepare_without_answer_loading(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(Path, "read_text", read)
     dataset = json.loads(SCENARIOS.read_text(encoding="utf-8"))
-    assert len(dataset["scenarios"]) == 24
-    assert sum(case["split"] == "development" for case in dataset["scenarios"]) == 16
+    assert len(dataset["scenarios"]) == 18
+    assert sum(case["split"] == "development" for case in dataset["scenarios"]) == 10
     assert sum(case["split"] == "holdout" for case in dataset["scenarios"]) == 8
     for case in dataset["scenarios"]:
         config = load_run_config(SCENARIOS, scenario_id=case["scenario_id"], target_url="http://127.0.0.1:8000")
@@ -199,7 +200,7 @@ def test_all_24_scenarios_prepare_without_answer_loading(monkeypatch: pytest.Mon
 @pytest.mark.integration
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario_id,mode", [(scenario_id, "bugs") for scenario_id in BLOCKED_IDS] + [("D01", "normal"), ("D01", "false_positive"), ("D08", "incomplete"), ("D01", "execution_failure")])
-async def test_blocked_cases_reproduce_verify_and_match_with_fake_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario_id: str, mode: str) -> None:
+async def test_partial_bug_paths_reproduce_without_implying_complete_task_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario_id: str, mode: str) -> None:
     dataset = json.loads(SCENARIOS.read_text(encoding="utf-8"))
     case = next(item for item in dataset["scenarios"] if item["scenario_id"] == scenario_id)
     bug_fields = {"B1": "b1_deleted_task_reappears", "B2": "b2_member_deletes_other_project", "B3": "b3_empty_project_name", "B4": "b4_saved_ui_stale", "B5": "b5_double_submit_duplicates", "B6": "b6_removed_member_session_active"}
@@ -207,6 +208,7 @@ async def test_blocked_cases_reproduce_verify_and_match_with_fake_providers(tmp_
     for identity in ["admin", "member", "member2"]:
         monkeypatch.setenv(f"DEMO_{identity.upper()}_PASSWORD", "demo-" + identity)
     monkeypatch.setenv("LANGSMITH_TRACING", "false")
+    monkeypatch.setattr("web_testing_system.orchestration.runner.run", run_retained_tools)
     tasks = [{"task_id": goal["goal_id"], "goal": goal["description"], "feature": goal["feature"], "priority": "P1", "dependencies": [], "step_budget": 90, "data_requirements": {"identity_reference": goal["identity_reference"], "role": next(account["role"] for account in case["allowed_roles"] if account["identity_reference"] == goal["identity_reference"]), "expected_behavior_ids": goal["expected_behavior_ids"], "test_data_keys": goal["test_data_keys"]}, "scope_targets": ["/"], "required_operations": ["read", "create", "update", "delete"]} for goal in case["required_test_goals"]]
     main = PlanningClient(tasks)
     signals = {name: asyncio.Event() for name in ["invited", "member-ready", "removed"]}
@@ -221,6 +223,21 @@ async def test_blocked_cases_reproduce_verify_and_match_with_fake_providers(tmp_
             scripts[goal_id] = [*login("member2"), ("finish_task", {})]
         elif mode == "execution_failure":
             scripts[goal_id] = [*login("member"), known("click", target="#does-not-exist"), ("finish_task", {})]
+
+        # These scripts isolate bug triggers; they deliberately do not implement every v2 check.
+        for assigned_goal in case["required_test_goals"]:
+            specs = [check for check in case.get("required_checks", []) if check["goal_id"] == assigned_goal["goal_id"]]
+            for name, arguments in scripts[assigned_goal["goal_id"]]:
+                behavior = arguments.get("behavior_id")
+                eligible = [check for check in specs if check["behavior_id"] == behavior and check.get("action_type", "assertion") == "assertion"]
+                preferred = {"EB-PROJECT-SUBMIT": "pending-settled", "EB-MEMBER-ACCESS": "revoked-project", "EB-MEMBER-LIFECYCLE": "removal-persisted", "EB-TASK-LIFECYCLE": "task-edited", "EB-TASK-DELETE": "task-deleted-refresh", "EB-PROJECT-DELETE-AUTH": "delete-preservation"}.get(behavior)
+                eligible.sort(key=lambda check: not check["check_id"].endswith("." + str(preferred)))
+                if name == "execute_known_action" and arguments.get("action_type") == "assertion" and eligible:
+                    arguments["check_id"] = eligible[0]["check_id"]
+                if name == "execute_known_action" and arguments.get("action_type") == "repeat_submit":
+                    proof = next((check for check in specs if check.get("action_type") == "repeat_submit"), None)
+                    if proof:
+                        arguments.update(behavior_id=proof["behavior_id"], check_id=proof["check_id"])
 
         def worker_factory() -> ScriptedWorker:
             worker = ScriptedWorker(scripts, signals, {behavior.behavior_id: behavior.description for behavior in config.expected_behaviors})
@@ -259,8 +276,14 @@ async def test_blocked_cases_reproduce_verify_and_match_with_fake_providers(tmp_
     else:
         assert result.metrics["bug_precision"] == result.metrics["bug_recall"] == 1.0
         assert result.metrics["reproduction_success_rate"] == 1.0
-    assert set(matching["task_outcomes"].values()) <= {"APPLICATION_BUG_DETECTED", "NORMAL_APPLICATION_BEHAVIOR"}, matching
-    assert result.metrics["task_success_rate"] == 1.0
+    if case.get("required_checks"):
+        assert result.metrics["task_success_rate"] == result.metrics["e2e_success"] == 0.0
+        assert result.metrics["check_completion_rate"] < 1.0
+        report = json.loads(matching_path.with_name("report.json").read_text(encoding="utf-8"))
+        assert {item["task_id"]: item["outcome"] for item in report["task_outcomes"]} == matching["task_outcomes"]
+    else:
+        assert set(matching["task_outcomes"].values()) <= {"APPLICATION_BUG_DETECTED", "NORMAL_APPLICATION_BEHAVIOR"}, matching
+        assert result.metrics["task_success_rate"] == 1.0
     assert len(workers) == len(case["required_test_goals"])
     store = StateStore(tmp_path / "series" / "run-1" / "state.db")
     for finding in store.list_recent_findings("readiness-" + scenario_id):

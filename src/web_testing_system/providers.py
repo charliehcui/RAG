@@ -1,4 +1,4 @@
-"""Fixed paid OpenRouter clients and actual request accounting. No automatic fallback."""
+"""Paid OpenRouter clients, Tester API fallback and actual request accounting."""
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from time import perf_counter
@@ -13,7 +13,7 @@ from agent_framework import (
     Message,
 )
 from agent_framework.openai import OpenAIChatCompletionClient
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI
 from openai.types.chat import ChatCompletion
 
 from web_testing_system.config import Settings
@@ -65,6 +65,36 @@ class FixedProviderMiddleware(ChatMiddleware):
         await call_next()
 
 
+class TesterFallbackMiddleware(ChatMiddleware):
+    """Use the Tester backup only after a primary API/connection failure."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.using_backup = False
+
+    async def process(self, context: ChatContext, call_next: Callable[[], Awaitable[None]]) -> None:
+        options = dict(context.options or {})
+        options["model"] = self.settings.tester_agent_backup_model if self.using_backup else self.settings.tester_agent_model
+        provider = self.settings.tester_agent_backup_provider if self.using_backup else self.settings.tester_agent_provider
+        preferences = provider_preferences(provider) if provider else {"allow_fallbacks": True, "require_parameters": True}
+        options["extra_body"] = {**options.get("extra_body", {}), "provider": preferences}
+        context.options = options
+        try:
+            await call_next()
+        except Exception as error:
+            cause = getattr(error, "inner_exception", None) or error.__cause__ or error
+            api_failure = isinstance(cause, APIConnectionError) or isinstance(cause, APIStatusError) and (cause.status_code in {401, 403, 404, 408, 429} or cause.status_code >= 500)
+            if self.using_backup or not api_failure:
+                raise
+            self.using_backup = True
+            options["model"] = self.settings.tester_agent_backup_model
+            provider = self.settings.tester_agent_backup_provider
+            options["extra_body"] = {**options.get("extra_body", {}), "provider": provider_preferences(provider) if provider else {"allow_fallbacks": True, "require_parameters": True}}
+            context.options = options
+            context.result = None
+            await call_next()
+
+
 class ProviderUsageMiddleware(ChatMiddleware):
     """Record one actual OpenRouter request, including failed attempts."""
 
@@ -86,6 +116,8 @@ class ProviderUsageMiddleware(ChatMiddleware):
         if self.fixed_provider is not None:
             options["extra_body"] = {**options.get("extra_body", {}), "provider": provider_preferences(self.fixed_provider)}
             context.options = options
+        requested_providers = options.get("extra_body", {}).get("provider", {}).get("only", [])
+        requested_provider = requested_providers[0] if len(requested_providers) == 1 else None
         run = self.store.get_run(self.run_id)
         if run is None:
             raise KeyError(f"unknown run: {self.run_id}")
@@ -120,18 +152,18 @@ class ProviderUsageMiddleware(ChatMiddleware):
             if self.budget is not None:
                 self.budget.record_llm_call(input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, cost=cost)
             self.store.update_budget(budget_id=self.budget_id, input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, estimated_cost=cost)
-            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool=self.provider, action="provider_request", result={"agent": self.agent, "phase": self.phase, "provider": self.provider, "model": model, "success": error_name is None, "error_type": error_name, "input_tokens": input_tokens, "output_tokens": output_tokens, "reasoning_tokens": properties.get("reasoning_tokens"), "tool_argument_characters": properties.get("tool_argument_characters"), "finish_reasons": properties.get("finish_reasons"), "usage_source": "provider" if usage is not None else "unavailable", "requested_provider": self.fixed_provider, "served_provider": served_provider, "cost_known": cost_known}, latency_ms=latency_seconds * 1_000, cost=cost)
+            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="LLM_CALL", tool=self.provider, action="provider_request", result={"agent": self.agent, "phase": self.phase, "provider": self.provider, "model": model, "success": error_name is None, "error_type": error_name, "input_tokens": input_tokens, "output_tokens": output_tokens, "reasoning_tokens": properties.get("reasoning_tokens"), "tool_argument_characters": properties.get("tool_argument_characters"), "finish_reasons": properties.get("finish_reasons"), "usage_source": "provider" if usage is not None else "unavailable", "requested_provider": requested_provider, "served_provider": served_provider, "cost_known": cost_known}, latency_ms=latency_seconds * 1_000, cost=cost)
 
 
-def _create_chat_client(settings: Settings, *, model: str, provider: str, usage: ProviderUsageMiddleware | None) -> BaseChatClient:
+def _create_chat_client(settings: Settings, *, model: str, provider: str, usage: ProviderUsageMiddleware | None, fallback: TesterFallbackMiddleware | None = None) -> BaseChatClient:
     if settings.openrouter_api_key is None or not settings.openrouter_api_key.get_secret_value():
         raise ValueError("OPENROUTER_API_KEY is required")
     if "/" not in model or ":" in model or model.startswith(("openrouter/", "~")):
         raise ValueError("a fixed paid OpenRouter model ID is required")
     client = AsyncOpenAI(api_key=settings.openrouter_api_key.get_secret_value(), base_url=OPENROUTER_BASE_URL, max_retries=0, timeout=60)
-    middleware: list[ChatMiddleware] = [FixedProviderMiddleware(provider)]
+    middleware: list[ChatMiddleware] = [fallback or FixedProviderMiddleware(provider)]
     if usage is not None:
-        usage.fixed_provider = provider
+        usage.fixed_provider = None if fallback else provider
         middleware.append(usage)
     chat_client = OpenRouterChatClient(model=model, async_client=client, middleware=middleware)
     chat_client.function_invocation_configuration["max_iterations"] = 500
@@ -144,4 +176,6 @@ def create_main_chat_client(settings: Settings, *, usage: ProviderUsageMiddlewar
 
 
 def create_tester_chat_client(settings: Settings, *, usage: ProviderUsageMiddleware | None = None) -> BaseChatClient:
-    return _create_chat_client(settings, model=settings.tester_agent_model, provider=settings.tester_agent_provider, usage=usage)
+    client = _create_chat_client(settings, model=settings.tester_agent_model, provider=settings.tester_agent_provider, usage=usage, fallback=TesterFallbackMiddleware(settings))
+    client.additional_properties.update({"backup_model": settings.tester_agent_backup_model, "backup_provider": settings.tester_agent_backup_provider})
+    return client

@@ -77,11 +77,13 @@ def match_ground_truth(path: Path, *, scenario_id: str, run_id: str, store: Stat
         records.sort(key=lambda item: str(item.get("captured_at", "")))
         candidates = []
         for bug in case["bugs"]:
-            if step.get("behavior_id") != bug["behavior_id"] or finding["affected_role"] != bug["applicable_role"]:
+            assertion_roles = bug.get("assertion_roles", [bug["applicable_role"]])
+            assertion_identities = bug.get("assertion_identity_references", [bug["identity_reference"]])
+            if step.get("behavior_id") != bug["behavior_id"] or finding["affected_role"] not in assertion_roles:
                 continue
             if urlsplit(affected_page).path != bug["page"]:
                 continue
-            if step.get("identity_reference") != bug["identity_reference"]:
+            if step.get("identity_reference") not in assertion_identities:
                 continue
             if _matches_behavior(bug, records, results[-1].get("data", {}), test_data):
                 candidates.append(bug["bug_id"])
@@ -92,7 +94,7 @@ def match_ground_truth(path: Path, *, scenario_id: str, run_id: str, store: Stat
             reasons[finding_id] = "missing, contradictory or ambiguous behavior evidence"
     enabled = frozenset(case["enabled_bug_ids"])
     found = set(mapping.values()) & enabled
-    comparison = GroundTruthComparison(enabled_bug_ids=enabled, finding_to_bug=mapping)
+    comparison = GroundTruthComparison(enabled_bug_ids=enabled, finding_to_bug=mapping, required_check_ids=frozenset(case.get("required_check_ids", [])))
     summary = {"scenario_id": scenario_id, "finding_to_bug": mapping, "match_reasons": reasons, "tp": sum(value in enabled for value in mapping.values()), "fp": sum(value not in enabled for value in mapping.values()), "missed_bug_ids": sorted(enabled - found), "detected_bug_count": len(found), "expected_bug_count": len(enabled)}
     return comparison, summary
 

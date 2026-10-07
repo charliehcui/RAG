@@ -8,6 +8,11 @@ from datetime import datetime
 from statistics import fmean
 from typing import Any
 
+from web_testing_system.scoring import (
+    SUCCESSFUL_OUTCOMES,
+    check_completion,
+    score_run_tasks,
+)
 from web_testing_system.state import StateStore
 
 N_A = "N/A"
@@ -20,6 +25,7 @@ class GroundTruthComparison:
 
     enabled_bug_ids: frozenset[str]
     finding_to_bug: Mapping[str, str]
+    required_check_ids: frozenset[str] = frozenset()
 
 
 class MetricsCalculator:
@@ -49,6 +55,8 @@ class MetricsCalculator:
         total_visits = sum(int(path["visited_count"]) for path in paths)
         estimated_cost = sum(float(budget["estimated_cost"]) for budget in budgets)
         task_outcomes = self.task_outcomes(run_id, ground_truth=ground_truth)
+        scored_tasks = self.task_results(run_id, ground_truth=ground_truth)
+        completed_checks, required_checks = check_completion(scored_tasks, run["scope"].get("required_checks", []), required_check_ids=ground_truth.required_check_ids if ground_truth is not None else None)
         attempted_tasks = [task for task in tasks if task["assigned_tester"] is not None or task["status"] in {"RUNNING", "COMPLETED", "FAILED"}]
         true_positives = sum(ground_truth.finding_to_bug.get(str(finding["finding_id"])) in ground_truth.enabled_bug_ids for finding in confirmed) if ground_truth is not None else 0
         detected = {ground_truth.finding_to_bug.get(str(finding["finding_id"]), "unmatched") for finding in confirmed} & ground_truth.enabled_bug_ids if ground_truth is not None else set()
@@ -59,8 +67,8 @@ class MetricsCalculator:
         usage_complete = bool(tester_calls) and all(event["result"].get("usage_source") in {"provider", "injected_client"} for event in tester_calls)
         cost_complete = bool(tester_calls) and all(event["result"].get("cost_known") is True for event in tester_calls)
         durations = [(datetime.fromisoformat(task["finished_at"]) - datetime.fromisoformat(task["started_at"])).total_seconds() for task in attempted_tasks if task["started_at"] and task["finished_at"]]
-        covered_behaviors = {item.get("behavior_id") for task in tasks for item in task["assertion_results"] if isinstance(item.get("success"), bool)}
-        successful_tasks = sum(task_outcomes[str(task["task_id"])] in {"NORMAL_APPLICATION_BEHAVIOR", "APPLICATION_BUG_DETECTED"} for task in attempted_tasks)
+        covered_behaviors = {item.get("behavior_id") for task in scored_tasks for item in task["assertions"] if isinstance(item.get("success"), bool)}
+        successful_tasks = sum(task_outcomes[str(task["task_id"])] in SUCCESSFUL_OUTCOMES for task in attempted_tasks)
         metrics: dict[str, MetricValue] = {
             "confirmed_bug_recall": self._confirmed_bug_recall(confirmed, ground_truth),
             "false_positive_rate": self._false_positive_rate(confirmed, ground_truth),
@@ -76,8 +84,16 @@ class MetricsCalculator:
             "duplicate_finding_rate": self._ratio(sum(finding["status"] == "DUPLICATE" for finding in findings), len(findings)),
             "exploration_duplication": self._ratio(repeated_visits, total_visits),
             "task_completion_rate": self._ratio(sum(task["status"] == "COMPLETED" for task in tasks), len(tasks)),
-            "task_success_rate": self._ratio(sum(task_outcomes[str(task["task_id"])] in {"NORMAL_APPLICATION_BEHAVIOR", "APPLICATION_BUG_DETECTED"} for task in attempted_tasks), len(attempted_tasks)),
-            "e2e_success": int(run["status"] == "COMPLETED" and bool(tasks) and all(task["status"] == "COMPLETED" for task in tasks) and successful_tasks == len(tasks) and expected_behavior_ids.issubset(covered_behaviors) and detected == ground_truth.enabled_bug_ids and len(confirmed) == true_positives) if ground_truth is not None and expected_behavior_ids is not None else N_A,
+            "task_success_rate": self._ratio(sum(task_outcomes[str(task["task_id"])] in SUCCESSFUL_OUTCOMES for task in attempted_tasks), len(attempted_tasks)),
+            "e2e_success": int(run["status"] == "COMPLETED" and bool(tasks) and all(task["status"] == "COMPLETED" for task in tasks) and successful_tasks == len(tasks) and expected_behavior_ids.issubset(covered_behaviors) and completed_checks == required_checks and required_checks > 0 and detected == ground_truth.enabled_bug_ids and len(confirmed) == true_positives) if ground_truth is not None and expected_behavior_ids is not None else N_A,
+            "completed_check_count": completed_checks,
+            "required_check_count": required_checks,
+            "check_completion_rate": self._ratio(completed_checks, required_checks),
+            "check_completion": f"{completed_checks}/{required_checks} checks completed",
+            "recovered_error_count": sum(error["status"] == "RECOVERED" for task in scored_tasks for error in task["errors"]),
+            "blocking_error_count": sum(error["status"] == "UNRESOLVED_BLOCKING" for task in scored_tasks for error in task["errors"]),
+            "not_started_task_count": sum(task["outcome"] == "NOT_STARTED" for task in scored_tasks),
+            "interrupted_task_count": sum(task["outcome"] == "INTERRUPTED" for task in scored_tasks),
             "tester_attempted_task_count": len(attempted_tasks),
             "tester_request_count": len(tester_calls),
             "tester_requests_per_task": self._ratio(len(tester_calls), len(attempted_tasks)),
@@ -116,48 +132,11 @@ class MetricsCalculator:
         return metrics
 
     def task_outcomes(self, run_id: str, *, ground_truth: GroundTruthComparison | None = None) -> dict[str, str]:
-        outcomes: dict[str, str] = {}
-        findings = {str(item["finding_id"]): item for item in self.store.list_recent_findings(run_id, limit=1000)}
-        for task in self.store.list_tasks(run_id):
-            task_id = str(task["task_id"])
-            if task["status"] in {"FAILED", "STOPPED", "CANCELLED"} or task["success_reason"] == "AGENT_EXECUTION_FAILURE":
-                outcomes[task_id] = "AGENT_EXECUTION_FAILURE"
-                continue
-            if task["status"] != "COMPLETED" or task["success_status"] == "UNKNOWN":
-                outcomes[task_id] = "UNKNOWN_INCOMPLETE"
-                continue
-            assertions = task["assertion_results"]
-            if not assertions:
-                outcomes[task_id] = "UNKNOWN_INCOMPLETE"
-                continue
-            confirmed = [finding for finding in findings.values() if finding["task_id"] == task_id and finding["status"] == "CONFIRMED_BUG"]
-            if ground_truth is not None and any(ground_truth.finding_to_bug.get(str(finding["finding_id"])) not in ground_truth.enabled_bug_ids for finding in confirmed):
-                outcomes[task_id] = "AGENT_EXECUTION_FAILURE"
-                continue
-            failed = [item for item in assertions if not item["success"]]
-            if not failed:
-                outcomes[task_id] = "NORMAL_APPLICATION_BEHAVIOR" if task["success_status"] == "PASS" else "AGENT_EXECUTION_FAILURE"
-                continue
-            reported: set[str] = set()
-            reported_behaviors: set[str] = set()
-            for event in self.store.list_events(run_id, event_types=("FINDING_CREATED",), task_id=task_id):
-                finding = findings.get(str(event["result"].get("finding_id")))
-                if finding is None:
-                    continue
-                canonical_id = str(finding["duplicate_of"] or finding["finding_id"])
-                if ground_truth is None:
-                    correct = finding["status"] in {"REPRODUCED", "CONFIRMED_BUG", "DUPLICATE"}
-                else:
-                    correct = ground_truth.finding_to_bug.get(canonical_id) in ground_truth.enabled_bug_ids
-                if correct:
-                    reported.add(str(event["result"].get("boundary_event_id")))
-                    behavior = event["result"].get("behavior_id")
-                    if behavior is None:
-                        behavior = next((step.get("behavior_id") for step in finding["reproduction_steps"] if step.get("behavior_id") is not None and not step.get("expected_success", True)), None)
-                    if behavior is not None:
-                        reported_behaviors.add(str(behavior))
-            outcomes[task_id] = "APPLICATION_BUG_DETECTED" if all(str(item["event_id"]) in reported or item.get("behavior_id") in reported_behaviors for item in failed) else "UNKNOWN_INCOMPLETE"
-        return outcomes
+        return {task["task_id"]: task["outcome"] for task in self.task_results(run_id, ground_truth=ground_truth)}
+
+    def task_results(self, run_id: str, *, ground_truth: GroundTruthComparison | None = None) -> list[dict[str, Any]]:
+        correct_ids = {finding_id for finding_id, bug_id in ground_truth.finding_to_bug.items() if bug_id in ground_truth.enabled_bug_ids} if ground_truth is not None else None
+        return score_run_tasks(self.store, run_id, correct_finding_ids=correct_ids)
 
     @staticmethod
     def _confirmed_bug_recall(confirmed: list[dict[str, Any]], ground_truth: GroundTruthComparison | None) -> MetricValue:
