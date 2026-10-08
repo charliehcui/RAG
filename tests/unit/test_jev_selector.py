@@ -83,7 +83,16 @@ async def test_jev_receives_only_goal_page_summary_and_legal_candidate_ids() -> 
     assert selection.output_tokens == 1
     assert set(client.state or {}) == {"current_goal", "page_state", "legal_candidates"}
     criteria = (client.questions or {})["next_candidate"]["criteria"]
-    assert set(criteria) == {"candidate-1"}
+    assert set(criteria) == {"candidate-1", "none"}
+    assert "interactive_elements" not in (client.state or {})["page_state"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice,confidence,error", [("#invented-selector", .99, "ILLEGAL_CANDIDATE_ID"), ("none", .99, "NO_SELECTION"), ("candidate-1", float("nan"), "INVALID_CONFIDENCE"), ("candidate-1", 1.1, "INVALID_CONFIDENCE")])
+async def test_only_bounded_ids_and_finite_confidence_are_accepted(choice: str, confidence: float, error: str) -> None:
+    selection = await JevSelector(FakeJevClient({"answers": {"next_candidate": {"choice": choice, "confidence": confidence}}})).select(current_goal="Open the supplied control", page_state=page_state(), candidates=candidates())
+    assert selection.selected_candidate_id is None
+    assert selection.error == error
 
 
 @pytest.mark.asyncio

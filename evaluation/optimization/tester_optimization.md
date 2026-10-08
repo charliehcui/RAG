@@ -1,6 +1,6 @@
 # Tester Optimization
 
-状态：本轮两组集中修改及两轮代表性检查（Representative Checkpoint）已完成并停止。计划结构校验显著改善，但 Task Success、Check Completion 与 Replan Limit 的质量目标未全部达到；不启动第三轮检查、下一阶段或完整 Benchmark，等待用户确认。正式比较基准为 Baseline v2；旧优化方向保留为历史记录。完整基线（Baseline）见 [Benchmark History](../benchmark_history.md)。
+状态：新的 Runtime / Jev 职责纠正阶段已完成一次冻结的 D05/D07/D13 代表性检查（Representative Checkpoint）并停止。Task Success、Check Completion、Tester Calls 和 Replan Limit 达标，Plan Validation Failure 仍为 2/8，目标未全部达到；不追加检查或修改，等待用户确认。以下前两轮结果保留为历史，不补跑。正式比较基准为 Baseline v2。完整基线（Baseline）见 [Benchmark History](../benchmark_history.md)。
 
 这里只记录已实现的优化方向。本地验证数字说明执行路径，不能与完整基线（Baseline）直接相减计算性能收益；成熟版本的正式数字统一记录到基准历史（Benchmark History）。
 
@@ -55,3 +55,31 @@
 剩余根因：D03 的 7 次失败执行计划为 LOW_JEV_CONFIDENCE ×4、CONSECUTIVE_NO_PROGRESS ×1、CONTROL_NOT_FOUND ×1、CANDIDATE_EXPIRED ×1；D01 首次失败为 CONTROL_NOT_FOUND，随后受既有 Runtime 上限阻断；D04 首次失败为 LOW_JEV_CONFIDENCE 后成功恢复。Jev 本地请求记录还显示 D03/D04 对 stop_current_path 候选出现低置信度，实际操作后仍可能无法正常转入断言；因此结构合法性并未解决页面／控件语义、完成判定和候选状态恢复。首次计划直接完成任务为 0/5。后续应先审查这些执行接口及断言前置条件，再决定下一阶段；本轮不实施进一步修改，也不通过提高预算或降低检查标准掩盖问题。
 
 本地断言（Assertion）、发现（Finding）、回放（Replay）、最终评分一致性、敏感值隐藏和 Tracing 回归通过；小规模真实检查未产生 False Positive，D04 保留稳定复现与真实验证结果，但不能据此宣称所有业务能力无回归。测量期间源代码、测试、Evaluation、配置等冻结文件哈希一致。本轮与开始快照相比，产品源代码只改 Tester；其余已有未提交改动属于前序正确性修复，未在本阶段修改。
+
+## Jev 从执行／规划职责纠正为 bounded Decision Model — 2026-10-08
+
+- Problem：结构合法的计划仍因 LOW_JEV_CONFIDENCE、CONTROL_NOT_FOUND、CANDIDATE_EXPIRED、CONSECUTIVE_NO_PROGRESS 返回 Tester。Jev 被要求从宽泛控件中决定下一流程，并判断业务操作是否完成；已执行操作后对 stop_current_path 的低置信度也导致重规划。
+- Why：原 Jev API 已是 bounded choice，没有它生成 selector 或测试计划的证据。错误是职责分配：输入仍包含业务子流程与执行历史，Runtime 候选过宽，结束候选缺少明确执行条件；部分可恢复问题立即升级给 Tester。候选截断在当前操作过滤之前，字段名称还可能误触 Project 推断，表头与配置引用同名可能污染对象断言缓存。
+- Change：现有 PageGoal 增加高层 operation 与导航 destination，不引入新框架。Tester 一次计划声明目标、稳定 Check ID、预期结果、输入和约束；Runtime 管理导航、Project 选择、稳定 Row/Form 绑定、填写与提交阶段，在排序截断前过滤当前合法候选。唯一明确候选由 Runtime 验证执行，只有多个合法选项才调用 Jev；Jev 只收到当前有限判断、页面摘要和候选，选择 ID 或 none，非法 ID／非有限置信度不得执行。完成条件由明确操作的执行与随后页面观察确定，再运行原有严格 Assertions，不再让 Jev 判断整段流程结束。缺失／过期控件、低置信度先有限重读并重新生成一次候选；相同候选不重复调用 Jev，仍无法可靠执行才升级 Tester。输入完成状态按实际页面值重验，无效重复操作沿用原有 no-progress 检测；末次动作后的额外观察不增加动作预算。精简 Replan 增加当前对象快照，保留既有已完成／剩余 Check 与合法输入；日志记录候选、恢复结果及 choice 类型，保留脱敏与 Trace 父子关系。
+- Before：正式 Baseline v2：Task Success 3/14（21.43%），Check Completion 19/74（25.68%），Tester Calls 2.714/Task。上一轮 D01/D03/D04 检查：2/5 Task Success、9/31 Check Completion、0/11 Plan Validation Failure、2.4 Tester Calls/Task、2/5 Replan Limit；5/5 初始计划都需要异常恢复。原始记录的 D03 失败为低置信度 ×4、no-progress ×1、控件未找到 ×1、候选过期 ×1，D04 首次对结束候选的置信度为 0.45。
+- After：96 个相关 local/unit 用例分批通过，覆盖有限选项与 none、非法选择／NaN 拒绝、缺失控件重读、页面变化后候选刷新与低置信度恢复、相同候选不重猜、实际输入被清空后的 no-progress、导航后的 Project 选择、稳定对象断言、一次初始计划完成创建／编辑／删除、原生正常／缺陷 Replay、Safety、评分一致性及 Tracing。Ruff、mypy（41 源文件）通过。冻结后 D05/D07/D13 各一次有效测量：Task Success 4/5（80%），Check Completion 18/19（94.74%），E2E 2/3，Tester Calls 8/5（1.6/Task），Replan Limit 1/5（20%）。Plan Validation Failure 2/8（25%）：NAVIGATION_DESTINATION_REQUIRED ×1、INCOMPLETE_TEST_PLAN ×1。浏览器动作 217（探索 85、Replay 132），No-progress Stops 0；Runtime 生成 36 个候选集、记录 17 次操作完成、两次对象不可绑定的重读结果均未恢复。正式 report/evaluation 指标一致，无 Provider 失败，三条 LangSmith Trace 完整。数据见 [Bounded Decision Checkpoint](../../artifacts/runs/tester-bounded-cp-20261008-001/checkpoint_metrics.json)。
+- Final Decision：保留当前职责划分与有限恢复实现，代码冻结；完成唯一授权检查后停止。主要业务质量和调用预算目标达标，计划校验仍有 25% 失败，不能称全部目标达成。本轮真实 Jev Requests 为 0，候选为唯一明确动作或空集，没有为增加次数而调用；有限多候选决策／恢复只有 local tests 证据，不能宣称已实测 Jev 多选性能。D05 的缺陷使目标 Project 消失，原计划仍尝试重新选择它；两次观察确认无法绑定后升级 Tester，第三次计划又遗漏必要的剩余 Check，最终只完成 2/3。剩余问题属于 Tester 计划合法性、对象消失后的 Runtime／Tester 观测衔接；未发现 Jev 自行生成 selector 或规划的证据。Evaluation 未调整，未观察的第三项不计完成。不按结果换 Case，不运行第二次检查、Holdout、Baseline 或完整 Benchmark，不更新 Benchmark History，等待用户确认下一步。
+
+| 本阶段 Case | Task Success | Check Completion | Tester Requests | Exception Replan |
+| --- | --- | --- | --- | --- |
+| D05 | 0/1 | 2/3 | 3 | 2；Project 不可绑定，最后计划缺少剩余 Check |
+| D07 | 1/1 | 2/2 | 1 | 0；初始计划直接完成编辑与持久性检查 |
+| D13 | 3/3 | 14/14 | 4 | 1；初始 Task 计划缺少导航 destination，补全后完成 |
+
+相同三个 Case 的冻结 Baseline v2 原记录：Task Success 2/5、Check Completion 6/19、Tester Requests 13（2.6/Task）、Replan Limit 3/5。本次为 4/5、18/19、8（1.6/Task）、1/5；只读取旧记录，未重跑。这是小样本诊断结果，不替代正式 Benchmark。
+
+本轮 Precision 100%、Recall 100%，全部 4 个启用的 Case/Bug 配对检出；5 个 Finding 的 10 次复现均匹配。5 次独立 Verification 均为 FAIL / RECORDED_OUTCOME_MISMATCH，记录的是仍存在的被测缺陷，不记作验证 PASS。真实样本未出现 False Positive，但不据此扩大宣称所有业务能力无回归。CONTROL_NOT_FOUND、CANDIDATE_EXPIRED、LOW_JEV_CONFIDENCE 未在本轮向 Tester 升级；自动恢复成功证据来自 local tests，真实两个重读失败是缺陷删除对象后的 PROJECT_BINDING_UNAVAILABLE。
+
+| 本阶段组件 | Requests | Input / Output Tokens | Cost (USD) | 请求耗时合计（秒） |
+| --- | --- | --- | --- | --- |
+| Main | 14 | 107,379 / 11,169 | 0.007637161252 | 209.453 |
+| Tester | 8 | 47,695 / 96,870 | 0.050342800000 | 1394.012 |
+| Jev | 0 | 0 / 0 | 0 | 0；平均 Latency N/A |
+| Overall | 22 | 155,074 / 108,039 | 0.057979961252 | 1603.465 |
+
+Tester Initial Plan 5 次请求、Exception Replan 3 次请求，按上传 LLM span 的父级 phase 逐 Task 与本地请求记录核对。总 Wall-clock 1498.495 秒（24.97 分钟）；并发请求耗时合计可以超过 Wall-clock。单 Task Tokens／Cost／Latency 详见数据文件。测量期间代码、测试、配置、数据冻结哈希全部一致；本阶段仅修改 Tester／Runtime 候选与执行接口及相关测试／优化记录，Main、Scenario、Ground Truth、Scoring、模型、Provider 和预算保留原值。

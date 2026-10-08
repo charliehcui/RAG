@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Mapping, Sequence
 from time import perf_counter
 from typing import Any, Protocol
@@ -50,10 +51,12 @@ class JevSelector:
             return JevSelection(selected_candidate_id=None, confidence=0, latency_ms=0, cost=0, error="NO_CANDIDATES")
         state = {
             "current_goal": current_goal,
-            "page_state": {**page_state.selection_summary(), "text": page_state.visible_dom[:2500]},
+            "page_state": {"state_id": page_state.state_id, "url": page_state.url, "load_state": page_state.load_state, "text": page_state.visible_dom[:1000]},
             "legal_candidates": [{"id": candidate.candidate_id, "action": candidate.action, "label": candidate.label, "target": candidate.target, "value_reference": candidate.value_reference} for candidate in candidates],
         }
-        questions = {"next_candidate": {"type": "choice", "instructions": "Choose the legal candidate that best advances `current_goal`.", "criteria": {candidate.candidate_id: f"{candidate.action}: {candidate.label}" for candidate in candidates}}}
+        criteria = {candidate.candidate_id: f"{candidate.action}: {candidate.label}" for candidate in candidates}
+        criteria["none"] = "None of the supplied candidates fits this explicit decision. Do not invent actions or selectors."
+        questions = {"next_candidate": {"type": "choice", "instructions": "Select one supplied ID for this bounded current decision, or none. Runtime has already found and constrained the controls. Do not plan, find elements, generate selectors, recover a workflow, or expand the goal.", "criteria": criteria}}
         try:
             response = await asyncio.to_thread(self.client.predict, state, questions)
             answer = response.get("answers", {}).get("next_candidate", {})
@@ -64,7 +67,17 @@ class JevSelector:
             input_tokens = int(usage.get("input_tokens", 0) or 0)
             output_tokens = int(usage.get("output_tokens", 0) or 0)
             model = str(response.get("model", ""))
-            error = None if isinstance(selected_id, str) else "NO_SELECTION"
+            error = None
+            if selected_id == "none" or not isinstance(selected_id, str):
+                selected_id = None
+                error = "NO_SELECTION"
+            elif selected_id not in {candidate.candidate_id for candidate in candidates}:
+                selected_id = None
+                error = "ILLEGAL_CANDIDATE_ID"
+            elif not math.isfinite(confidence) or not 0 <= confidence <= 1:
+                selected_id = None
+                confidence = 0
+                error = "INVALID_CONFIDENCE"
         except Exception as caught_error:
             selected_id = None
             confidence = 0

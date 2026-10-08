@@ -57,7 +57,7 @@ class PageStateReader:
                 load_state,
                 visible_dom,
                 *(
-                    f"{item.kind}:{item.label}:{item.target}:{item.href}:{item.context}:{item.options}:{item.selected_value}"
+                    f"{item.kind}:{item.label}:{item.target}:{item.href}:{item.context}:{item.options}:{item.selected_value}:{item.enabled}:{item.form_target}:{item.context_target}:{item.required}:{item.is_submit}"
                     for item in elements
                 ),
             ]

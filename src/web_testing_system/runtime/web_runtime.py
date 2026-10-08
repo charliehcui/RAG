@@ -93,6 +93,8 @@ class WebTestingRuntime:
         self.input_targets: dict[str, str] = {}
         self.active_project: dict[str, str] | None = None
         self.modal_row: str | None = None
+        self.last_decision_state_id: str | None = None
+        self.current_object: dict[str, Any] = {}
         for history in store.list_action_history(run_id=run_id, task_id=task_id):
             action = history["action_data"]
             if history["success"] and action.get("action_type") in {"input", "select"} and action.get("target") and action.get("value_reference"):
@@ -118,7 +120,8 @@ class WebTestingRuntime:
                     aliases.add(reference)
             if context and self._row_matches_context(row, context):
                 aliases.add(context)
-            aliases = {alias for alias in aliases if self._row_matches_context(row, alias)}
+            references = {reference.casefold(): reference for reference in self.input_values if not reference.startswith("env:")}
+            aliases = {alias for alias in aliases if self._row_matches_context(row, references.get(alias.casefold(), alias))}
             for cell in row["cells"]:
                 if not cell["header"]:
                     continue
@@ -293,8 +296,8 @@ class WebTestingRuntime:
                 return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
             return await self._explore_unknown_path(current_goal)
 
-    async def execute_page_goal(self, goal: str, *, inputs: Sequence[Mapping[str, str]] = (), context: str = "", project_reference: str | None = None, row_reference: str | None = None, form_context: str = "", max_steps: int = 12, stop_after_inputs: bool = False) -> dict[str, Any]:
-        """Keep page decisions inside Jev; return to Tester only at a goal boundary or failure."""
+    async def execute_page_goal(self, goal: str, *, inputs: Sequence[Mapping[str, str]] = (), context: str = "", project_reference: str | None = None, row_reference: str | None = None, form_context: str = "", max_steps: int = 12, stop_after_inputs: bool = False, operation: str | None = None, destination: str | None = None) -> dict[str, Any]:
+        """Runtime observes/binds/phases operations; Jev chooses only current legal alternatives."""
         async with self.page_lock:
             if self.task_finished:
                 return {"success": False, "reason": "TASK_ALREADY_FINISHED", "actions": []}
@@ -310,8 +313,6 @@ class WebTestingRuntime:
                 return {"success": False, "reason": "INVALID_OBJECT_REFERENCE", "actions": []}
             if project_reference is None and context:
                 project_reference = next((reference for reference, value in self.input_values.items() if "project" in reference.casefold() and not reference.startswith("env:") and context in {reference, value}), None)
-            if project_reference is None:
-                project_reference = next((binding["value_reference"] for binding in inputs if "project" in binding["control"].casefold() and "name" not in binding["control"].casefold()), None)
             row_context = row_reference or context
             session = self.browser_manager.get_session(self.browser_session_id)
             actions: list[dict[str, Any]] = []
@@ -321,7 +322,11 @@ class WebTestingRuntime:
             seen_states: set[str] = set()
             input_progress = False
             modal_row = self.modal_row
-            for step_index in range(max_steps):
+            operation_done = False
+            refresh_reason: str | None = None
+            previous_candidates: tuple[str, ...] = ()
+            # 末次动作后再观察一次；到达 max_steps 时禁止新的候选选择或执行。
+            for step_index in range(max_steps + 1):
                 try:
                     await session.page.wait_for_load_state("networkidle", timeout=2_000)
                 except PlaywrightTimeoutError:
@@ -331,7 +336,23 @@ class WebTestingRuntime:
                     modal_row = None
                     self.modal_row = None
                 rows = await self.page_state_reader.read_rows(session.page)
-                if previous_state is not None and self.budget.note_progress(input_progress or page_state.state_id not in seen_states):
+                if operation and not operation_done:
+                    confirmed_before = len(completed_inputs)
+                    for index, target in list(completed_inputs.items()):
+                        field = next((element for element in page_state.interactive_elements if element.target == target), None)
+                        if field is None:
+                            del completed_inputs[index]
+                            continue
+                        actual = await session.page.locator(target).input_value()
+                        expected = self.input_values[inputs[index]["value_reference"]]
+                        valid = actual == expected or field.kind == "select" and any(label == expected and option == actual for label, option in field.options)
+                        if not valid:
+                            action_type = ActionType.SELECT if field.kind == "select" else ActionType.INPUT
+                            excluded.discard(self.candidate_builder._candidate_id(page_state.state_id, action_type.value, f"{target}:{inputs[index]['value_reference']}"))
+                            del completed_inputs[index]
+                    if input_progress:
+                        input_progress = len(completed_inputs) == confirmed_before
+                if previous_state is not None and refresh_reason is None and not (operation and operation_done) and self.budget.note_progress(input_progress or page_state.state_id not in seen_states):
                     self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PAGE_GOAL_BLOCKED", tool="WebTestingRuntime", action="no_progress", result={"reason": "CONSECUTIVE_NO_PROGRESS", "no_progress_steps": self.budget.usage.no_progress_steps}, latency_ms=0)
                     return {"success": False, "reason": "CONSECUTIVE_NO_PROGRESS", "actions": actions}
                 seen_states.add(page_state.state_id)
@@ -341,6 +362,10 @@ class WebTestingRuntime:
                 project_ready = not project_selects
                 project_actions: list[BusinessAction] = []
                 if project_selects:
+                    if project_reference is None:
+                        bound = {binding["value_reference"] for binding in inputs if not binding["value_reference"].startswith("env:") and any(self._field_matches(element, binding["control"]) for element in project_selects)}
+                        if len(bound) == 1:
+                            project_reference = next(iter(bound))
                     if project_reference is None and context:
                         references = [reference for reference, value in self.input_values.items() if not reference.startswith("env:") and context in {reference, value} and any(value in {label, option} for element in project_selects for label, option in element.options)]
                         if len(references) == 1:
@@ -420,27 +445,79 @@ class WebTestingRuntime:
                         form_ready = await self._form_inputs_bound(elements, element)
                     if not form_ready:
                         elements.remove(element)
-                candidates = self.candidate_builder.build(goal=goal, page_state=replace(page_state, interactive_elements=tuple(elements)), include_controls=False, business_actions=business_actions, click_inputs=False, excluded_candidates=excluded)
+                bindings = {"project_reference": project_reference, "row_reference": row_reference, "form_context": form_context}
+                self.current_object = {**bindings, "operation": operation, "destination": destination, "selected_project": self.active_project, "modal_row": self.modal_row, "row_targets": [target for (alias, _, project_value), target in self.object_targets.items() if alias == row_context.casefold() and project_value == (self.active_project["value"] if self.active_project else None)]}
+                phase = "legacy"
+                eligible = list(elements)
+                if operation:
+                    if operation_done and project_ready and not pending or operation == "observe" and project_ready and not pending:
+                        if refresh_reason:
+                            self._record_goal_recovery(refresh_reason, "OPERATION_EXECUTED_AND_OBSERVED", True)
+                        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PAGE_GOAL_OPERATION_COMPLETED", tool="WebTestingRuntime", action=operation, result={"operation": operation, "state_id": page_state.state_id, "assertions_pending": True}, latency_ms=0)
+                        return {"success": True, "reason": "OPERATION_EXECUTED_AND_OBSERVED", "actions": actions}
+                    if operation == "navigate" and not operation_done:
+                        phase = "navigate"
+                        eligible = [element for element in elements if element.kind not in {"input", "select", "textarea"} and element.context_kind not in {"tr", "form", "dialog"} and self._field_matches(element, destination or "")]
+                    elif not project_ready:
+                        phase = "project"
+                        eligible = project_selects
+                    elif operation == "edit" and modal_row is None:
+                        phase = "open_edit"
+                        eligible = [element for element in elements if element.context_kind == "tr" and element.label.casefold() in {"edit", "modify"}]
+                    elif pending:
+                        phase = "fill"
+                        eligible = [element for element in elements if any(business.action.target == element.target and business.action.action_type in {ActionType.INPUT, ActionType.SELECT} for business in business_actions)]
+                    elif operation in {"create", "submit", "login", "edit"}:
+                        phase = "submit"
+                        eligible = [element for element in elements if element.is_submit]
+                    elif operation in {"delete", "logout"}:
+                        phase = operation
+                        names = {"delete", "remove"} if operation == "delete" else {"logout", "log out", "sign out"}
+                        eligible = [element for element in elements if element.label.casefold() in names and (operation != "delete" or element.context_kind == "tr" and bool(row_context))]
+                    else:
+                        eligible = []
+                allowed_targets = {element.target for element in eligible}
+                if step_index == max_steps:
+                    return {"success": False, "reason": "PAGE_GOAL_STEP_LIMIT", "actions": actions}
+                current_business = [business for business in business_actions if business.action.target in allowed_targets]
+                candidates = self.candidate_builder.build(goal=goal, page_state=replace(page_state, interactive_elements=tuple(eligible)), include_controls=False, business_actions=current_business, click_inputs=False, excluded_candidates=excluded)
                 candidates = [candidate for candidate in candidates if not candidate.requires_confirmation]
-                if not pending and project_ready and (not inputs or actions and actions[-1]["action"] not in {"input", "select"}):
-                    candidates.append(ActionCandidate(candidate_id=f"candidate-stop-{page_state.state_id}", action="stop_current_path", label="Requested operations are complete; return for the supplied assertions. This does not declare Task success.", target=None, state_id=page_state.state_id))
-                if not candidates:
-                    reason = "UNBOUND_REQUIRED_INPUT" if pending else "PROJECT_BINDING_UNAVAILABLE" if not project_ready else "NO_NEW_LEGAL_ACTIONS"
+                if not operation and not pending and project_ready and (not inputs or actions and actions[-1]["action"] not in {"input", "select"}):
+                    candidates.append(ActionCandidate(candidate_id=f"candidate-stop-{page_state.state_id}", action="stop_current_path", label="Return for the supplied assertions; this does not declare Task success.", target=None, state_id=page_state.state_id))
+                signature = tuple(candidate.candidate_id for candidate in candidates)
+                self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="CANDIDATE_SET", tool="WebTestingRuntime", action=phase, result={"operation": operation, "state_id": page_state.state_id, "candidate_ids": list(signature), "bindings": bindings}, latency_ms=0)
+                if not candidates or refresh_reason in {"LOW_JEV_CONFIDENCE", "NO_SELECTION"} and signature == previous_candidates:
+                    reason = refresh_reason or ("UNBOUND_REQUIRED_INPUT" if pending else "PROJECT_BINDING_UNAVAILABLE" if not project_ready else "CONTROL_NOT_FOUND")
+                    if refresh_reason is None and step_index + 1 < max_steps:
+                        refresh_reason = reason
+                        previous_candidates = signature
+                        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="RUNTIME_RECOVERY", tool="WebTestingRuntime", action="refresh_candidates", result={"reason": reason, "phase": phase, "state_id": page_state.state_id, "candidate_count": len(candidates)}, latency_ms=0)
+                        continue
+                    if refresh_reason:
+                        self._record_goal_recovery(refresh_reason, reason, False)
                     return {"success": False, "reason": reason, "pending_inputs": pending, "actions": actions}
-                pending_bindings = [binding for index, binding in enumerate(inputs) if index not in completed_inputs]
-                bindings = {"project_reference": project_reference, "row_reference": row_reference, "row_targets": [target for (alias, _, project_value), target in self.object_targets.items() if alias == row_context.casefold() and project_value == (self.active_project["value"] if self.active_project else None)], "form_context": form_context}
-                current_goal = f"{goal}\nObject bindings: {json.dumps(bindings)}\nPending fields: {json.dumps(pending)}\nInput bindings (context describes the intended form/row): {json.dumps(pending_bindings)}\nAlready executed in this subgoal: {json.dumps(actions)}\nFill the pending inputs in their intended form before submitting. Choose the next operation, or stop when the requested operations are complete. Never repeat an already executed operation."
-                decision = await self._select_and_execute(current_goal, page_state, candidates)
-                if decision.reason == "CANDIDATE_EXPIRED" and step_index + 1 < max_steps:
+                current_goal = f"Current decision: {phase}. " + (f"Operation: {operation}; destination: {destination}. " if operation else goal + ". ") + f"Bindings: {json.dumps(bindings)}. Pending fields: {json.dumps(pending)}. Choose only a supplied candidate or none."
+                decision = await self._execute_candidate(current_goal, page_state, candidates[0], source="RUNTIME_TO_PLAYWRIGHT") if operation and len(candidates) == 1 else await self._select_and_execute(current_goal, page_state, candidates)
+                if decision.reason in {"CANDIDATE_EXPIRED", "TARGET_INVALID", "LOW_JEV_CONFIDENCE", "NO_SELECTION"} and refresh_reason is None and step_index + 1 < max_steps:
+                    refresh_reason = decision.reason
+                    previous_candidates = signature
+                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="RUNTIME_RECOVERY", tool="WebTestingRuntime", action="refresh_candidates", result={"reason": decision.reason, "phase": phase, "state_id": page_state.state_id, "candidate_count": len(candidates)}, latency_ms=0)
                     continue
                 if decision.reason == "STOP_CURRENT_PATH":
                     return {"success": True, "reason": "PAGE_GOAL_STOPPED", "actions": actions}
                 if decision.action_result is None or not decision.action_result.success:
                     failure_reason = decision.action_result.error_type if decision.action_result is not None else decision.reason
+                    if refresh_reason:
+                        self._record_goal_recovery(refresh_reason, failure_reason, False)
                     return {"success": False, "reason": failure_reason, "actions": actions}
+                if refresh_reason:
+                    self._record_goal_recovery(refresh_reason, decision.reason, True)
                 candidate = decision.candidate
                 assert candidate is not None
                 excluded.add(candidate.candidate_id)
+                refresh_reason = None
+                if operation and phase in {"navigate", "submit", "delete", "logout"}:
+                    operation_done = True
                 previous_state = page_state.state_id
                 input_progress = candidate.action in {"input", "select"}
                 if candidate.candidate_id in input_candidates:
@@ -455,6 +532,9 @@ class WebTestingRuntime:
                 if stop_after_inputs and inputs and len(completed_inputs) == len(inputs):
                     return {"success": True, "reason": "INPUTS_READY_FOR_PENDING_SUBMISSION", "actions": actions}
             return {"success": False, "reason": "PAGE_GOAL_STEP_LIMIT", "actions": actions}
+
+    def _record_goal_recovery(self, reason: str, final_reason: str | None, recovered: bool) -> None:
+        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="RUNTIME_RECOVERY_RESULT", tool="WebTestingRuntime", action="refresh_candidates", result={"reason": reason, "final_reason": final_reason, "recovered": recovered}, latency_ms=0)
 
     async def _explore_unknown_path(self, current_goal: str) -> DecisionResult:
         if self.browser_session_id is None:
@@ -480,94 +560,112 @@ class WebTestingRuntime:
         return await self._select_and_execute(current_goal, page_state, candidates)
 
     async def execute_page_action(self, action: WebAction, *, control: str, context: str = "", project_reference: str | None = None) -> DecisionResult:
-        """Resolve a semantic control locally or with Jev, then execute its allowed action."""
+        """Reobserve and rebuild a missing/stale control once before escalating."""
         async with self.page_lock:
-            if self.task_finished:
-                return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
-            if self.browser_session_id is None:
-                raise RuntimeError("browser session has not started")
-            session = self.browser_manager.get_session(self.browser_session_id)
-            try:
-                await session.page.wait_for_load_state("networkidle", timeout=action.timeout_ms)
-            except PlaywrightTimeoutError:
-                return DecisionResult(source="TESTER_LLM", reason="PAGE_NOT_SETTLED", needs_tester_llm=True)
-            page_state = await self.page_state_reader.read(session.page, include_content=action.action_type == ActionType.ASSERTION)
-            action = replace(action, project_reference=project_reference or action.project_reference)
-            if project_reference and project_reference not in self.input_values:
-                return DecisionResult(source="TESTER_LLM", reason="INPUT_VALUE_UNAVAILABLE", needs_tester_llm=True)
-            if action.action_type in {ActionType.INPUT, ActionType.SELECT} and action.value_reference not in self.input_values:
-                return DecisionResult(source="TESTER_LLM", reason="INPUT_VALUE_UNAVAILABLE", needs_tester_llm=True)
-            project_selects = [element for element in page_state.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
-            self.active_project = None
-            if project_reference:
-                value = self.input_values[project_reference]
-                if any(sum(element.selected_value == option and value in {label, option} for label, option in element.options) != 1 for element in project_selects):
-                    return DecisionResult(source="TESTER_LLM", reason="OBJECT_PROJECT_MISMATCH", needs_tester_llm=True)
-                if len(project_selects) == 1:
-                    selected_value = project_selects[0].selected_value
-                    if selected_value is not None:
-                        self.active_project = {"reference": project_reference, "target": project_selects[0].target, "value": selected_value}
-            elif context:
-                projects = [project for (alias, _, _), project in self.object_projects.items() if alias == context.casefold()]
-                current_projects = [project for project in projects if any(element.target == project["target"] and element.selected_value == project["value"] for element in project_selects)]
-                if project_selects and projects and not current_projects:
-                    return DecisionResult(source="TESTER_LLM", reason="OBJECT_PROJECT_MISMATCH", needs_tester_llm=True)
-                if current_projects:
-                    self.active_project = dict(current_projects[0])
-                elif len(project_selects) == 1:
-                    element = project_selects[0]
-                    reference = self.input_targets.get(element.target)
-                    bound_value = self.input_values.get(reference or "")
-                    if reference and any(element.selected_value == option and bound_value in {label, option} for label, option in element.options):
-                        assert element.selected_value is not None
-                        self.active_project = {"reference": reference, "target": element.target, "value": element.selected_value}
-            rows = await self.page_state_reader.read_rows(session.page)
-            self._bind_rows(rows, context)
-            self.remember_assertion_targets(rows, context)
-            kinds = {ActionType.INPUT: {"input", "textarea"}, ActionType.SELECT: {"select"}, ActionType.REPEAT_SUBMIT: {"button"}, ActionType.ASSERTION: {"cell"}}
-            candidates = []
-            exact = []
-            for element in page_state.interactive_elements:
-                matches_context = not context or context.casefold() in element.context.casefold() or context == element.context_target or f"={json.dumps(context)}]" in (element.context_target or "")
-                row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target) or row["text"] == element.context), None)
-                if context and row is not None:
-                    matches_context = self._row_matches_context(row, context)
-                if not element.enabled or not matches_context:
-                    continue
-                if action.action_type in kinds and element.kind not in kinds[action.action_type]:
-                    continue
-                if action.action_type == ActionType.CLICK and element.kind in {"input", "textarea", "select", "cell"}:
-                    continue
-                resolved_url = action.url
-                if action.action_type == ActionType.CLICK and element.href:
-                    resolved_url = urljoin(page_state.url, element.href)
-                resolved = replace(action, target=element.target, url=resolved_url)
-                permission = self.executor.permission_checker.check(resolved, current_url=page_state.url)
-                if not permission.allowed:
-                    continue
-                candidate = ActionCandidate(candidate_id=self.candidate_builder._candidate_id(page_state.state_id, action.action_type.value, element.target), action=action.action_type.value, label=f"{element.label} ({element.context})", target=element.target, state_id=page_state.state_id, value=action.value, value_reference=action.value_reference, url=resolved_url, resource_id=action.resource_id, requires_resource=action.requires_resource, confirmed=action.confirmed, expected=action.expected, assertion=action.assertion, behavior_id=action.behavior_id, goal_check=action.goal_check, check_id=action.check_id, project_reference=action.project_reference)
+            first_reason = None
+            for attempt in range(2):
+                result = await self._resolve_page_action(action, control=control, context=context, project_reference=project_reference, refused_state_id=self.last_decision_state_id if attempt and first_reason in {"LOW_JEV_CONFIDENCE", "NO_SELECTION"} else None)
+                if attempt:
+                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="RUNTIME_RECOVERY", tool="WebTestingRuntime", action="reobserve_control", result={"reason": first_reason, "final_reason": result.reason, "recovered": result.action_result is not None and result.action_result.success}, latency_ms=0)
+                if result.reason not in {"CONTROL_NOT_FOUND", "CANDIDATE_EXPIRED", "TARGET_INVALID", "LOW_JEV_CONFIDENCE", "NO_SELECTION"}:
+                    return result
+                first_reason = result.reason
+            return replace(result, source="TESTER_LLM", needs_tester_llm=True)
+
+    async def _resolve_page_action(self, action: WebAction, *, control: str, context: str, project_reference: str | None, refused_state_id: str | None = None) -> DecisionResult:
+        if self.task_finished:
+            return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
+        if self.browser_session_id is None:
+            raise RuntimeError("browser session has not started")
+        session = self.browser_manager.get_session(self.browser_session_id)
+        try:
+            await session.page.wait_for_load_state("networkidle", timeout=action.timeout_ms)
+        except PlaywrightTimeoutError:
+            return DecisionResult(source="TESTER_LLM", reason="PAGE_NOT_SETTLED", needs_tester_llm=True)
+        page_state = await self.page_state_reader.read(session.page, include_content=action.action_type == ActionType.ASSERTION)
+        action = replace(action, project_reference=project_reference or action.project_reference)
+        if project_reference and project_reference not in self.input_values:
+            return DecisionResult(source="TESTER_LLM", reason="INPUT_VALUE_UNAVAILABLE", needs_tester_llm=True)
+        if action.action_type in {ActionType.INPUT, ActionType.SELECT} and action.value_reference not in self.input_values:
+            return DecisionResult(source="TESTER_LLM", reason="INPUT_VALUE_UNAVAILABLE", needs_tester_llm=True)
+        project_selects = [element for element in page_state.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
+        self.active_project = None
+        if project_reference:
+            value = self.input_values[project_reference]
+            if any(sum(element.selected_value == option and value in {label, option} for label, option in element.options) != 1 for element in project_selects):
+                return DecisionResult(source="TESTER_LLM", reason="OBJECT_PROJECT_MISMATCH", needs_tester_llm=True)
+            if len(project_selects) == 1:
+                selected_value = project_selects[0].selected_value
+                if selected_value is not None:
+                    self.active_project = {"reference": project_reference, "target": project_selects[0].target, "value": selected_value}
+        elif context:
+            projects = [project for (alias, _, _), project in self.object_projects.items() if alias == context.casefold()]
+            current_projects = [project for project in projects if any(element.target == project["target"] and element.selected_value == project["value"] for element in project_selects)]
+            if project_selects and projects and not current_projects:
+                return DecisionResult(source="TESTER_LLM", reason="OBJECT_PROJECT_MISMATCH", needs_tester_llm=True)
+            if current_projects:
+                self.active_project = dict(current_projects[0])
+            elif len(project_selects) == 1:
+                element = project_selects[0]
+                reference = self.input_targets.get(element.target)
+                bound_value = self.input_values.get(reference or "")
+                if reference and any(element.selected_value == option and bound_value in {label, option} for label, option in element.options):
+                    assert element.selected_value is not None
+                    self.active_project = {"reference": reference, "target": element.target, "value": element.selected_value}
+        rows = await self.page_state_reader.read_rows(session.page)
+        self._bind_rows(rows, context)
+        self.remember_assertion_targets(rows, context)
+        kinds = {ActionType.INPUT: {"input", "textarea"}, ActionType.SELECT: {"select"}, ActionType.REPEAT_SUBMIT: {"button"}, ActionType.ASSERTION: {"cell", "input", "textarea", "select"} if action.assertion in {"visible", "hidden"} else {"cell"}}
+        candidates = []
+        exact = []
+        for element in page_state.interactive_elements:
+            matches_context = not context or context.casefold() in element.context.casefold() or context == element.context_target or f"={json.dumps(context)}]" in (element.context_target or "")
+            row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target) or row["text"] == element.context), None)
+            if context and row is not None:
+                matches_context = self._row_matches_context(row, context)
+            if not element.enabled or not matches_context:
+                continue
+            if action.action_type in kinds and element.kind not in kinds[action.action_type]:
+                continue
+            if action.action_type == ActionType.CLICK and element.kind in {"input", "textarea", "select", "cell"}:
+                continue
+            resolved_url = action.url
+            if action.action_type == ActionType.CLICK and element.href:
+                resolved_url = urljoin(page_state.url, element.href)
+            resolved = replace(action, target=element.target, url=resolved_url)
+            permission = self.executor.permission_checker.check(resolved, current_url=page_state.url)
+            if not permission.allowed:
+                continue
+            candidate = ActionCandidate(candidate_id=self.candidate_builder._candidate_id(page_state.state_id, action.action_type.value, element.target), action=action.action_type.value, label=f"{element.label} ({element.context})", target=element.target, state_id=page_state.state_id, value=action.value, value_reference=action.value_reference, url=resolved_url, resource_id=action.resource_id, requires_resource=action.requires_resource, confirmed=action.confirmed, expected=action.expected, assertion=action.assertion, behavior_id=action.behavior_id, goal_check=action.goal_check, check_id=action.check_id, project_reference=action.project_reference)
+            matches_control = self._field_matches(element, control)
+            words = set(control.casefold().split()) - {"the", "a", "an", "in", "on", "to", "button", "control"}
+            if matches_control or action.action_type == ActionType.CLICK and words & set(element.label.casefold().split()):
                 candidates.append(candidate)
-                if self._field_matches(element, control):
-                    exact.append(candidate)
-            if action.action_type in {ActionType.INPUT, ActionType.SELECT} and len(exact) != 1:
-                return DecisionResult(source="TESTER_LLM", reason="AMBIGUOUS_INPUT_BINDING" if len(exact) > 1 else "CONTROL_NOT_FOUND", needs_tester_llm=True)
-            if len(exact) == 1:
-                result = await self._execute_known_action(replace(action, target=exact[0].target, url=exact[0].url))
-                return DecisionResult(source="PLAYWRIGHT", reason="EXACT_CONTROL", candidate=exact[0], action_result=result)
-            if not candidates:
-                known = self.assertion_targets.get((control.casefold(), context.casefold()), {})
-                if action.action_type == ActionType.ASSERTION and len(known) == 1:
-                    target, container = next(iter(known.items()))
-                    if container is None or await session.page.locator(container).is_visible():
-                        # 删除后缺失的单元格仍须用此前观察到的定位器做真实断言。
-                        result = await self._execute_known_action(replace(action, target=target))
-                        candidate = ActionCandidate(candidate_id="recorded-assertion", action=action.action_type.value, label=control, target=target, state_id=page_state.state_id)
-                        return DecisionResult(source="PLAYWRIGHT", reason="RECORDED_ASSERTION_TARGET", candidate=candidate, action_result=result)
-                return DecisionResult(source="TESTER_LLM", reason="CONTROL_NOT_FOUND", needs_tester_llm=True)
-            choices = (exact or candidates) + self.candidate_builder._control_candidates(page_state.state_id)
-            return await self._select_and_execute(f"{action.action_type.value} the control '{control}' in '{context}'; stop if no control fits", page_state, choices)
+            if matches_control:
+                exact.append(candidate)
+        if action.action_type in {ActionType.INPUT, ActionType.SELECT} and len(exact) != 1:
+            return DecisionResult(source="TESTER_LLM", reason="AMBIGUOUS_INPUT_BINDING" if len(exact) > 1 else "CONTROL_NOT_FOUND", needs_tester_llm=True)
+        if action.action_type == ActionType.ASSERTION and len(exact) > 1:
+            return DecisionResult(source="TESTER_LLM", reason="AMBIGUOUS_ASSERTION_TARGET", needs_tester_llm=True)
+        if len(exact) == 1:
+            return await self._execute_candidate(control, page_state, exact[0], source="PLAYWRIGHT")
+        if not candidates:
+            known = self.assertion_targets.get((control.casefold(), context.casefold()), {})
+            if action.action_type == ActionType.ASSERTION and len(known) == 1:
+                target, container = next(iter(known.items()))
+                if container is None or await session.page.locator(container).is_visible():
+                    # 删除后缺失的单元格仍须用此前观察到的定位器做真实断言。
+                    result = await self._execute_known_action(replace(action, target=target))
+                    candidate = ActionCandidate(candidate_id="recorded-assertion", action=action.action_type.value, label=control, target=target, state_id=page_state.state_id)
+                    return DecisionResult(source="PLAYWRIGHT", reason="RECORDED_ASSERTION_TARGET", candidate=candidate, action_result=result)
+            return DecisionResult(source="TESTER_LLM", reason="CONTROL_NOT_FOUND", needs_tester_llm=True)
+        choices = exact or candidates
+        if refused_state_id == page_state.state_id:
+            return DecisionResult(source="RUNTIME", reason="LOW_JEV_CONFIDENCE")
+        return await self._select_and_execute(f"{action.action_type.value} the control '{control}' in '{context}'; stop if no control fits", page_state, choices)
 
     async def _select_and_execute(self, current_goal: str, page_state: PageState, candidates: list[ActionCandidate]) -> DecisionResult:
+        self.last_decision_state_id = page_state.state_id
         assert self.browser_session_id is not None
         session = self.browser_manager.get_session(self.browser_session_id)
         try:
@@ -586,7 +684,7 @@ class WebTestingRuntime:
             await self.stop_task("MAX_JEV_TOKENS_REACHED")
             return DecisionResult(source="STOP", reason="MAX_JEV_TOKENS_REACHED")
         self.store.update_budget(budget_id=self.budget_id, jev_calls=1)
-        with trace_span("Jev", "llm", metadata={"agent_role": "jev", "phase": "jev_decision", "model": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "provider": "openrouter", "ls_model_name": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "ls_provider": "openrouter"}) as span:
+        with trace_span("Jev", "llm", metadata={"agent_role": "jev", "phase": "jev_decision", "decision_type": "choice", "candidate_count": len(candidates), "model": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "provider": "openrouter", "ls_model_name": getattr(self.jev_selector.client, "model", "typesafe/jev-1.13"), "ls_provider": "openrouter"}) as span:
             selection = await self.jev_selector.select(current_goal=current_goal, page_state=page_state, candidates=candidates)
             failure_reason = selection.error
             if failure_reason is None and selection.selected_candidate_id not in {candidate.candidate_id for candidate in candidates}:
@@ -618,6 +716,9 @@ class WebTestingRuntime:
             tool="Jev",
             action="select_candidate",
             result={
+                "decision_type": "choice",
+                "candidate_ids": [candidate.candidate_id for candidate in candidates],
+                "failure_reason": failure_reason,
                 "selected_candidate_id": selection.selected_candidate_id,
                 "confidence": selection.confidence,
                 "error": selection.error,
@@ -644,6 +745,11 @@ class WebTestingRuntime:
             return DecisionResult(
                 source="TESTER_LLM", reason="LOW_JEV_CONFIDENCE", needs_tester_llm=True
             )
+        return await self._execute_candidate(current_goal, page_state, candidate, source="JEV_TO_PLAYWRIGHT")
+
+    async def _execute_candidate(self, current_goal: str, page_state: PageState, candidate: ActionCandidate, *, source: str) -> DecisionResult:
+        assert self.browser_session_id is not None
+        session = self.browser_manager.get_session(self.browser_session_id)
         current_page_state = await self.page_state_reader.read(session.page, include_content=candidate.action == ActionType.ASSERTION.value)
         validation = self.candidate_builder.validate(
             candidate=candidate, current_page_state=current_page_state
@@ -690,7 +796,7 @@ class WebTestingRuntime:
                 last_tester=self.tester_id,
             )
         return DecisionResult(
-            source="JEV_TO_PLAYWRIGHT",
+            source=source,
             reason="CANDIDATE_EXECUTED",
             candidate=candidate,
             action_result=action_result,

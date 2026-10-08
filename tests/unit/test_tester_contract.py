@@ -51,6 +51,16 @@ def test_plan_schema_advertises_task_ids_and_position_specific_actions(contract_
     assert set(definitions["PageInput"]["properties"]["value_reference"]["enum"]) == {"empty_name", "valid_name", "admin_username", "env:PASSWORD"}
     assert "env:PASSWORD" not in definitions["PlanAssertion"]["properties"]["expected_reference"]["enum"]
     assert "empty_name" not in definitions["PageGoal"]["properties"]["row_reference"]["enum"]
+    assert "operation" in definitions["PageGoal"]["required"]
+    assert "navigate" in definitions["PageGoal"]["properties"]["operation"]["enum"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,reason", [(None, "EXPLICIT_OPERATION_REQUIRED"), ("navigate", "NAVIGATION_DESTINATION_REQUIRED"), ("delete", "ROW_REFERENCE_REQUIRED")])
+async def test_operation_intent_and_object_are_required_before_execution(contract_tools: AgentTools, operation: str | None, reason: str) -> None:
+    result = await contract_tools.execute_test_plan([{"goal": "Perform assigned operation", "operation": operation, "checks": [assertion("C.empty"), assertion("C.valid")]}])  # type: ignore[list-item]
+    assert result["reason"] == reason
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 def test_schema_separates_observed_form_scopes_from_entity_bindings(contract_tools: AgentTools) -> None:
@@ -66,7 +76,7 @@ def test_schema_separates_observed_form_scopes_from_entity_bindings(contract_too
 @pytest.mark.asyncio
 @pytest.mark.parametrize("location", ["goal.context", "goal.form_context", "input.context", "step.context"])
 async def test_prose_binding_context_is_rejected_before_jev(contract_tools: AgentTools, location: str) -> None:
-    goal: dict[str, Any] = {"goal": "Submit the supplied name", "inputs": [{"control": "Project name", "value_reference": "valid_name"}], "checks": [assertion("C.empty"), assertion("C.valid")]}
+    goal: dict[str, Any] = {"goal": "Submit the supplied name", "operation": "create", "inputs": [{"control": "Project name", "value_reference": "valid_name"}], "checks": [assertion("C.empty"), assertion("C.valid")]}
     prose = "Current authenticated Projects page, fill and submit the Create Project form"
     if location.startswith("goal."):
         goal[location.split(".")[1]] = prose
@@ -87,7 +97,7 @@ async def test_exception_context_retains_pending_fields_without_raw_values_or_hi
     runtime = contract_tools.runtime
     runtime.execute_page_goal.side_effect = None  # type: ignore[attr-defined]
     runtime.execute_page_goal.return_value = {"success": False, "reason": "UNBOUND_REQUIRED_INPUT", "pending_inputs": ["Display name"], "actions": [{"action": "input", "control": "Register password", "value_reference": "env:PASSWORD", "value": "secret-never-in-context"}]}  # type: ignore[attr-defined]
-    goal = {"goal": "Register using the supplied inputs", "inputs": [{"control": "Display name", "value_reference": "valid_name"}], "checks": [assertion("C.empty"), assertion("C.valid")]}
+    goal = {"goal": "Register using the supplied inputs", "operation": "create", "inputs": [{"control": "Display name", "value_reference": "valid_name"}], "checks": [assertion("C.empty"), assertion("C.valid")]}
     await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
     failure = contract_tools.task_context["latest_plan_failure"]
     context = await contract_tools.planning_context(failure)
@@ -120,7 +130,7 @@ def assertion(check_id: str) -> dict[str, Any]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["DUPLICATE_CHECK_ID", "INPUT_VALUE_UNAVAILABLE", "INPUT_REFERENCE_NOT_ALLOWED", "PLAN_BOUNDARY_ACTION_REQUIRED", "PAGE_GOAL_CHECK_REQUIRES_ASSERTION", "INCOMPLETE_TEST_PLAN", "INVALID_TEST_PLAN_SCHEMA"])
 async def test_invalid_whole_plan_never_enters_jev(contract_tools: AgentTools, failure: str) -> None:
-    goal = {"goal": "Validate the field", "checks": [assertion("C.empty"), assertion("C.valid")]}
+    goal = {"goal": "Validate the field", "operation": "observe", "checks": [assertion("C.empty"), assertion("C.valid")]}
     if failure == "DUPLICATE_CHECK_ID":
         goal["checks"] = [assertion("C.empty"), assertion("C.empty")]
     elif failure in {"INPUT_VALUE_UNAVAILABLE", "INPUT_REFERENCE_NOT_ALLOWED"}:
@@ -156,7 +166,7 @@ async def test_three_failed_plans_use_fresh_context_and_original_two_replans(con
             assert context["latest_failure"] is None if self.calls == 1 else context["latest_failure"]["reason"] == "DUPLICATE_CHECK_ID"
             assert "secret-never-in-context" not in messages[0].text
             assert [tool.name for tool in options["tools"]] == ["execute_test_plan"]
-            goal = {"goal": "Validate field", "checks": [assertion("C.empty"), assertion("C.empty")]}
+            goal = {"goal": "Validate field", "operation": "observe", "checks": [assertion("C.empty"), assertion("C.empty")]}
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call(f"plan-{self.calls}", "execute_test_plan", arguments={"goals": [goal]})])], usage_details={"input_token_count": 4, "output_token_count": 2})
 
     client = InvalidClient()

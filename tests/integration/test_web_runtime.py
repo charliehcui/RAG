@@ -148,7 +148,7 @@ async def test_page_goal_uses_observed_input_locator_and_jev_resolves_descriptiv
         assert result["success"] and await page.locator("#status").inner_text() == "Created Example"
         history = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
         assert [item["action_data"]["value_reference"] for item in history if item["action"] == "input"] == ["name", "env:PROJECT_SECRET"]
-        assert "the project creation form" in selector.states[0]["current_goal"]
+        assert "the project creation form" not in selector.states[0]["current_goal"]
         assert "never-return-this" not in json.dumps(selector.states)
     finally:
         await runtime.browser_manager.close()
@@ -768,7 +768,7 @@ async def test_prepared_login_handoff_finishes_with_one_fake_model_call_and_keep
             assert "AUTHENTICATED" in text
             assert "member (member)" in text
             assert "secret-value" not in text
-            step = {"action_type": "assertion", "control": "Name", "context": "entity-7", "expected_reference": "name", "assertion": "equals", "behavior_id": "EB-check"}
+            step = {"action_type": "assertion", "control": "Name", "context": "name", "expected_reference": "name", "assertion": "equals", "behavior_id": "EB-check"}
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("prepared", "execute_test_plan", arguments={"goals": [{"goal": "Check the prepared project", "run_operations": False, "checks": [step]}]})])])
 
     runtime = build_runtime(phase2_store, make_budget(), FakeJevClient())
@@ -832,8 +832,8 @@ async def test_complete_plan_keeps_multiple_goals_inside_jev_and_replans_only_on
         def predict(self, state: Mapping[str, Any], questions: Mapping[str, Any]) -> Mapping[str, Any]:
             if mode == "infrastructure_failure":
                 raise TimeoutError("unavailable selector")
-            if state["current_goal"].startswith("Review the created project"):
-                failed = mode == "exception" and not any(item["current_goal"].startswith("Review the created project") for item in self.states)
+            if "Review the created project" in state["current_goal"]:
+                failed = mode == "exception" and not any("Review the created project" in item["current_goal"] for item in self.states)
                 self.states.append(state)
                 action = "stop_current_path" if "Reviewed Example" in state["page_state"]["text"] else "click"
                 candidate = next(item for item in state["legal_candidates"] if item["action"] == action and (action == "stop_current_path" or item["label"].startswith("Review Project")))
@@ -996,7 +996,7 @@ async def test_complete_plan_preserves_pending_submit_input_references_and_nativ
             self.calls += 1
             assert self.calls == 1, str(messages[-1])[:4000]
             assert "demo-member2" not in "\n".join(message.text for message in messages)
-            goal = {"goal": "Prepare one pending project submission", "inputs": [{"control": "Project name", "value_reference": "project_name"}], "after_steps": [{"action_type": "repeat_submit", "target": "#project-submit", "url": self.target_url + "/api/projects"}, {"action_type": "wait", "target": '#projects-table .project-name:text-is("repeat-plan")'}, {"action_type": "assertion", "target": '#projects-table .project-name:text-is("repeat-plan")', "assertion": "count", "expected": "1", "behavior_id": "EB-submit"}]}
+            goal = {"goal": "Prepare one pending project submission", "operation": "create", "inputs": [{"control": "Project name", "value_reference": "project_name"}], "after_steps": [{"action_type": "repeat_submit", "target": "#project-submit", "url": self.target_url + "/api/projects"}, {"action_type": "wait", "target": '#projects-table .project-name:text-is("repeat-plan")'}, {"action_type": "assertion", "target": '#projects-table .project-name:text-is("repeat-plan")', "assertion": "count", "expected": "1", "behavior_id": "EB-submit"}]}
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("pending-plan", "execute_test_plan", arguments={"goals": [goal]})])])
 
     replay_manager: BrowserManager | None = None
