@@ -38,6 +38,13 @@ class InteractiveElement:
     enabled: bool = True
     context: str = ""
     context_target: str | None = None
+    context_kind: str = ""
+    form_target: str | None = None
+    field_names: tuple[str, ...] = ()
+    options: tuple[tuple[str, str], ...] = ()
+    selected_value: str | None = None
+    is_submit: bool = False
+    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -62,6 +69,11 @@ class PageState:
                     "role": element.role,
                     "context": element.context,
                     "context_target": element.context_target,
+                    "context_kind": element.context_kind,
+                    "form_target": element.form_target,
+                    "field_names": list(element.field_names),
+                    "options": [{"label": label, "value": value} for label, value in element.options],
+                    "selected_value": element.selected_value,
                 }
                 for element in self.interactive_elements
             ],
@@ -87,6 +99,7 @@ class ActionCandidate:
     behavior_id: str | None = None
     goal_check: bool = False
     check_id: str | None = None
+    project_reference: str | None = None
 
 
 @dataclass(frozen=True)
@@ -108,6 +121,7 @@ class WebAction:
     goal_check: bool = False
     identity_reference: str | None = None
     check_id: str | None = None
+    project_reference: str | None = None
 
 
 @dataclass(frozen=True)

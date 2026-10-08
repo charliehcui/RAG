@@ -1987,7 +1987,7 @@
       "required_test_goals": [
         {
           "goal_id": "unassigned-session",
-          "description": "Log in as member2, verify the identity and empty Projects table, refresh and check the same state, log out, then try invalid_login_name with the configured secret and verify invalid login while remaining logged out.",
+          "description": "Log in as member2, verify the identity and empty Projects table, refresh and check the same state, log out, then try invalid_login_name with the configured secret and verify invalid login while remaining logged out. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Permission",
           "identity_reference": "member2",
           "expected_behavior_ids": [
@@ -1998,7 +1998,16 @@
             "member2_username",
             "invalid_login_name"
           ],
-          "independent_group": "workflow"
+          "independent_group": "workflow",
+          "check_ids": [
+            "H01.login",
+            "H01.initial-empty",
+            "H01.refresh-identity",
+            "H01.refresh-empty",
+            "H01.logout",
+            "H01.invalid-login-rejected",
+            "H01.invalid-login-logged-out"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2053,11 +2062,81 @@
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "no_bug_control"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H01.login",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "The valid login shows the supplied member2 identity."
+        },
+        {
+          "check_id": "H01.initial-empty",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "The unassigned member2 Projects list is empty.",
+          "depends_on": [
+            "H01.login"
+          ]
+        },
+        {
+          "check_id": "H01.refresh-identity",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "After refresh, the same session still shows member2.",
+          "depends_on": [
+            "H01.initial-empty"
+          ]
+        },
+        {
+          "check_id": "H01.refresh-empty",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "After that refresh, the Projects list remains empty.",
+          "depends_on": [
+            "H01.refresh-identity"
+          ]
+        },
+        {
+          "check_id": "H01.logout",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Logout returns this context to the login form.",
+          "depends_on": [
+            "H01.refresh-empty"
+          ]
+        },
+        {
+          "check_id": "H01.invalid-login-rejected",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Login using invalid_login_name and the supplied secret is rejected with invalid login.",
+          "depends_on": [
+            "H01.logout"
+          ]
+        },
+        {
+          "check_id": "H01.invalid-login-logged-out",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "After the rejected attempt, the context remains logged out.",
+          "depends_on": [
+            "H01.invalid-login-rejected"
+          ]
+        }
       ]
     },
     {
@@ -2078,7 +2157,7 @@
       "required_test_goals": [
         {
           "goal_id": "temporary-invitation",
-          "description": "As admin add member2 to project-2, edit its display name, refresh, remove the membership and refresh. Complete this workflow before the member2 session begins.",
+          "description": "As admin add member2 to project-2, edit its display name, refresh, remove the membership and refresh. Complete this workflow before the member2 session begins. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Member",
           "identity_reference": "admin",
           "expected_behavior_ids": [
@@ -2091,11 +2170,18 @@
             "invited_username",
             "member_display_name"
           ],
-          "independent_group": "invitation"
+          "independent_group": "invitation",
+          "check_ids": [
+            "H02.member-added",
+            "H02.member-edited",
+            "H02.member-edit-persisted",
+            "H02.member-removed",
+            "H02.removal-persisted"
+          ]
         },
         {
           "goal_id": "first-login-access",
-          "description": "Only after temporary-invitation is complete, log in as member2 in a fresh context. Confirm no access to Admin Private Project and an empty Projects list, then log out.",
+          "description": "Only after temporary-invitation is complete, log in as member2 in a fresh context. Confirm no access to Admin Private Project and an empty Projects list, then log out. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Permission",
           "identity_reference": "member2",
           "expected_behavior_ids": [
@@ -2107,7 +2193,13 @@
             "private_project_id",
             "private_project_name"
           ],
-          "independent_group": "visibility"
+          "independent_group": "visibility",
+          "check_ids": [
+            "H02.fresh-login",
+            "H02.initial-empty",
+            "H02.private-project-absent",
+            "H02.logout"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2184,12 +2276,103 @@
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "no_bug_control",
         "multi_step_e2e"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H02.member-added",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "member2 appears in Members of private_project_id after invitation."
+        },
+        {
+          "check_id": "H02.member-edited",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "The same member2 row shows member_display_name after Save.",
+          "depends_on": [
+            "H02.member-added"
+          ]
+        },
+        {
+          "check_id": "H02.member-edit-persisted",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh and reopen Members of the same project; the edited name remains.",
+          "depends_on": [
+            "H02.member-edited"
+          ]
+        },
+        {
+          "check_id": "H02.member-removed",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Remove member2 from this project; its membership row disappears.",
+          "depends_on": [
+            "H02.member-edit-persisted"
+          ]
+        },
+        {
+          "check_id": "H02.removal-persisted",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh and reopen this project's Members; member2 remains absent.",
+          "depends_on": [
+            "H02.member-removed"
+          ]
+        },
+        {
+          "check_id": "H02.fresh-login",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Only after removal-persisted and the Admin workflow ends, a fresh member2 context logs in with the supplied identity.",
+          "depends_on": [
+            "H02.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H02.initial-empty",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "This first post-removal login has an empty Projects list.",
+          "depends_on": [
+            "H02.fresh-login"
+          ]
+        },
+        {
+          "check_id": "H02.private-project-absent",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "private_project_id is absent; the removed invitation does not grant access.",
+          "depends_on": [
+            "H02.fresh-login"
+          ]
+        },
+        {
+          "check_id": "H02.logout",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Logout returns this context to the login form.",
+          "depends_on": [
+            "H02.initial-empty",
+            "H02.private-project-absent"
+          ]
+        }
       ]
     },
     {
@@ -2209,7 +2392,7 @@
       "required_test_goals": [
         {
           "goal_id": "cleanup-boundaries",
-          "description": "As member create owned_project_name, delete it and confirm owner cleanup succeeds. Then attempt Delete on joined Seed Project and refresh to verify that the Admin-owned project and its Seed Task remain.",
+          "description": "Establish the joined project and observe its provided Seed Task before the non-owner deletion attempt. As member create owned_project_name, delete it and confirm owner cleanup succeeds. Then attempt Delete on joined Seed Project and refresh to verify that the Admin-owned project and its Seed Task remain. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Permission",
           "identity_reference": "member",
           "expected_behavior_ids": [
@@ -2220,9 +2403,21 @@
             "member_username",
             "owned_project_name",
             "joined_project_id",
-            "joined_project_name"
+            "joined_project_name",
+            "joined_task_id",
+            "joined_task_title"
           ],
-          "independent_group": "workflow"
+          "independent_group": "workflow",
+          "check_ids": [
+            "H03.owned-created",
+            "H03.owned-deleted",
+            "H03.owned-delete-persisted",
+            "H03.joined-project-ready",
+            "H03.joined-task-ready",
+            "H03.non-owner-delete-rejected",
+            "H03.joined-project-preserved",
+            "H03.joined-task-preserved"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2257,7 +2452,9 @@
         "owned_project_name": "h03-owned-cleanup",
         "joined_project_id": "project-1",
         "joined_project_name": "Seed Project",
-        "member_username": "member"
+        "member_username": "member",
+        "joined_task_id": "task-1",
+        "joined_task_title": "Seed Task"
       },
       "enabled_seeded_bugs": [
         "B2"
@@ -2281,12 +2478,90 @@
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "single_bug",
         "multi_step_e2e"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H03.owned-created",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Create owned_project_name once; its stable row is owned by member."
+        },
+        {
+          "check_id": "H03.owned-deleted",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Owner deletion removes that owned project immediately.",
+          "depends_on": [
+            "H03.owned-created"
+          ]
+        },
+        {
+          "check_id": "H03.owned-delete-persisted",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "After refresh the owned project remains absent.",
+          "depends_on": [
+            "H03.owned-deleted"
+          ]
+        },
+        {
+          "check_id": "H03.joined-project-ready",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "joined_project_id is accessible and owned by admin, not by this member."
+        },
+        {
+          "check_id": "H03.joined-task-ready",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Before destructive testing, observe joined_task_id / joined_task_title in this joined project.",
+          "depends_on": [
+            "H03.joined-project-ready"
+          ]
+        },
+        {
+          "check_id": "H03.non-owner-delete-rejected",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "A non-owner Delete attempt is rejected, or its unavailable control prevents deletion. A successful owner cleanup is not this check.",
+          "depends_on": [
+            "H03.owned-delete-persisted",
+            "H03.joined-task-ready"
+          ]
+        },
+        {
+          "check_id": "H03.joined-project-preserved",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Refresh after the non-owner attempt; the same joined project remains.",
+          "depends_on": [
+            "H03.non-owner-delete-rejected"
+          ]
+        },
+        {
+          "check_id": "H03.joined-task-preserved",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Reopen this project's Tasks after the attempt; joined_task_id remains intact.",
+          "depends_on": [
+            "H03.non-owner-delete-rejected"
+          ]
+        }
       ]
     },
     {
@@ -2307,7 +2582,7 @@
       "required_test_goals": [
         {
           "goal_id": "invite-and-remove",
-          "description": "As admin add member2 to project-2 and publish invitation-ready. Wait for invitee-session-ready from the member2 task, then remove that membership, prove removal in Members and publish membership-removed.",
+          "description": "As admin add member2 to project-2 and publish invitation-ready. Wait for invitee-session-ready from the member2 task, then remove that membership, prove removal in Members and publish membership-removed. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Member",
           "identity_reference": "admin",
           "expected_behavior_ids": [
@@ -2319,11 +2594,16 @@
             "private_project_name",
             "invited_username"
           ],
-          "independent_group": "revocation"
+          "independent_group": "revocation",
+          "check_ids": [
+            "H04.member-added",
+            "H04.member-removed",
+            "H04.removal-persisted"
+          ]
         },
         {
           "goal_id": "invitee-access",
-          "description": "Wait for invitation-ready before logging in as member2. Confirm private-project access, publish invitee-session-ready, retain this context until membership-removed, then refresh Projects and revisit project task data without logging out; access must be denied.",
+          "description": "Wait for invitation-ready before logging in as member2. Confirm private-project access, publish invitee-session-ready, retain this context until membership-removed, then refresh Projects and revisit project task data without logging out; access must be denied. Also check Members access in that same retained session. No untouched-project control or new login is required by this Case. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Permission",
           "identity_reference": "member2",
           "expected_behavior_ids": [
@@ -2334,7 +2614,13 @@
             "private_project_id",
             "private_project_name"
           ],
-          "independent_group": "revocation"
+          "independent_group": "revocation",
+          "check_ids": [
+            "H04.member-ready",
+            "H04.revoked-project",
+            "H04.revoked-tasks",
+            "H04.revoked-members"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2406,12 +2692,82 @@
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "single_bug",
         "multi_step_e2e"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H04.member-added",
+          "goal_id": "invite-and-remove",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Invite member2 to private_project_id and observe the exact membership row."
+        },
+        {
+          "check_id": "H04.member-ready",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "After invitation-ready, log in as member2 and observe access to private_project_id; publish invitee-session-ready and retain this context.",
+          "depends_on": [
+            "H04.member-added"
+          ]
+        },
+        {
+          "check_id": "H04.member-removed",
+          "goal_id": "invite-and-remove",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Only after invitee-session-ready remove that member2 membership.",
+          "depends_on": [
+            "H04.member-ready"
+          ]
+        },
+        {
+          "check_id": "H04.removal-persisted",
+          "goal_id": "invite-and-remove",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh the Admin Members view to prove removal, then publish membership-removed.",
+          "depends_on": [
+            "H04.member-removed"
+          ]
+        },
+        {
+          "check_id": "H04.revoked-project",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "After membership-removed, refresh the retained member2 context; this private project is no longer visible.",
+          "depends_on": [
+            "H04.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H04.revoked-tasks",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "The same retained session cannot access Tasks of private_project_id; denied or unavailable access is expected.",
+          "depends_on": [
+            "H04.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H04.revoked-members",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "The same retained session cannot access Members of private_project_id. Do not replace the session with a new login.",
+          "depends_on": [
+            "H04.removal-persisted"
+          ]
+        }
       ]
     },
     {
@@ -2431,7 +2787,7 @@
       "required_test_goals": [
         {
           "goal_id": "edit-validation",
-          "description": "As admin open Edit on Admin Private Project and submit whitespace_project_name. Check the validation message and existing row name, cancel the rejected edit if needed, refresh and confirm the original name remains.",
+          "description": "As admin open Edit on Admin Private Project and submit whitespace_project_name. Check the validation message and existing row name, cancel the rejected edit if needed, refresh and confirm the original name remains. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Project",
           "identity_reference": "admin",
           "expected_behavior_ids": [
@@ -2443,7 +2799,12 @@
             "private_project_name",
             "whitespace_project_name"
           ],
-          "independent_group": "workflow"
+          "independent_group": "workflow",
+          "check_ids": [
+            "H05.validation-message",
+            "H05.name-unchanged-immediate",
+            "H05.name-unchanged-persisted"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2496,11 +2857,41 @@
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "single_bug"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H05.validation-message",
+          "goal_id": "edit-validation",
+          "behavior_id": "EB-PROJECT-NAME",
+          "identity_reference": "admin",
+          "description": "Submit whitespace_project_name through Edit on private_project_id; project name is required is shown."
+        },
+        {
+          "check_id": "H05.name-unchanged-immediate",
+          "goal_id": "edit-validation",
+          "behavior_id": "EB-PROJECT-NAME",
+          "identity_reference": "admin",
+          "description": "The same project row still shows private_project_name after the rejected edit; cancel the dialog if necessary.",
+          "depends_on": [
+            "H05.validation-message"
+          ]
+        },
+        {
+          "check_id": "H05.name-unchanged-persisted",
+          "goal_id": "edit-validation",
+          "behavior_id": "EB-PROJECT-NAME",
+          "identity_reference": "admin",
+          "description": "Refresh after this edit attempt; the same project retains its original name.",
+          "depends_on": [
+            "H05.name-unchanged-immediate"
+          ]
+        }
       ]
     },
     {
@@ -2508,7 +2899,7 @@
       "split": "holdout",
       "name": "Pending creation alongside member offboarding",
       "difficulty": "Medium",
-      "user_goal": "Check a pending creation by an unassigned member while another member is being offboarded from Seed Project.",
+      "user_goal": "Check isolation of a member2 pending creation from a simultaneous synchronized Seed Project offboarding workflow; score each branch separately.",
       "scope": [
         "/",
         "/api",
@@ -2522,7 +2913,7 @@
       "required_test_goals": [
         {
           "goal_id": "pending-project",
-          "description": "As member2 test repeated submission of submission_project_name while its first creation remains pending; capture operation identity and inspect settled rows after refresh. Do not touch Seed Project.",
+          "description": "As member2 test repeated submission of submission_project_name while its first creation remains pending; capture operation identity and inspect settled rows after refresh. Do not touch Seed Project. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Project",
           "identity_reference": "member2",
           "expected_behavior_ids": [
@@ -2532,11 +2923,16 @@
             "member2_username",
             "submission_project_name"
           ],
-          "independent_group": "creation"
+          "independent_group": "creation",
+          "check_ids": [
+            "H06.pending-operation",
+            "H06.pending-settled",
+            "H06.pending-persisted"
+          ]
         },
         {
           "goal_id": "offboarded-read",
-          "description": "As member establish Seed Project access and publish member-session-ready. Retain this context until membership-removed, then reopen Members and Tasks and refresh Projects to check that data is inaccessible without logout.",
+          "description": "As member establish Seed Project access and publish member-session-ready. Retain this context until membership-removed, then reopen Members and Tasks and refresh Projects to check that data is inaccessible without logout. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Permission",
           "identity_reference": "member",
           "expected_behavior_ids": [
@@ -2547,11 +2943,17 @@
             "seed_project_id",
             "seed_project_name"
           ],
-          "independent_group": "offboarding"
+          "independent_group": "offboarding",
+          "check_ids": [
+            "H06.member-ready",
+            "H06.revoked-members",
+            "H06.revoked-tasks",
+            "H06.revoked-project"
+          ]
         },
         {
           "goal_id": "remove-member",
-          "description": "As admin wait for member-session-ready, remove member from project-1, refresh the Members list to prove removal and publish membership-removed.",
+          "description": "As admin wait for member-session-ready, remove member from project-1, refresh the Members list to prove removal and publish membership-removed. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Member",
           "identity_reference": "admin",
           "expected_behavior_ids": [
@@ -2563,7 +2965,11 @@
             "seed_project_name",
             "removed_username"
           ],
-          "independent_group": "offboarding"
+          "independent_group": "offboarding",
+          "check_ids": [
+            "H06.member-removed",
+            "H06.removal-persisted"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2656,20 +3062,108 @@
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "multi_bug",
         "multi_step_e2e"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H06.pending-operation",
+          "goal_id": "pending-project",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "member2",
+          "description": "Execute two submissions while both requests of the same nonempty operation ID are pending, using submission_project_name.",
+          "action_type": "repeat_submit"
+        },
+        {
+          "check_id": "H06.pending-settled",
+          "goal_id": "pending-project",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "member2",
+          "description": "After that operation settles there is exactly one matching project row.",
+          "depends_on": [
+            "H06.pending-operation"
+          ]
+        },
+        {
+          "check_id": "H06.pending-persisted",
+          "goal_id": "pending-project",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "member2",
+          "description": "Refresh after settling; exactly one same-operation project remains.",
+          "depends_on": [
+            "H06.pending-settled"
+          ]
+        },
+        {
+          "check_id": "H06.member-ready",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "Observe Seed Project access, publish member-session-ready, and retain this member context."
+        },
+        {
+          "check_id": "H06.member-removed",
+          "goal_id": "remove-member",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "After member-session-ready remove removed_username from seed_project_id.",
+          "depends_on": [
+            "H06.member-ready"
+          ]
+        },
+        {
+          "check_id": "H06.removal-persisted",
+          "goal_id": "remove-member",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh Members of this project to prove removal, then publish membership-removed.",
+          "depends_on": [
+            "H06.member-removed"
+          ]
+        },
+        {
+          "check_id": "H06.revoked-members",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "After membership-removed the retained member session cannot reopen Members of seed_project_id.",
+          "depends_on": [
+            "H06.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H06.revoked-tasks",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "The same retained member session cannot reopen Tasks of seed_project_id.",
+          "depends_on": [
+            "H06.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H06.revoked-project",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "Refresh Projects in this same session; seed_project_id is absent. Do not touch the separate member2 creation branch.",
+          "depends_on": [
+            "H06.removal-persisted"
+          ]
+        }
       ]
     },
     {
       "scenario_id": "H07",
       "split": "holdout",
-      "name": "Private task cleanup joined deletion and membership",
+      "name": "Private task cleanup isolated from joined-project deletion",
       "difficulty": "Complex",
-      "user_goal": "Audit separate private-task cleanup, a joined-member deletion attempt, and a new-project membership lifecycle.",
+      "user_goal": "Audit parallel Admin private-task cleanup and a joined-member deletion attempt on distinct projects, with separately scored outcomes.",
       "scope": [
         "/",
         "/api",
@@ -2677,13 +3171,12 @@
       ],
       "focus_features": [
         "Task",
-        "Permission",
-        "Member"
+        "Permission"
       ],
       "required_test_goals": [
         {
           "goal_id": "private-task",
-          "description": "As admin select project-2, create and edit the named task, delete it, refresh and reopen its task list. Do not touch project-1.",
+          "description": "As admin select project-2, create and edit the named task, delete it, refresh and reopen its task list. Do not touch project-1. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Task",
           "identity_reference": "admin",
           "expected_behavior_ids": [
@@ -2697,11 +3190,19 @@
             "task_title",
             "edited_task_title"
           ],
-          "independent_group": "task"
+          "independent_group": "task",
+          "check_ids": [
+            "H07.task-created",
+            "H07.task-edited",
+            "H07.task-edit-persisted",
+            "H07.task-deleted-immediate",
+            "H07.task-deleted-refresh",
+            "H07.task-deleted-reopen"
+          ]
         },
         {
           "goal_id": "joined-deletion",
-          "description": "As member attempt Delete on project-1, refresh and verify project/task preservation. Do not touch project-2 or the membership-workflow project.",
+          "description": "Establish the joined project and observe its provided Seed Task before the non-owner deletion attempt. As member attempt Delete on project-1, refresh and verify project/task preservation. Do not touch project-2; that project is the independent private-task target. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Permission",
           "identity_reference": "member",
           "expected_behavior_ids": [
@@ -2710,25 +3211,18 @@
           "test_data_keys": [
             "member_username",
             "joined_project_id",
-            "joined_project_name"
+            "joined_project_name",
+            "joined_task_id",
+            "joined_task_title"
           ],
-          "independent_group": "permission"
-        },
-        {
-          "goal_id": "team-members",
-          "description": "As admin create member_project_name, add member2, edit its display name, refresh, remove membership and refresh again, all within this separate project.",
-          "feature": "Member",
-          "identity_reference": "admin",
-          "expected_behavior_ids": [
-            "EB-MEMBER-LIFECYCLE"
-          ],
-          "test_data_keys": [
-            "admin_username",
-            "member_project_name",
-            "invited_username",
-            "member_display_name"
-          ],
-          "independent_group": "member"
+          "independent_group": "permission",
+          "check_ids": [
+            "H07.joined-project-ready",
+            "H07.joined-task-ready",
+            "H07.non-owner-delete-rejected",
+            "H07.joined-project-preserved",
+            "H07.joined-task-preserved"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2748,12 +3242,6 @@
           "behavior_id": "EB-PROJECT-DELETE-AUTH",
           "description": "Only the Project owner or Admin may delete a project. A joined member who is not its owner is denied, and the project and its tasks remain intact.",
           "applies_to": "Permission/member/delete",
-          "source": "DEMO_SPEC"
-        },
-        {
-          "behavior_id": "EB-MEMBER-LIFECYCLE",
-          "description": "An owner or Admin may add an existing member, edit the member display name, and remove that membership. Refresh preserves each change; the owner cannot be removed as an ordinary member.",
-          "applies_to": "Member/all/lifecycle",
           "source": "DEMO_SPEC"
         }
       ],
@@ -2790,11 +3278,10 @@
         "edited_task_title": "h07-private-ready",
         "joined_project_id": "project-1",
         "joined_project_name": "Seed Project",
-        "member_project_name": "h07-audit-team",
-        "invited_username": "member2",
-        "member_display_name": "H07 Audit Reviewer",
         "admin_username": "admin",
-        "member_username": "member"
+        "member_username": "member",
+        "joined_task_id": "task-1",
+        "joined_task_title": "Seed Task"
       },
       "enabled_seeded_bugs": [
         "B1",
@@ -2809,23 +3296,130 @@
         "initial_state": "admin owns project-1 (Seed Project, member joined, task-1 Seed Task OPEN) and project-2 (Admin Private Project, no members). member2 has no project access. No application fixtures beyond reset are needed; goals create their own additional data."
       },
       "expected_parallelism": {
-        "target_testers": 3,
-        "independent_goal_groups": 3,
-        "compare_1_vs_3": true,
-        "coordination": "Separate project-1, project-2, and newly created membership targets. Destructive project-1 testing cannot erase the private-task evidence."
+        "target_testers": 2,
+        "independent_goal_groups": 2,
+        "compare_1_vs_3": false,
+        "coordination": "Two independent, isolated project targets. The project-1 destructive attempt cannot erase Admin project-2 task evidence. This is not a three-independent-branch speed comparison."
       },
       "success_criteria": [
         "For ordinary navigation, wait for the selected view and its project data to finish loading before issuing another view navigation or project selection in the same context. Pending-create submission tests intentionally repeat the pending submit operation. Independent contexts may run concurrently.",
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "multi_bug",
         "multi_step_e2e",
         "parallel_multi_agent"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H07.task-created",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Create task_title only in private_project_id; observe its stable task row."
+        },
+        {
+          "check_id": "H07.task-edited",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Save edited_task_title on that same task row.",
+          "depends_on": [
+            "H07.task-created"
+          ]
+        },
+        {
+          "check_id": "H07.task-edit-persisted",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh and reselect the same private project; the saved task title remains.",
+          "depends_on": [
+            "H07.task-edited"
+          ]
+        },
+        {
+          "check_id": "H07.task-deleted-immediate",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-DELETE",
+          "identity_reference": "admin",
+          "description": "Delete that task and assert its absence immediately.",
+          "depends_on": [
+            "H07.task-edit-persisted"
+          ]
+        },
+        {
+          "check_id": "H07.task-deleted-refresh",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-DELETE",
+          "identity_reference": "admin",
+          "description": "Refresh and reselect private_project_id; the same task remains absent.",
+          "depends_on": [
+            "H07.task-deleted-immediate"
+          ]
+        },
+        {
+          "check_id": "H07.task-deleted-reopen",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-DELETE",
+          "identity_reference": "admin",
+          "description": "Leave and reopen Tasks of private_project_id; the deleted task still remains absent.",
+          "depends_on": [
+            "H07.task-deleted-refresh"
+          ]
+        },
+        {
+          "check_id": "H07.joined-project-ready",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Observe joined_project_id and its admin owner in the member session."
+        },
+        {
+          "check_id": "H07.joined-task-ready",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Observe joined_task_id / joined_task_title in that project before the deletion attempt.",
+          "depends_on": [
+            "H07.joined-project-ready"
+          ]
+        },
+        {
+          "check_id": "H07.non-owner-delete-rejected",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Delete of joined_project_id by this non-owner is rejected or unavailable. Do not target the private task branch.",
+          "depends_on": [
+            "H07.joined-task-ready"
+          ]
+        },
+        {
+          "check_id": "H07.joined-project-preserved",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Refresh after the attempt; joined_project_id remains.",
+          "depends_on": [
+            "H07.non-owner-delete-rejected"
+          ]
+        },
+        {
+          "check_id": "H07.joined-task-preserved",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Reopen this joined project's Tasks; joined_task_id remains intact.",
+          "depends_on": [
+            "H07.non-owner-delete-rejected"
+          ]
+        }
       ]
     },
     {
@@ -2833,7 +3427,7 @@
       "split": "holdout",
       "name": "Member-owner save pending creation and joined task",
       "difficulty": "Complex",
-      "user_goal": "Audit a second member own-project rename, an Admin pending creation, and a separate joined-member task edit.",
+      "user_goal": "Audit parallel role/project isolation across a member2 own-project rename, Admin same-operation submission, and a joined-member task edit; score each branch separately.",
       "scope": [
         "/",
         "/api",
@@ -2846,7 +3440,7 @@
       "required_test_goals": [
         {
           "goal_id": "owner-save",
-          "description": "As member2 create owned_project_name once, rename it, inspect its row immediately after Save, refresh and revisit Projects. No repeated submission is part of this branch.",
+          "description": "As member2 create owned_project_name once, rename it, inspect its row immediately after Save, refresh and revisit Projects. No repeated submission is part of this branch. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Project",
           "identity_reference": "member2",
           "expected_behavior_ids": [
@@ -2858,11 +3452,17 @@
             "owned_project_name",
             "edited_project_name"
           ],
-          "independent_group": "save"
+          "independent_group": "save",
+          "check_ids": [
+            "H08.owned-created",
+            "H08.saved-immediate",
+            "H08.saved-persisted",
+            "H08.saved-reopened"
+          ]
         },
         {
           "goal_id": "admin-submission",
-          "description": "As admin submit submission_project_name repeatedly before the first operation completes, establish same-operation evidence, and compare project identities after settling and refresh.",
+          "description": "As admin submit submission_project_name repeatedly before the first operation completes, establish same-operation evidence, and compare project identities after settling and refresh. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Project",
           "identity_reference": "admin",
           "expected_behavior_ids": [
@@ -2872,11 +3472,16 @@
             "admin_username",
             "submission_project_name"
           ],
-          "independent_group": "submission"
+          "independent_group": "submission",
+          "check_ids": [
+            "H08.pending-operation",
+            "H08.pending-settled",
+            "H08.pending-persisted"
+          ]
         },
         {
           "goal_id": "joined-task-edit",
-          "description": "As member create and edit the named task in Seed Project, refresh, reopen Tasks and verify the saved title and unchanged access. Do not rename or delete either other branch project.",
+          "description": "As member create and edit the named task in Seed Project, refresh, reopen Tasks and verify the saved title and unchanged access. Do not rename or delete either other branch project. Complete only its explicit required_checks. Reference behavior descriptions do not add unlisted tests or inputs; keep each continuous workflow in its existing browser context and preserve declared cross-session barriers.",
           "feature": "Task",
           "identity_reference": "member",
           "expected_behavior_ids": [
@@ -2889,7 +3494,14 @@
             "task_title",
             "edited_task_title"
           ],
-          "independent_group": "task"
+          "independent_group": "task",
+          "check_ids": [
+            "H08.task-created",
+            "H08.task-edited",
+            "H08.task-edit-persisted",
+            "H08.task-edit-reopened",
+            "H08.joined-access-preserved"
+          ]
         }
       ],
       "expected_behaviors": [
@@ -2991,16 +3603,132 @@
         "Cover every required test goal with executable, scoped checks and explicit identity assignments. Preserve meaningful independent goal groups and required live-session ordering.",
         "Record actual goal assertions and observed results, including rejected operations, persistence, and immediate display checks. Finding a reproducible deviation still completes a testing goal.",
         "For each reported deviation record expected versus actual behavior, acting identity, project/task reference, ordered actions, and timestamped browser evidence. Use two matching fresh reproduction attempts within three attempts plus independent fresh verification; keep unresolved results uncertain.",
-        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text."
+        "The final summary must faithfully describe completed, failed, and uncertain checks, finding statuses, evidence, and recorded metrics. Do not infer success from task completion text.",
+        "Every explicit required check needs its stable check_id, assigned identity, actual assertion and ordered browser evidence. Shared behavior IDs do not replace missing checks. Reference specifications must not expand the required work."
       ],
       "optimization_representative": false,
       "scenario_types": [
         "multi_bug",
         "multi_step_e2e",
         "parallel_multi_agent"
+      ],
+      "required_checks": [
+        {
+          "check_id": "H08.owned-created",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member2",
+          "description": "Create owned_project_name once as member2 and observe its stable row."
+        },
+        {
+          "check_id": "H08.saved-immediate",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-SAVE",
+          "identity_reference": "member2",
+          "description": "Save edited_project_name; after the dialog closes and before refresh/navigation, the same row immediately shows the new name.",
+          "depends_on": [
+            "H08.owned-created"
+          ]
+        },
+        {
+          "check_id": "H08.saved-persisted",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-SAVE",
+          "identity_reference": "member2",
+          "description": "Refresh after the immediate check; the same project shows the persisted new name.",
+          "depends_on": [
+            "H08.saved-immediate"
+          ]
+        },
+        {
+          "check_id": "H08.saved-reopened",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-SAVE",
+          "identity_reference": "member2",
+          "description": "Leave and reopen Projects; that same renamed project still shows the new name.",
+          "depends_on": [
+            "H08.saved-persisted"
+          ]
+        },
+        {
+          "check_id": "H08.pending-operation",
+          "goal_id": "admin-submission",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "admin",
+          "description": "Execute two pending submissions with the same nonempty operation ID and submission_project_name.",
+          "action_type": "repeat_submit"
+        },
+        {
+          "check_id": "H08.pending-settled",
+          "goal_id": "admin-submission",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "admin",
+          "description": "After settling, exactly one same-operation project row exists.",
+          "depends_on": [
+            "H08.pending-operation"
+          ]
+        },
+        {
+          "check_id": "H08.pending-persisted",
+          "goal_id": "admin-submission",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "admin",
+          "description": "Refresh after settling; exactly one matching project remains.",
+          "depends_on": [
+            "H08.pending-settled"
+          ]
+        },
+        {
+          "check_id": "H08.task-created",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Create task_title only in joined_project_id, leaving both other branch projects untouched."
+        },
+        {
+          "check_id": "H08.task-edited",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "The same task shows edited_task_title after Save.",
+          "depends_on": [
+            "H08.task-created"
+          ]
+        },
+        {
+          "check_id": "H08.task-edit-persisted",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Refresh and reselect the same joined project; the edited title remains.",
+          "depends_on": [
+            "H08.task-edited"
+          ]
+        },
+        {
+          "check_id": "H08.task-edit-reopened",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Leave and reopen its Tasks view; the saved task title remains.",
+          "depends_on": [
+            "H08.task-edit-persisted"
+          ]
+        },
+        {
+          "check_id": "H08.joined-access-preserved",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "After this workflow the member retains access to joined_project_id; neither other branch modifies that membership.",
+          "depends_on": [
+            "H08.task-edit-reopened"
+          ]
+        }
       ]
     }
   ],
   "evaluation_version": "development-v2-checks-20261008",
-  "reference_policy": "Only explicit required_checks and required_test_goals define required work. expected_behaviors are reference specifications, not permission to add unrequested workflows or inputs. Keep one continuous browser session per workflow and preserve check dependencies."
+  "reference_policy": "Only explicit required_checks and required_test_goals define required work. expected_behaviors are reference specifications, not permission to add unrequested workflows or inputs. Keep one continuous browser session per workflow and preserve check dependencies.",
+  "holdout_evaluation_version": "holdout-v2-checks-20261008"
 }

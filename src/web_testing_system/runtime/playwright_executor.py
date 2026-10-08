@@ -45,7 +45,7 @@ class PlaywrightExecutor:
     async def execute(
         self, *, page: Page, browser_session_id: str, action: WebAction
     ) -> ActionResult:
-        metadata = {"task_id": self.task_id, "tester_id": self.tester_id, "action": action.action_type.value}
+        metadata = {"task_id": self.task_id, "tester_id": self.tester_id, "action": action.action_type.value, "phase": "browser_action"}
         if action.check_id is not None:
             metadata["check_id"] = action.check_id
         with trace_span("BrowserAction", "tool", metadata=metadata) as span:
@@ -97,7 +97,7 @@ class PlaywrightExecutor:
                 action=action,
                 result=result,
             )
-            trace_result(span, success=result.success, error_type=result.error_type)
+            trace_result(span, success=result.success, error_type=result.error_type, failure_reason=result.error_type)
             return result
 
     async def _validate_target(self, page: Page, action: WebAction) -> Locator | None:
@@ -116,8 +116,11 @@ class PlaywrightExecutor:
             raise ValueError(f"{action.action_type.value} requires a target")
         if action.action_type == ActionType.ASSERTION and action.assertion == "count":
             return page.locator(action.target)
-        locator = page.locator(action.target).first
-        count = await locator.count()
+        matches = page.locator(action.target)
+        count = await matches.count()
+        if count > 1 and action.action_type != ActionType.DOM_INSPECTION:
+            raise ValueError("target matches multiple objects")
+        locator = matches.first
         if action.action_type == ActionType.ASSERTION:
             return locator
         if count == 0:

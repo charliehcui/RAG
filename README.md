@@ -52,6 +52,12 @@ When accounts share a role, specify identity_reference; ambiguous selection is r
 
 Known INPUT/SELECT actions should use valid value_reference values, resolved to values by Runtime and preserved as references for replay. Callers must supply application-specific inputs and expected behavior; absent credentials and test oracles cannot be inferred.
 
+PageGoal separates project_reference (a Scenario input naming the Project option), row_reference (the existing target row) and form_context (an observed form identifier). Legacy context can resolve a Project only from supplied data and observed options, or reuse a previously bound selection. Jev receives the bindings and legal SELECT candidates. Runtime keeps stable row selectors within each Project, including after rename, and passes the Project binding to checks and replay records. Ambiguous fields/options, missing references and submissions with unbound or changed inputs are rejected before execution.
+
+Remaining plans resume from recorded Check IDs and operation preparation records, rather than goal wording or one assertion per behavior. Repeated unchanged states and cycles through seen states use the existing no-progress limit and return an exception to Tester without consuming an extra Runtime replan. Validation failures keep their own reason codes; recovered execution errors and final report/evaluation outcomes still use the existing shared scorer.
+
+Pre-Baseline correctness changes leave the frozen development-v2-checks-20261008 Scenario, Ground Truth, scoring rules, Main behavior, models and budgets unchanged. Validation uses local fake providers and Chromium only. No Baseline v2 or real model Benchmark has been run for these changes; historical results remain in evaluation/benchmark_history.md.
+
 Exploration and replay have separate step budgets: max_browser_steps_per_task (default 50) and max_replay_steps_per_finding (default 200). Default automatic reproduction needs two matching attempts, at most three, followed by verification. Automatic step minimization is disabled in this workflow; the existing component remains for explicit use. Only assertion failure during verification confirms a bug; broken setup paths remain unconfirmed.
 
 Reports retain every Finding status and include task_outcomes, model_configuration, peak concurrency, provider-returned tokens/cost, and incomplete-cost status. SQLite stores evidence metadata; files contain screenshots, DOM, network summaries, console errors and replay traces.

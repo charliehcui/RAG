@@ -940,13 +940,12 @@ async def test_complete_plan_rejects_scope_expansion_with_unavailable_inputs_and
             if self.calls == 1:
                 goals = [assigned_goal, {"goal": "An unassigned invalid-password test", "inputs": [{"control": "Login password", "value_reference": "invented-invalid-password"}]}]
             else:
-                results = [content.result for message in messages for content in message.contents if content.type == "function_result"]
-                rejected = results[-1]
-                if isinstance(rejected, str):
-                    rejected = json.loads(rejected)
+                assert not any(content.type == "function_result" for message in messages for content in message.contents), "Exception planning must not inherit the previous transcript"
+                contract = json.loads(prompt.split("Task Contract: ", 1)[1])
+                rejected = contract["latest_failure"]
                 assert rejected["reason"] == "INPUT_VALUE_UNAVAILABLE"
                 assert rejected["unavailable_references"] == ["invented-invalid-password"]
-                assert set(rejected["available_references"]) == {"member_username", "env:TEST_PASSWORD"}
+                assert set(contract["allowed_input_references"]) == {"member_username", "env:TEST_PASSWORD"}
                 assert len(phase2_store.list_action_history(run_id="run-1", task_id="task-1")) == 5, "No initial-plan operation may run before all inputs validate"
                 goals = [assigned_goal]
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call(f"scoped-{self.calls}", "execute_test_plan", arguments={"goals": goals})])])

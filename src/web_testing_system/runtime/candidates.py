@@ -55,8 +55,9 @@ class PageStateReader:
             [
                 page.url,
                 load_state,
+                visible_dom,
                 *(
-                    f"{item.kind}:{item.label}:{item.target}:{item.href}:{item.context}"
+                    f"{item.kind}:{item.label}:{item.target}:{item.href}:{item.context}:{item.options}:{item.selected_value}"
                     for item in elements
                 ),
             ]
@@ -86,6 +87,7 @@ class PageStateReader:
             href = await item.get_attribute("href")
             label = (
                 await item.get_attribute("aria-label")
+                or await item.evaluate("element => Array.from(element.labels || []).map(label => label.innerText).join(' ')")
                 or await item.get_attribute("placeholder")
                 or await item.inner_text()
                 or await item.get_attribute("name")
@@ -103,13 +105,27 @@ class PageStateReader:
                     if await page.locator(proposed).count() == 1:
                         target = proposed
             context = await item.evaluate("element => (element.closest('tr, dialog, form')?.innerText || '').slice(0, 300)")
+            details = await item.evaluate("""element => {
+                const parent = element.closest('tr, dialog, [role=dialog], form');
+                const form = element.closest('form');
+                const modal = element.closest('dialog, [role=dialog]');
+                return {
+                    context_kind: modal ? 'dialog' : (parent?.tagName.toLowerCase() || ''),
+                    form_target: form ? (form.id ? '[id=' + JSON.stringify(form.id) + ']' : 'form >> nth=' + Array.from(document.querySelectorAll('form')).indexOf(form)) : null,
+                    field_names: [element.getAttribute('aria-label'), element.getAttribute('placeholder'), element.getAttribute('name'), ...Array.from(element.labels || []).map(label => label.innerText)].filter(Boolean),
+                    options: element.tagName === 'SELECT' ? Array.from(element.options).filter(option => !option.disabled).map(option => [option.label, option.value]) : [],
+                    selected_value: element.tagName === 'SELECT' ? element.value : null,
+                    required: element.required === true,
+                    is_submit: !!form && ['BUTTON', 'INPUT'].includes(element.tagName) && element.type === 'submit' && element.value !== 'cancel'
+                };
+            }""")
             context_target = await item.evaluate("""element => {
                 const parent = element.closest('tr, dialog, form');
                 if (!parent) return null;
                 if (parent.id) return '[id=' + JSON.stringify(parent.id) + ']';
                 const attribute = Array.from(parent.attributes).find(item => item.name.startsWith('data-'));
                 if (attribute) return parent.tagName.toLowerCase() + '[' + attribute.name + '=' + JSON.stringify(attribute.value) + ']';
-                return null;
+                return parent.tagName.toLowerCase() + ' >> nth=' + Array.from(document.querySelectorAll(parent.tagName)).indexOf(parent);
             }""")
             if kind in {"button", "a"} and label:
                 proposed = f"{kind}:text-is({json.dumps(label)})"
@@ -127,6 +143,13 @@ class PageStateReader:
                     enabled=enabled,
                     context=context,
                     context_target=context_target,
+                    context_kind=details["context_kind"],
+                    form_target=details["form_target"],
+                    field_names=tuple(details["field_names"]),
+                    options=tuple(tuple(option) for option in details["options"]),
+                    selected_value=details["selected_value"],
+                    is_submit=details["is_submit"],
+                    required=details["required"],
                 )
             )
             if len(elements) >= self.max_elements:
@@ -140,7 +163,8 @@ class PageStateReader:
             const headers = table?.querySelector('thead tr')?.children || [];
             const attribute = Array.from(row.attributes).find(item => item.name.startsWith('data-'));
             let target = 'tr >> nth=' + index;
-            if (attribute) target = 'tr[' + attribute.name + '=' + JSON.stringify(attribute.value) + ']';
+            if (row.id) target = '[id=' + JSON.stringify(row.id) + ']';
+            else if (attribute) target = 'tr[' + attribute.name + '=' + JSON.stringify(attribute.value) + ']';
             if (attribute && table?.id) target = '[id=' + JSON.stringify(table.id) + '] ' + target;
             return [{target, container_target: table?.id ? '[id=' + JSON.stringify(table.id) + ']' : null, text: row.innerText.slice(0, 500), cells: Array.from(row.children).map((cell, position) => ({target: target + ' >> :scope > :nth-child(' + (position + 1) + ')', text: cell.innerText.slice(0, 500), header: headers[position]?.innerText || ''}))}];
         }).slice(0, 12)""")
@@ -241,6 +265,7 @@ class CandidateBuilder:
                 behavior_id=action.behavior_id,
                 goal_check=action.goal_check,
                 check_id=action.check_id,
+                project_reference=action.project_reference,
             )
             label_words = {
                 word.lower() for word in business_action.label.split() if len(word) > 2
@@ -299,6 +324,7 @@ class CandidateBuilder:
             behavior_id=candidate.behavior_id,
             goal_check=candidate.goal_check,
             check_id=candidate.check_id,
+            project_reference=candidate.project_reference,
             url=candidate.url,
             resource_id=candidate.resource_id,
             requires_resource=candidate.requires_resource,

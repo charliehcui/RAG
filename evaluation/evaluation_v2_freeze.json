@@ -1,0 +1,65 @@
+{
+  "status": "FROZEN",
+  "frozen_at_utc": "2026-10-07T23:56:42.837537+00:00",
+  "development_version": "development-v2-checks-20261008",
+  "holdout_version": "holdout-v2-checks-20261008",
+  "sets": {
+    "development": {
+      "case_ids": [
+        "D01",
+        "D02",
+        "D03",
+        "D04",
+        "D05",
+        "D06",
+        "D07",
+        "D08",
+        "D12",
+        "D13"
+      ],
+      "check_count": 74,
+      "scenario_records_sha256": "59136d9e20f4f0bd45e1578be107592744ad7e0c83e3661961e6769cd70e0362",
+      "ground_truth_records_sha256": "7bb560eeb0322b99d501095033ba9d834499d5198dae7443a8626e15bb6d6c03"
+    },
+    "holdout": {
+      "case_ids": [
+        "H01",
+        "H02",
+        "H03",
+        "H04",
+        "H05",
+        "H06",
+        "H07",
+        "H08"
+      ],
+      "check_count": 66,
+      "scenario_records_sha256": "c0c56c7a349e12d20dfb226c3acafcb06c6d5115821007016bc30847f7a81c8a",
+      "ground_truth_records_sha256": "d8109114c5c97c097366d4c965bf21498154dbe3a9b6c870cd0c1cc6e7044c08"
+    }
+  },
+  "evaluation_rules_sha256": "5a67436a0a6d3b03245570719e471671520b1530101e43e2d0ce1618c8311f27",
+  "file_sha256": {
+    "evaluation/scenarios.json": "42cd8134c08c976ff7999b374a0fd5a1b5aaa07f42ed5b537e5f06928c924193",
+    "evaluation/ground_truth.json": "42d27a7761a9a6d17f66b5fd5eda32b4dbfcffb28cff3c963e256482badc1625",
+    "src/web_testing_system/scoring.py": "8dba129593788e6dab391a6e19812e24cfc32c7f465a89dd7e345b9790ea0964",
+    "src/web_testing_system/evaluation/scenarios.py": "39b3f82b993ddca4b77a69a883bb2f782f78e1935ffc639f5a6792af9b21a87a",
+    "src/web_testing_system/evaluation/metrics.py": "df5c4e744cf876e28bdc02eaf14ec32bf9f6c5618bf4f9fb36675e4f0c6bd6cd",
+    "src/web_testing_system/evaluation/matching.py": "a887be4fb3c866ea97633db68720e6ce24ca45d1aba5c8e7df231fd8893e1028",
+    "src/web_testing_system/config.py": "ec0e0e83673547c83797abae866c303c50b29554104004294bd3e77978e20729",
+    "evaluation/holdout_v2.md": "6cf9561cc6f9adec0895afcceb330a368f9ed57986b67703aed22b91ca07ecb6"
+  },
+  "validation": {
+    "unit_tests_passed": 59,
+    "affected_h07_checks_passed": 2,
+    "fake_browser_integration_cases_passed": [
+      "H04",
+      "H06",
+      "H08"
+    ],
+    "h06_initial_replay_timeout_retained_in_local_test_artifacts": true,
+    "ruff": "PASS",
+    "mypy": "PASS (41 source files)",
+    "real_holdout_model_calls": 0
+  },
+  "measurement_policy": "Append measured results to benchmark_history.md; do not change Scenario, Ground Truth, scoring, Agent behavior, models/providers or budgets. Holdout is excluded from the Development Baseline."
+}

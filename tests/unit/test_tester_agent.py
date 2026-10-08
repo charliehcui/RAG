@@ -87,6 +87,9 @@ class FakeRuntime:
 
 
 class FakeStore:
+    def list_events(self, run_id: str, **kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
     def list_paths(self, run_id: str) -> list[dict[str, Any]]:
         return []
 

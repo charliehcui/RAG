@@ -29,6 +29,7 @@ from web_testing_system.runtime.models import (
     ActionType,
     BusinessAction,
     DecisionResult,
+    InteractiveElement,
     PageState,
     WebAction,
 )
@@ -87,6 +88,25 @@ class WebTestingRuntime:
         self.evidence_marker = (0, 0)
         self.task_finished = False
         self.assertion_targets: dict[tuple[str, str], dict[str, str | None]] = {}
+        self.object_targets: dict[tuple[str, str | None, str | None], str] = {}
+        self.object_projects: dict[tuple[str, str | None, str | None], dict[str, str]] = {}
+        self.input_targets: dict[str, str] = {}
+        self.active_project: dict[str, str] | None = None
+        self.modal_row: str | None = None
+        for history in store.list_action_history(run_id=run_id, task_id=task_id):
+            action = history["action_data"]
+            if history["success"] and action.get("action_type") in {"input", "select"} and action.get("target") and action.get("value_reference"):
+                self.input_targets[action["target"]] = action["value_reference"]
+        for event in store.list_events(run_id, task_id=task_id, event_types=("OBJECT_BOUND",)):
+            binding = event["result"]
+            project_binding = binding.get("project_binding")
+            key = (binding["reference"].casefold(), binding.get("container_target"), project_binding["value"] if project_binding else None)
+            self.object_targets[key] = binding["target"]
+            if binding.get("project_binding"):
+                self.object_projects[key] = binding["project_binding"]
+            for cell in binding.get("cells", []):
+                self.assertion_targets.setdefault((cell["header"].casefold(), binding["reference"].casefold()), {})[cell["target"]] = binding.get("container_target")
+        self.prepared_check_ids = {check_id for event in store.list_events(run_id, task_id=task_id, event_types=("PLAN_GOAL_PREPARED",)) for check_id in event["result"].get("check_ids", [])}
 
     def remember_assertion_targets(self, rows: Sequence[Mapping[str, Any]], context: str = "") -> None:
         for row in rows:
@@ -95,6 +115,7 @@ class WebTestingRuntime:
             for reference, value in self.input_values.items():
                 if not reference.startswith("env:") and value.strip() and self._row_matches_context(row, value):
                     aliases.add(value)
+                    aliases.add(reference)
             if context and self._row_matches_context(row, context):
                 aliases.add(context)
             aliases = {alias for alias in aliases if self._row_matches_context(row, alias)}
@@ -106,6 +127,10 @@ class WebTestingRuntime:
                     self.assertion_targets.setdefault(key, {})[str(cell["target"])] = row.get("container_target")
 
     def _row_matches_context(self, row: Mapping[str, Any], context: str) -> bool:
+        project_value = self.active_project["value"] if self.active_project else None
+        bound = self.object_targets.get((context.casefold(), row.get("container_target"), project_value))
+        if bound is not None:
+            return str(row["target"]) == bound
         if not context.startswith("env:") and context in self.input_values:
             context = self.input_values[context]
         if context == row["target"] or f"={json.dumps(context)}]" in str(row["target"]):
@@ -119,6 +144,49 @@ class WebTestingRuntime:
         if configured:
             return any(" ".join(str(cell["text"]).casefold().split()) == normalized for cell in row["cells"])
         return normalized in " ".join(str(row["text"]).casefold().split())
+
+    def _bind_rows(self, rows: Sequence[Mapping[str, Any]], context: str) -> None:
+        if not context:
+            return
+        containers = {row.get("container_target") for row in rows}
+        for container in containers:
+            matches = [row for row in rows if row.get("container_target") == container and self._row_matches_context(row, context)]
+            if len(matches) == 1 and " >> nth=" not in str(matches[0]["target"]):
+                key = (context.casefold(), container, self.active_project["value"] if self.active_project else None)
+                if key not in self.object_targets:
+                    row = matches[0]
+                    self.object_targets[key] = str(row["target"])
+                    if self.active_project:
+                        self.object_projects[key] = dict(self.active_project)
+                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="OBJECT_BOUND", tool="WebTestingRuntime", action="bind_row", result={"reference": context, "container_target": container, "target": row["target"], "project_binding": self.active_project, "cells": [{"header": cell["header"], "target": cell["target"]} for cell in row["cells"]]}, latency_ms=0)
+
+    @staticmethod
+    def _field_matches(element: InteractiveElement, control: str) -> bool:
+        names = (element.label, element.target, *element.field_names)
+        normalized = " ".join(control.casefold().split())
+        return any(normalized == " ".join(name.casefold().split()) or " " not in normalized and " ".join(name.casefold().split()).endswith(" " + normalized) for name in names)
+
+    async def _form_inputs_bound(self, elements: Sequence[InteractiveElement], submit: InteractiveElement) -> bool:
+        assert self.browser_session_id is not None
+        page = self.browser_manager.get_session(self.browser_session_id).page
+        fields = [element for element in elements if element.enabled and element.kind in {"input", "textarea", "select"} and (element.form_target or element.context_target) == (submit.form_target or submit.context_target)]
+        for element in fields:
+            reference = self.input_targets.get(element.target)
+            if element.kind == "select" and self.active_project and element.target == self.active_project["target"]:
+                reference = self.active_project["reference"]
+            if reference is None and element.kind == "select" and not element.required and "project" not in element.label.casefold():
+                continue
+            if reference not in self.input_values:
+                return False
+            value = self.input_values[reference]
+            actual = await page.locator(element.target).input_value()
+            if element.kind == "select":
+                options = [(label, option) for label, option in element.options if value in {label, option}]
+                if len(options) != 1 or actual != options[0][1]:
+                    return False
+            elif actual != value:
+                return False
+        return True
 
     async def start_session(self) -> str:
         try:
@@ -140,6 +208,11 @@ class WebTestingRuntime:
             return await self._execute_known_action(action)
 
     async def _execute_known_action(self, action: WebAction) -> ActionResult:
+        if action.action_type in {ActionType.INPUT, ActionType.SELECT}:
+            if action.value_reference is None or action.value_reference not in self.input_values:
+                return self._stopped_result("INPUT_VALUE_UNAVAILABLE")
+            if action.value != self.input_values[action.value_reference]:
+                return self._stopped_result("INPUT_REFERENCE_VALUE_MISMATCH")
         if self.required_checks and (action.check_id or action.action_type in {ActionType.ASSERTION, ActionType.URL_CHECK} and (action.goal_check or action.behavior_id)):
             spec = next((check for check in self.required_checks if check["check_id"] == action.check_id), None)
             expected_action = (spec or {}).get("action_type", "assertion")
@@ -151,13 +224,41 @@ class WebTestingRuntime:
         if self.browser_session_id is None:
             raise RuntimeError("browser session has not started")
         session = self.browser_manager.get_session(self.browser_session_id)
+        if action.action_type == ActionType.SELECT and action.target:
+            locator = session.page.locator(action.target)
+            if await locator.count() == 1 and await locator.evaluate("element => element.tagName === 'SELECT'"):
+                options = await locator.locator("option").evaluate_all("options => options.filter(option => !option.disabled && !option.closest('optgroup')?.disabled).map(option => [option.label, option.value])")
+                matching = [option for option in options if action.value in option]
+                if len(matching) != 1:
+                    return self._stopped_result("AMBIGUOUS_SELECT_OPTION" if matching else "SELECT_OPTION_UNAVAILABLE")
+        if action.project_reference and action.action_type not in {ActionType.NAVIGATION, ActionType.REFRESH}:
+            if action.project_reference not in self.input_values:
+                return self._stopped_result("INPUT_VALUE_UNAVAILABLE")
+            observed = await self.page_state_reader.read(session.page)
+            value = self.input_values[action.project_reference]
+            project_selects = [element for element in observed.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
+            if any(sum(element.selected_value == option and value in {label, option} for label, option in element.options) != 1 for element in project_selects):
+                return self._stopped_result("OBJECT_PROJECT_MISMATCH")
+        if action.action_type in {ActionType.CLICK, ActionType.REPEAT_SUBMIT} and action.target and isinstance(self.executor, PlaywrightExecutor):
+            observed = await self.page_state_reader.read(session.page)
+            locator = session.page.locator(action.target)
+            if await locator.count() == 1:
+                form_target = await locator.evaluate("""element => {
+                    const form = element.form;
+                    if (!form || element.type !== 'submit' || element.value === 'cancel') return null;
+                    return form.id ? '[id=' + JSON.stringify(form.id) + ']' : 'form >> nth=' + Array.from(document.querySelectorAll('form')).indexOf(form);
+                }""")
+                if form_target:
+                    submit = next((element for element in observed.interactive_elements if element.form_target == form_target and element.is_submit), None)
+                    if submit is None or not await self._form_inputs_bound(observed.interactive_elements, submit):
+                        return self._stopped_result("UNBOUND_REQUIRED_INPUT")
         attempts = 0
         while True:
             try:
                 self.budget.ensure_can_start("browser_step")
             except BudgetExceededError as error:
                 await self.stop_task(error.reason)
-                return self._stopped_result(error.reason)
+                return self._stopped_result(error.reason, error_type="BUDGET_EXCEEDED")
             result = await self.executor.execute(
                 page=session.page, browser_session_id=session.session_id, action=action
             )
@@ -168,6 +269,11 @@ class WebTestingRuntime:
                 runtime_seconds=result.latency_ms / 1_000,
             )
             if result.success:
+                if action.action_type in {ActionType.INPUT, ActionType.SELECT} and action.target and action.value_reference:
+                    self.input_targets[action.target] = action.value_reference
+                    element_id = await session.page.locator(action.target).get_attribute("id")
+                    if element_id:
+                        self.input_targets[f"[id={json.dumps(element_id)}]"] = action.value_reference
                 self.save_checkpoint(
                     url=session.page.url, last_action=action.action_type.value
                 )
@@ -187,73 +293,163 @@ class WebTestingRuntime:
                 return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
             return await self._explore_unknown_path(current_goal)
 
-    async def execute_page_goal(self, goal: str, *, inputs: Sequence[Mapping[str, str]] = (), context: str = "", max_steps: int = 12, stop_after_inputs: bool = False) -> dict[str, Any]:
+    async def execute_page_goal(self, goal: str, *, inputs: Sequence[Mapping[str, str]] = (), context: str = "", project_reference: str | None = None, row_reference: str | None = None, form_context: str = "", max_steps: int = 12, stop_after_inputs: bool = False) -> dict[str, Any]:
         """Keep page decisions inside Jev; return to Tester only at a goal boundary or failure."""
         async with self.page_lock:
             if self.task_finished:
                 return {"success": False, "reason": "TASK_ALREADY_FINISHED", "actions": []}
             if self.browser_session_id is None:
                 raise RuntimeError("browser session has not started")
-            if not 1 <= max_steps <= 30 or any(binding["value_reference"] not in self.input_values for binding in inputs):
+            if not 1 <= max_steps <= 30:
                 return {"success": False, "reason": "INVALID_PAGE_GOAL", "actions": []}
+            references = [binding["value_reference"] for binding in inputs] + [reference for reference in (project_reference, row_reference) if reference]
+            unavailable = [reference for reference in references if reference not in self.input_values]
+            if unavailable:
+                return {"success": False, "reason": "INPUT_VALUE_UNAVAILABLE", "unavailable_references": unavailable, "actions": []}
+            if any(reference.startswith("env:") or not self.input_values[reference].strip() for reference in (project_reference, row_reference) if reference):
+                return {"success": False, "reason": "INVALID_OBJECT_REFERENCE", "actions": []}
+            if project_reference is None and context:
+                project_reference = next((reference for reference, value in self.input_values.items() if "project" in reference.casefold() and not reference.startswith("env:") and context in {reference, value}), None)
+            if project_reference is None:
+                project_reference = next((binding["value_reference"] for binding in inputs if "project" in binding["control"].casefold() and "name" not in binding["control"].casefold()), None)
+            row_context = row_reference or context
             session = self.browser_manager.get_session(self.browser_session_id)
             actions: list[dict[str, Any]] = []
-            completed_inputs: set[int] = set()
+            completed_inputs: dict[int, str] = {}
             excluded: set[str] = set()
+            previous_state: str | None = None
+            seen_states: set[str] = set()
+            input_progress = False
+            modal_row = self.modal_row
             for step_index in range(max_steps):
                 try:
                     await session.page.wait_for_load_state("networkidle", timeout=2_000)
                 except PlaywrightTimeoutError:
                     return {"success": False, "reason": "PAGE_NOT_SETTLED", "actions": actions}
                 page_state = await self.page_state_reader.read(session.page)
+                if not any(element.context_kind == "dialog" for element in page_state.interactive_elements):
+                    modal_row = None
+                    self.modal_row = None
                 rows = await self.page_state_reader.read_rows(session.page)
-                self.remember_assertion_targets(rows, context)
+                if previous_state is not None and self.budget.note_progress(input_progress or page_state.state_id not in seen_states):
+                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PAGE_GOAL_BLOCKED", tool="WebTestingRuntime", action="no_progress", result={"reason": "CONSECUTIVE_NO_PROGRESS", "no_progress_steps": self.budget.usage.no_progress_steps}, latency_ms=0)
+                    return {"success": False, "reason": "CONSECUTIVE_NO_PROGRESS", "actions": actions}
+                seen_states.add(page_state.state_id)
+                project_selects = [element for element in page_state.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
+                if not modal_row:
+                    self.active_project = None
+                project_ready = not project_selects
+                project_actions: list[BusinessAction] = []
+                if project_selects:
+                    if project_reference is None and context:
+                        references = [reference for reference, value in self.input_values.items() if not reference.startswith("env:") and context in {reference, value} and any(value in {label, option} for element in project_selects for label, option in element.options)]
+                        if len(references) == 1:
+                            project_reference = references[0]
+                    if project_reference is None:
+                        saved_references = {self.input_targets[element.target] for element in project_selects if element.target in self.input_targets}
+                        if len(saved_references) == 1:
+                            project_reference = next(iter(saved_references))
+                    project_ready = project_reference is not None
+                    for element in project_selects:
+                        value = self.input_values.get(project_reference or "")
+                        options = [(label, option) for label, option in element.options if value in {label, option}]
+                        if len(options) != 1:
+                            project_ready = False
+                            continue
+                        if element.selected_value != options[0][1]:
+                            project_ready = False
+                            project_actions.append(BusinessAction(label=f"Select {element.label} using {project_reference}", action=WebAction(action_type=ActionType.SELECT, target=element.target, value=value, value_reference=project_reference)))
+                        elif project_reference is not None:
+                            self.active_project = {"reference": project_reference, "target": element.target, "value": options[0][1]}
+                            self.input_targets[element.target] = project_reference
+                if project_ready:
+                    matching_rows = [row for row in rows if row_context and self._row_matches_context(row, row_context)]
+                    if any(sum(row.get("container_target") == container for row in matching_rows) > 1 for container in {row.get("container_target") for row in matching_rows}):
+                        return {"success": False, "reason": "AMBIGUOUS_ROW_BINDING", "actions": actions}
+                    self._bind_rows(rows, row_context)
+                    self.remember_assertion_targets(rows, row_context)
                 elements = []
                 for element in page_state.interactive_elements:
                     row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target)), None)
-                    if context and row is not None and not self._row_matches_context(row, context):
-                        continue
+                    if row is not None:
+                        project_only = row_reference is None and project_reference is not None and row_context in {project_reference, self.input_values[project_reference]}
+                        if not project_ready or not row_context or project_only and project_selects or not self._row_matches_context(row, row_context):
+                            continue
                     elements.append(element)
-                business_actions = []
+                business_actions = list(project_actions)
                 input_candidates: dict[str, int] = {}
                 for index, binding in enumerate(inputs):
                     if index in completed_inputs:
                         continue
-                    for element in elements:
-                        if not element.enabled or element.kind not in {"input", "textarea", "select"} or (element.label.casefold() != binding["control"].casefold() and element.target != binding["control"]):
-                            continue
-                        binding_context = binding.get("context", "")
-                        exact_context = bool(binding_context) and any(binding_context in {item.context, item.context_target} for item in elements)
-                        if exact_context and binding_context not in {element.context, element.context_target}:
-                            continue
+                    available = [element for element in elements if element.enabled and element.kind in {"input", "textarea", "select"}]
+                    binding_context = form_context or binding.get("context", "")
+                    scoped = [element for element in available if binding_context and (binding_context in {element.context, element.context_target, element.form_target} or element.form_target == f"[id={json.dumps(binding_context.removeprefix('#'))}]")]
+                    if scoped or form_context or binding_context.startswith(("#", "[", "form >>")):
+                        available = scoped
+                    matched = [element for element in available if self._field_matches(element, binding["control"])]
+                    bound_rows = [row for row in rows if row_context and self._row_matches_context(row, row_context)]
+                    editing = row_reference is not None or bound_rows and binding["value_reference"] not in {row_context, project_reference}
+                    if editing and modal_row is None:
+                        matched = [element for element in matched if element.context_kind == "tr"]
+                    if not matched and modal_row is not None:
+                        modal_fields = [element for element in available if element.context_kind == "dialog" and element.kind in {"input", "textarea"}]
+                        if len(modal_fields) == 1 and modal_fields[0].label.casefold() == "edit value" and binding["control"].casefold() in {"project name", "task title", "display name", "member name", "name", "title"}:
+                            matched = modal_fields
+                    if len(matched) > 1:
+                        return {"success": False, "reason": "AMBIGUOUS_INPUT_BINDING", "control": binding["control"], "actions": actions}
+                    for element in matched:
                         action_type = ActionType.SELECT if element.kind == "select" else ActionType.INPUT
                         reference = binding["value_reference"]
                         action = WebAction(action_type=action_type, target=element.target, value=self.input_values[reference], value_reference=reference)
                         business_actions.append(BusinessAction(label=f"Fill {element.label} using {reference} ({element.context})", action=action))
                         candidate_id = self.candidate_builder._candidate_id(page_state.state_id, action_type.value, f"{element.target}:{reference}")
                         input_candidates[candidate_id] = index
+                pending = [binding["control"] for index, binding in enumerate(inputs) if index not in completed_inputs]
+                # 提交只接受当前表单中已经绑定并实际填写的输入。
+                for element in list(elements):
+                    if not element.is_submit:
+                        continue
+                    form_ready = not pending and project_ready
+                    if form_context:
+                        form_ready = form_ready and (form_context in {element.form_target, element.context_target, element.context} or element.form_target == f"[id={json.dumps(form_context.removeprefix('#'))}]")
+                    if inputs:
+                        form_ready = form_ready and all(any(item.target == target and (item.form_target or item.context_target) == (element.form_target or element.context_target) for item in elements) for target in completed_inputs.values())
+                    if row_reference:
+                        form_ready = form_ready and element.context_kind == "dialog" and modal_row is not None
+                    if form_ready:
+                        form_ready = await self._form_inputs_bound(elements, element)
+                    if not form_ready:
+                        elements.remove(element)
                 candidates = self.candidate_builder.build(goal=goal, page_state=replace(page_state, interactive_elements=tuple(elements)), include_controls=False, business_actions=business_actions, click_inputs=False, excluded_candidates=excluded)
                 candidates = [candidate for candidate in candidates if not candidate.requires_confirmation]
-                pending = [binding["control"] for index, binding in enumerate(inputs) if index not in completed_inputs]
-                if not pending and (not inputs or actions and actions[-1]["action"] not in {"input", "select"}):
+                if not pending and project_ready and (not inputs or actions and actions[-1]["action"] not in {"input", "select"}):
                     candidates.append(ActionCandidate(candidate_id=f"candidate-stop-{page_state.state_id}", action="stop_current_path", label="Requested operations are complete; return for the supplied assertions. This does not declare Task success.", target=None, state_id=page_state.state_id))
                 if not candidates:
-                    return {"success": False, "reason": "NO_NEW_LEGAL_ACTIONS", "pending_inputs": pending, "actions": actions}
+                    reason = "UNBOUND_REQUIRED_INPUT" if pending else "PROJECT_BINDING_UNAVAILABLE" if not project_ready else "NO_NEW_LEGAL_ACTIONS"
+                    return {"success": False, "reason": reason, "pending_inputs": pending, "actions": actions}
                 pending_bindings = [binding for index, binding in enumerate(inputs) if index not in completed_inputs]
-                current_goal = f"{goal}\nEntity context: {context}\nPending fields: {json.dumps(pending)}\nInput bindings (context describes the intended form/row): {json.dumps(pending_bindings)}\nAlready executed in this subgoal: {json.dumps(actions)}\nFill the pending inputs in their intended form before submitting. Choose the next operation, or stop when the requested operations are complete. Never repeat an already executed operation."
+                bindings = {"project_reference": project_reference, "row_reference": row_reference, "row_targets": [target for (alias, _, project_value), target in self.object_targets.items() if alias == row_context.casefold() and project_value == (self.active_project["value"] if self.active_project else None)], "form_context": form_context}
+                current_goal = f"{goal}\nObject bindings: {json.dumps(bindings)}\nPending fields: {json.dumps(pending)}\nInput bindings (context describes the intended form/row): {json.dumps(pending_bindings)}\nAlready executed in this subgoal: {json.dumps(actions)}\nFill the pending inputs in their intended form before submitting. Choose the next operation, or stop when the requested operations are complete. Never repeat an already executed operation."
                 decision = await self._select_and_execute(current_goal, page_state, candidates)
                 if decision.reason == "CANDIDATE_EXPIRED" and step_index + 1 < max_steps:
                     continue
                 if decision.reason == "STOP_CURRENT_PATH":
                     return {"success": True, "reason": "PAGE_GOAL_STOPPED", "actions": actions}
                 if decision.action_result is None or not decision.action_result.success:
-                    reason = decision.action_result.error_type if decision.action_result is not None else decision.reason
-                    return {"success": False, "reason": reason, "actions": actions}
+                    failure_reason = decision.action_result.error_type if decision.action_result is not None else decision.reason
+                    return {"success": False, "reason": failure_reason, "actions": actions}
                 candidate = decision.candidate
                 assert candidate is not None
                 excluded.add(candidate.candidate_id)
+                previous_state = page_state.state_id
+                input_progress = candidate.action in {"input", "select"}
                 if candidate.candidate_id in input_candidates:
-                    completed_inputs.add(input_candidates[candidate.candidate_id])
+                    assert candidate.target is not None
+                    completed_inputs[input_candidates[candidate.candidate_id]] = candidate.target
+                clicked = next((element for element in elements if element.target == candidate.target), None)
+                if candidate.action == "click" and clicked is not None and clicked.context_kind == "tr":
+                    modal_row = clicked.context_target
+                    self.modal_row = modal_row
                 actions.append({"action": candidate.action, "control": candidate.label, "value_reference": candidate.value_reference})
                 self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PAGE_GOAL_ACTION", tool="TesterPageGoals", action=candidate.action, result={"source": decision.source, "success": True, "browser_event_id": decision.action_result.event_id}, latency_ms=0)
                 if stop_after_inputs and inputs and len(completed_inputs) == len(inputs):
@@ -283,7 +479,7 @@ class WebTestingRuntime:
             )
         return await self._select_and_execute(current_goal, page_state, candidates)
 
-    async def execute_page_action(self, action: WebAction, *, control: str, context: str = "") -> DecisionResult:
+    async def execute_page_action(self, action: WebAction, *, control: str, context: str = "", project_reference: str | None = None) -> DecisionResult:
         """Resolve a semantic control locally or with Jev, then execute its allowed action."""
         async with self.page_lock:
             if self.task_finished:
@@ -296,7 +492,37 @@ class WebTestingRuntime:
             except PlaywrightTimeoutError:
                 return DecisionResult(source="TESTER_LLM", reason="PAGE_NOT_SETTLED", needs_tester_llm=True)
             page_state = await self.page_state_reader.read(session.page, include_content=action.action_type == ActionType.ASSERTION)
+            action = replace(action, project_reference=project_reference or action.project_reference)
+            if project_reference and project_reference not in self.input_values:
+                return DecisionResult(source="TESTER_LLM", reason="INPUT_VALUE_UNAVAILABLE", needs_tester_llm=True)
+            if action.action_type in {ActionType.INPUT, ActionType.SELECT} and action.value_reference not in self.input_values:
+                return DecisionResult(source="TESTER_LLM", reason="INPUT_VALUE_UNAVAILABLE", needs_tester_llm=True)
+            project_selects = [element for element in page_state.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
+            self.active_project = None
+            if project_reference:
+                value = self.input_values[project_reference]
+                if any(sum(element.selected_value == option and value in {label, option} for label, option in element.options) != 1 for element in project_selects):
+                    return DecisionResult(source="TESTER_LLM", reason="OBJECT_PROJECT_MISMATCH", needs_tester_llm=True)
+                if len(project_selects) == 1:
+                    selected_value = project_selects[0].selected_value
+                    if selected_value is not None:
+                        self.active_project = {"reference": project_reference, "target": project_selects[0].target, "value": selected_value}
+            elif context:
+                projects = [project for (alias, _, _), project in self.object_projects.items() if alias == context.casefold()]
+                current_projects = [project for project in projects if any(element.target == project["target"] and element.selected_value == project["value"] for element in project_selects)]
+                if project_selects and projects and not current_projects:
+                    return DecisionResult(source="TESTER_LLM", reason="OBJECT_PROJECT_MISMATCH", needs_tester_llm=True)
+                if current_projects:
+                    self.active_project = dict(current_projects[0])
+                elif len(project_selects) == 1:
+                    element = project_selects[0]
+                    reference = self.input_targets.get(element.target)
+                    bound_value = self.input_values.get(reference or "")
+                    if reference and any(element.selected_value == option and bound_value in {label, option} for label, option in element.options):
+                        assert element.selected_value is not None
+                        self.active_project = {"reference": reference, "target": element.target, "value": element.selected_value}
             rows = await self.page_state_reader.read_rows(session.page)
+            self._bind_rows(rows, context)
             self.remember_assertion_targets(rows, context)
             kinds = {ActionType.INPUT: {"input", "textarea"}, ActionType.SELECT: {"select"}, ActionType.REPEAT_SUBMIT: {"button"}, ActionType.ASSERTION: {"cell"}}
             candidates = []
@@ -319,10 +545,12 @@ class WebTestingRuntime:
                 permission = self.executor.permission_checker.check(resolved, current_url=page_state.url)
                 if not permission.allowed:
                     continue
-                candidate = ActionCandidate(candidate_id=self.candidate_builder._candidate_id(page_state.state_id, action.action_type.value, element.target), action=action.action_type.value, label=f"{element.label} ({element.context})", target=element.target, state_id=page_state.state_id, value=action.value, value_reference=action.value_reference, url=resolved_url, resource_id=action.resource_id, requires_resource=action.requires_resource, confirmed=action.confirmed, expected=action.expected, assertion=action.assertion, behavior_id=action.behavior_id, goal_check=action.goal_check, check_id=action.check_id)
+                candidate = ActionCandidate(candidate_id=self.candidate_builder._candidate_id(page_state.state_id, action.action_type.value, element.target), action=action.action_type.value, label=f"{element.label} ({element.context})", target=element.target, state_id=page_state.state_id, value=action.value, value_reference=action.value_reference, url=resolved_url, resource_id=action.resource_id, requires_resource=action.requires_resource, confirmed=action.confirmed, expected=action.expected, assertion=action.assertion, behavior_id=action.behavior_id, goal_check=action.goal_check, check_id=action.check_id, project_reference=action.project_reference)
                 candidates.append(candidate)
-                if element.label.casefold() == control.casefold():
+                if self._field_matches(element, control):
                     exact.append(candidate)
+            if action.action_type in {ActionType.INPUT, ActionType.SELECT} and len(exact) != 1:
+                return DecisionResult(source="TESTER_LLM", reason="AMBIGUOUS_INPUT_BINDING" if len(exact) > 1 else "CONTROL_NOT_FOUND", needs_tester_llm=True)
             if len(exact) == 1:
                 result = await self._execute_known_action(replace(action, target=exact[0].target, url=exact[0].url))
                 return DecisionResult(source="PLAYWRIGHT", reason="EXACT_CONTROL", candidate=exact[0], action_result=result)
@@ -650,7 +878,7 @@ class WebTestingRuntime:
         )
 
     @staticmethod
-    def _stopped_result(reason: str) -> ActionResult:
+    def _stopped_result(reason: str, *, error_type: str | None = None) -> ActionResult:
         timestamp = datetime.now(UTC).isoformat()
         return ActionResult(
             started_at=timestamp,
@@ -658,5 +886,5 @@ class WebTestingRuntime:
             latency_ms=0,
             success=False,
             error=reason,
-            error_type="BUDGET_EXCEEDED",
+            error_type=error_type or reason,
         )

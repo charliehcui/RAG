@@ -862,7 +862,85 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H01.login",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "The valid login shows the supplied member2 identity."
+        },
+        {
+          "check_id": "H01.initial-empty",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "The unassigned member2 Projects list is empty.",
+          "depends_on": [
+            "H01.login"
+          ]
+        },
+        {
+          "check_id": "H01.refresh-identity",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "After refresh, the same session still shows member2.",
+          "depends_on": [
+            "H01.initial-empty"
+          ]
+        },
+        {
+          "check_id": "H01.refresh-empty",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "After that refresh, the Projects list remains empty.",
+          "depends_on": [
+            "H01.refresh-identity"
+          ]
+        },
+        {
+          "check_id": "H01.logout",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Logout returns this context to the login form.",
+          "depends_on": [
+            "H01.refresh-empty"
+          ]
+        },
+        {
+          "check_id": "H01.invalid-login-rejected",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Login using invalid_login_name and the supplied secret is rejected with invalid login.",
+          "depends_on": [
+            "H01.logout"
+          ]
+        },
+        {
+          "check_id": "H01.invalid-login-logged-out",
+          "goal_id": "unassigned-session",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "After the rejected attempt, the context remains logged out.",
+          "depends_on": [
+            "H01.invalid-login-rejected"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H01.login",
+        "H01.initial-empty",
+        "H01.refresh-identity",
+        "H01.refresh-empty",
+        "H01.logout",
+        "H01.invalid-login-rejected",
+        "H01.invalid-login-logged-out"
+      ]
     },
     {
       "scenario_id": "H02",
@@ -880,7 +958,108 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H02.member-added",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "member2 appears in Members of private_project_id after invitation."
+        },
+        {
+          "check_id": "H02.member-edited",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "The same member2 row shows member_display_name after Save.",
+          "depends_on": [
+            "H02.member-added"
+          ]
+        },
+        {
+          "check_id": "H02.member-edit-persisted",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh and reopen Members of the same project; the edited name remains.",
+          "depends_on": [
+            "H02.member-edited"
+          ]
+        },
+        {
+          "check_id": "H02.member-removed",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Remove member2 from this project; its membership row disappears.",
+          "depends_on": [
+            "H02.member-edit-persisted"
+          ]
+        },
+        {
+          "check_id": "H02.removal-persisted",
+          "goal_id": "temporary-invitation",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh and reopen this project's Members; member2 remains absent.",
+          "depends_on": [
+            "H02.member-removed"
+          ]
+        },
+        {
+          "check_id": "H02.fresh-login",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Only after removal-persisted and the Admin workflow ends, a fresh member2 context logs in with the supplied identity.",
+          "depends_on": [
+            "H02.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H02.initial-empty",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "This first post-removal login has an empty Projects list.",
+          "depends_on": [
+            "H02.fresh-login"
+          ]
+        },
+        {
+          "check_id": "H02.private-project-absent",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-PROJECT-VISIBILITY",
+          "identity_reference": "member2",
+          "description": "private_project_id is absent; the removed invitation does not grant access.",
+          "depends_on": [
+            "H02.fresh-login"
+          ]
+        },
+        {
+          "check_id": "H02.logout",
+          "goal_id": "first-login-access",
+          "behavior_id": "EB-AUTH-SESSION",
+          "identity_reference": "member2",
+          "description": "Logout returns this context to the login form.",
+          "depends_on": [
+            "H02.initial-empty",
+            "H02.private-project-absent"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H02.member-added",
+        "H02.member-edited",
+        "H02.member-edit-persisted",
+        "H02.member-removed",
+        "H02.removal-persisted",
+        "H02.fresh-login",
+        "H02.initial-empty",
+        "H02.private-project-absent",
+        "H02.logout"
+      ]
     },
     {
       "scenario_id": "H03",
@@ -910,10 +1089,23 @@
           ],
           "bug_id": "B2",
           "project_reference": "project-1",
-          "task_reference": null,
+          "task_reference": "task-1",
           "applicable_role": "member",
           "identity_reference": "member",
-          "trigger_context": "Contrast a legitimate owner deletion with a later non-owner deletion in one cleanup session; successful owner deletion is not a finding."
+          "trigger_context": "Contrast a legitimate owner deletion with a later non-owner deletion in one cleanup session; successful owner deletion is not a finding.",
+          "preconditions": {
+            "acting_identity_reference": "member",
+            "project_reference": "project-1",
+            "task_reference": "task-1",
+            "required_check_ids": [
+              "H03.joined-project-ready",
+              "H03.joined-task-ready",
+              "H03.non-owner-delete-rejected",
+              "H03.joined-project-preserved",
+              "H03.joined-task-preserved"
+            ],
+            "session_order": "No live cross-identity barrier is required."
+          }
         }
       ],
       "required_goal_ids": [
@@ -926,7 +1118,94 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H03.owned-created",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Create owned_project_name once; its stable row is owned by member."
+        },
+        {
+          "check_id": "H03.owned-deleted",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Owner deletion removes that owned project immediately.",
+          "depends_on": [
+            "H03.owned-created"
+          ]
+        },
+        {
+          "check_id": "H03.owned-delete-persisted",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "After refresh the owned project remains absent.",
+          "depends_on": [
+            "H03.owned-deleted"
+          ]
+        },
+        {
+          "check_id": "H03.joined-project-ready",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "joined_project_id is accessible and owned by admin, not by this member."
+        },
+        {
+          "check_id": "H03.joined-task-ready",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Before destructive testing, observe joined_task_id / joined_task_title in this joined project.",
+          "depends_on": [
+            "H03.joined-project-ready"
+          ]
+        },
+        {
+          "check_id": "H03.non-owner-delete-rejected",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "A non-owner Delete attempt is rejected, or its unavailable control prevents deletion. A successful owner cleanup is not this check.",
+          "depends_on": [
+            "H03.owned-delete-persisted",
+            "H03.joined-task-ready"
+          ]
+        },
+        {
+          "check_id": "H03.joined-project-preserved",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Refresh after the non-owner attempt; the same joined project remains.",
+          "depends_on": [
+            "H03.non-owner-delete-rejected"
+          ]
+        },
+        {
+          "check_id": "H03.joined-task-preserved",
+          "goal_id": "cleanup-boundaries",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Reopen this project's Tasks after the attempt; joined_task_id remains intact.",
+          "depends_on": [
+            "H03.non-owner-delete-rejected"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H03.owned-created",
+        "H03.owned-deleted",
+        "H03.owned-delete-persisted",
+        "H03.joined-project-ready",
+        "H03.joined-task-ready",
+        "H03.non-owner-delete-rejected",
+        "H03.joined-project-preserved",
+        "H03.joined-task-preserved"
+      ]
     },
     {
       "scenario_id": "H04",
@@ -961,7 +1240,19 @@
           "task_reference": null,
           "applicable_role": "member",
           "identity_reference": "member2",
-          "trigger_context": "Invitation must precede member2 login, and removal must follow it. Preserve that session when checking the formerly private project."
+          "trigger_context": "Invitation must precede member2 login, and removal must follow it. Preserve that session when checking the formerly private project.",
+          "preconditions": {
+            "acting_identity_reference": "member2",
+            "project_reference": "project-2",
+            "task_reference": null,
+            "required_check_ids": [
+              "H04.member-ready",
+              "H04.revoked-project",
+              "H04.revoked-tasks",
+              "H04.revoked-members"
+            ],
+            "session_order": "Two live contexts, with invitation -> invitee login -> removal barriers. One coupled workflow; not comparable with one Tester."
+          }
         }
       ],
       "required_goal_ids": [
@@ -975,7 +1266,85 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H04.member-added",
+          "goal_id": "invite-and-remove",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Invite member2 to private_project_id and observe the exact membership row."
+        },
+        {
+          "check_id": "H04.member-ready",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "After invitation-ready, log in as member2 and observe access to private_project_id; publish invitee-session-ready and retain this context.",
+          "depends_on": [
+            "H04.member-added"
+          ]
+        },
+        {
+          "check_id": "H04.member-removed",
+          "goal_id": "invite-and-remove",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Only after invitee-session-ready remove that member2 membership.",
+          "depends_on": [
+            "H04.member-ready"
+          ]
+        },
+        {
+          "check_id": "H04.removal-persisted",
+          "goal_id": "invite-and-remove",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh the Admin Members view to prove removal, then publish membership-removed.",
+          "depends_on": [
+            "H04.member-removed"
+          ]
+        },
+        {
+          "check_id": "H04.revoked-project",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "After membership-removed, refresh the retained member2 context; this private project is no longer visible.",
+          "depends_on": [
+            "H04.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H04.revoked-tasks",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "The same retained session cannot access Tasks of private_project_id; denied or unavailable access is expected.",
+          "depends_on": [
+            "H04.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H04.revoked-members",
+          "goal_id": "invitee-access",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member2",
+          "description": "The same retained session cannot access Members of private_project_id. Do not replace the session with a new login.",
+          "depends_on": [
+            "H04.removal-persisted"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H04.member-added",
+        "H04.member-ready",
+        "H04.member-removed",
+        "H04.removal-persisted",
+        "H04.revoked-project",
+        "H04.revoked-tasks",
+        "H04.revoked-members"
+      ]
     },
     {
       "scenario_id": "H05",
@@ -1009,7 +1378,18 @@
           "task_reference": null,
           "applicable_role": "admin",
           "identity_reference": "admin",
-          "trigger_context": "Use PATCH via the edit dialog on an existing Admin project, rather than the development create paths. The project is persisted with an empty normalized name."
+          "trigger_context": "Use PATCH via the edit dialog on an existing Admin project, rather than the development create paths. The project is persisted with an empty normalized name.",
+          "preconditions": {
+            "acting_identity_reference": "admin",
+            "project_reference": "project-2",
+            "task_reference": null,
+            "required_check_ids": [
+              "H05.validation-message",
+              "H05.name-unchanged-immediate",
+              "H05.name-unchanged-persisted"
+            ],
+            "session_order": "No live cross-identity barrier is required."
+          }
         }
       ],
       "required_goal_ids": [
@@ -1022,7 +1402,41 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H05.validation-message",
+          "goal_id": "edit-validation",
+          "behavior_id": "EB-PROJECT-NAME",
+          "identity_reference": "admin",
+          "description": "Submit whitespace_project_name through Edit on private_project_id; project name is required is shown."
+        },
+        {
+          "check_id": "H05.name-unchanged-immediate",
+          "goal_id": "edit-validation",
+          "behavior_id": "EB-PROJECT-NAME",
+          "identity_reference": "admin",
+          "description": "The same project row still shows private_project_name after the rejected edit; cancel the dialog if necessary.",
+          "depends_on": [
+            "H05.validation-message"
+          ]
+        },
+        {
+          "check_id": "H05.name-unchanged-persisted",
+          "goal_id": "edit-validation",
+          "behavior_id": "EB-PROJECT-NAME",
+          "identity_reference": "admin",
+          "description": "Refresh after this edit attempt; the same project retains its original name.",
+          "depends_on": [
+            "H05.name-unchanged-immediate"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H05.validation-message",
+        "H05.name-unchanged-immediate",
+        "H05.name-unchanged-persisted"
+      ]
     },
     {
       "scenario_id": "H06",
@@ -1049,14 +1463,25 @@
           "matching_evidence": [
             "Two create requests carry the SAME nonempty submission_id for the scoped input name and acting username; preserve sanitized request-body evidence or equivalent verified operation identity.",
             "Two successful responses or refreshed rows show distinct project_ids for those same-operation requests.",
-            "Same names or two ordinary sequential clicks alone do not match: the first completed response rotates projectSubmissionId. Current NETWORK evidence stores method/URL/status only, and TRACE sanitization strips request bodies."
+            "Same names or two sequential completed operations do not match. Use verified repeat_submit evidence with sanitized request operation IDs, acting identity, scoped input name, and returned project IDs."
           ],
           "bug_id": "B5",
           "project_reference": "projects created from submission_project_name",
           "task_reference": null,
           "applicable_role": "member",
           "identity_reference": "member2",
-          "trigger_context": "One pending creation is isolated from simultaneous project-1 offboarding."
+          "trigger_context": "One pending creation is isolated from simultaneous project-1 offboarding.",
+          "preconditions": {
+            "acting_identity_reference": "member2",
+            "project_reference": "projects created from submission_project_name",
+            "task_reference": null,
+            "required_check_ids": [
+              "H06.pending-operation",
+              "H06.pending-settled",
+              "H06.pending-persisted"
+            ],
+            "session_order": "Two business branches, one of which needs two synchronized identities. Three contexts may run, but there are not three independent tasks; exclude 1-vs-3 speedup."
+          }
         },
         {
           "behavior_id": "EB-MEMBER-ACCESS",
@@ -1084,7 +1509,19 @@
           "task_reference": null,
           "applicable_role": "member",
           "identity_reference": "member",
-          "trigger_context": "Check the Members and Tasks views after confirmed removal in the old session while member2 manages its own project."
+          "trigger_context": "Check the Members and Tasks views after confirmed removal in the old session while member2 manages its own project.",
+          "preconditions": {
+            "acting_identity_reference": "member",
+            "project_reference": "project-1",
+            "task_reference": null,
+            "required_check_ids": [
+              "H06.member-ready",
+              "H06.revoked-members",
+              "H06.revoked-tasks",
+              "H06.revoked-project"
+            ],
+            "session_order": "Two business branches, one of which needs two synchronized identities. Three contexts may run, but there are not three independent tasks; exclude 1-vs-3 speedup."
+          }
         }
       ],
       "required_goal_ids": [
@@ -1099,7 +1536,105 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H06.pending-operation",
+          "goal_id": "pending-project",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "member2",
+          "description": "Execute two submissions while both requests of the same nonempty operation ID are pending, using submission_project_name.",
+          "action_type": "repeat_submit"
+        },
+        {
+          "check_id": "H06.pending-settled",
+          "goal_id": "pending-project",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "member2",
+          "description": "After that operation settles there is exactly one matching project row.",
+          "depends_on": [
+            "H06.pending-operation"
+          ]
+        },
+        {
+          "check_id": "H06.pending-persisted",
+          "goal_id": "pending-project",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "member2",
+          "description": "Refresh after settling; exactly one same-operation project remains.",
+          "depends_on": [
+            "H06.pending-settled"
+          ]
+        },
+        {
+          "check_id": "H06.member-ready",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "Observe Seed Project access, publish member-session-ready, and retain this member context."
+        },
+        {
+          "check_id": "H06.member-removed",
+          "goal_id": "remove-member",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "After member-session-ready remove removed_username from seed_project_id.",
+          "depends_on": [
+            "H06.member-ready"
+          ]
+        },
+        {
+          "check_id": "H06.removal-persisted",
+          "goal_id": "remove-member",
+          "behavior_id": "EB-MEMBER-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh Members of this project to prove removal, then publish membership-removed.",
+          "depends_on": [
+            "H06.member-removed"
+          ]
+        },
+        {
+          "check_id": "H06.revoked-members",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "After membership-removed the retained member session cannot reopen Members of seed_project_id.",
+          "depends_on": [
+            "H06.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H06.revoked-tasks",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "The same retained member session cannot reopen Tasks of seed_project_id.",
+          "depends_on": [
+            "H06.removal-persisted"
+          ]
+        },
+        {
+          "check_id": "H06.revoked-project",
+          "goal_id": "offboarded-read",
+          "behavior_id": "EB-MEMBER-ACCESS",
+          "identity_reference": "member",
+          "description": "Refresh Projects in this same session; seed_project_id is absent. Do not touch the separate member2 creation branch.",
+          "depends_on": [
+            "H06.removal-persisted"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H06.pending-operation",
+        "H06.pending-settled",
+        "H06.pending-persisted",
+        "H06.member-ready",
+        "H06.member-removed",
+        "H06.removal-persisted",
+        "H06.revoked-members",
+        "H06.revoked-tasks",
+        "H06.revoked-project"
+      ]
     },
     {
       "scenario_id": "H07",
@@ -1133,7 +1668,18 @@
           "task_reference": "task created from task_title",
           "applicable_role": "admin",
           "identity_reference": "admin",
-          "trigger_context": "Admin private-task deletion is independent of the member destructive test on project-1."
+          "trigger_context": "Admin private-task deletion is independent of the member destructive test on project-1.",
+          "preconditions": {
+            "acting_identity_reference": "admin",
+            "project_reference": "project-2",
+            "task_reference": "task created from task_title",
+            "required_check_ids": [
+              "H07.task-deleted-immediate",
+              "H07.task-deleted-refresh",
+              "H07.task-deleted-reopen"
+            ],
+            "session_order": "Two independent, isolated project targets. The project-1 destructive attempt cannot erase Admin project-2 task evidence. This is not a three-independent-branch speed comparison."
+          }
         },
         {
           "behavior_id": "EB-PROJECT-DELETE-AUTH",
@@ -1156,16 +1702,28 @@
           ],
           "bug_id": "B2",
           "project_reference": "project-1",
-          "task_reference": null,
+          "task_reference": "task-1",
           "applicable_role": "member",
           "identity_reference": "member",
-          "trigger_context": "Non-owner deletion is checked while Admin audits other projects, using a different bug combination from development cases."
+          "trigger_context": "Non-owner deletion is checked while Admin audits other projects, using a different bug combination from development cases.",
+          "preconditions": {
+            "acting_identity_reference": "member",
+            "project_reference": "project-1",
+            "task_reference": "task-1",
+            "required_check_ids": [
+              "H07.joined-project-ready",
+              "H07.joined-task-ready",
+              "H07.non-owner-delete-rejected",
+              "H07.joined-project-preserved",
+              "H07.joined-task-preserved"
+            ],
+            "session_order": "Two independent, isolated project targets. The project-1 destructive attempt cannot erase Admin project-2 task evidence. This is not a three-independent-branch speed comparison."
+          }
         }
       ],
       "required_goal_ids": [
         "private-task",
-        "joined-deletion",
-        "team-members"
+        "joined-deletion"
       ],
       "stable_reproduction": {
         "matching_attempts": 2,
@@ -1174,7 +1732,126 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H07.task-created",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Create task_title only in private_project_id; observe its stable task row."
+        },
+        {
+          "check_id": "H07.task-edited",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Save edited_task_title on that same task row.",
+          "depends_on": [
+            "H07.task-created"
+          ]
+        },
+        {
+          "check_id": "H07.task-edit-persisted",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "admin",
+          "description": "Refresh and reselect the same private project; the saved task title remains.",
+          "depends_on": [
+            "H07.task-edited"
+          ]
+        },
+        {
+          "check_id": "H07.task-deleted-immediate",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-DELETE",
+          "identity_reference": "admin",
+          "description": "Delete that task and assert its absence immediately.",
+          "depends_on": [
+            "H07.task-edit-persisted"
+          ]
+        },
+        {
+          "check_id": "H07.task-deleted-refresh",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-DELETE",
+          "identity_reference": "admin",
+          "description": "Refresh and reselect private_project_id; the same task remains absent.",
+          "depends_on": [
+            "H07.task-deleted-immediate"
+          ]
+        },
+        {
+          "check_id": "H07.task-deleted-reopen",
+          "goal_id": "private-task",
+          "behavior_id": "EB-TASK-DELETE",
+          "identity_reference": "admin",
+          "description": "Leave and reopen Tasks of private_project_id; the deleted task still remains absent.",
+          "depends_on": [
+            "H07.task-deleted-refresh"
+          ]
+        },
+        {
+          "check_id": "H07.joined-project-ready",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Observe joined_project_id and its admin owner in the member session."
+        },
+        {
+          "check_id": "H07.joined-task-ready",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Observe joined_task_id / joined_task_title in that project before the deletion attempt.",
+          "depends_on": [
+            "H07.joined-project-ready"
+          ]
+        },
+        {
+          "check_id": "H07.non-owner-delete-rejected",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Delete of joined_project_id by this non-owner is rejected or unavailable. Do not target the private task branch.",
+          "depends_on": [
+            "H07.joined-task-ready"
+          ]
+        },
+        {
+          "check_id": "H07.joined-project-preserved",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Refresh after the attempt; joined_project_id remains.",
+          "depends_on": [
+            "H07.non-owner-delete-rejected"
+          ]
+        },
+        {
+          "check_id": "H07.joined-task-preserved",
+          "goal_id": "joined-deletion",
+          "behavior_id": "EB-PROJECT-DELETE-AUTH",
+          "identity_reference": "member",
+          "description": "Reopen this joined project's Tasks; joined_task_id remains intact.",
+          "depends_on": [
+            "H07.non-owner-delete-rejected"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H07.task-created",
+        "H07.task-edited",
+        "H07.task-edit-persisted",
+        "H07.task-deleted-immediate",
+        "H07.task-deleted-refresh",
+        "H07.task-deleted-reopen",
+        "H07.joined-project-ready",
+        "H07.joined-task-ready",
+        "H07.non-owner-delete-rejected",
+        "H07.joined-project-preserved",
+        "H07.joined-task-preserved"
+      ]
     },
     {
       "scenario_id": "H08",
@@ -1208,7 +1885,18 @@
           "task_reference": null,
           "applicable_role": "member",
           "identity_reference": "member2",
-          "trigger_context": "A new member-owned project has stale immediate rename display, unlike development Admin rename paths."
+          "trigger_context": "A new member-owned project has stale immediate rename display, unlike development Admin rename paths.",
+          "preconditions": {
+            "acting_identity_reference": "member2",
+            "project_reference": "project created from owned_project_name",
+            "task_reference": null,
+            "required_check_ids": [
+              "H08.saved-immediate",
+              "H08.saved-persisted",
+              "H08.saved-reopened"
+            ],
+            "session_order": "Three independent identities and project targets. The single owner creation is not a duplicate-submission test; match findings to the correct branch."
+          }
         },
         {
           "behavior_id": "EB-PROJECT-SUBMIT",
@@ -1227,14 +1915,25 @@
           "matching_evidence": [
             "Two create requests carry the SAME nonempty submission_id for the scoped input name and acting username; preserve sanitized request-body evidence or equivalent verified operation identity.",
             "Two successful responses or refreshed rows show distinct project_ids for those same-operation requests.",
-            "Same names or two ordinary sequential clicks alone do not match: the first completed response rotates projectSubmissionId. Current NETWORK evidence stores method/URL/status only, and TRACE sanitization strips request bodies."
+            "Same names or two sequential completed operations do not match. Use verified repeat_submit evidence with sanitized request operation IDs, acting identity, scoped input name, and returned project IDs."
           ],
           "bug_id": "B5",
           "project_reference": "projects created from submission_project_name",
           "task_reference": null,
           "applicable_role": "admin",
           "identity_reference": "admin",
-          "trigger_context": "Admin repeated submission runs alongside a member-owner rename with distinct project names and request identities."
+          "trigger_context": "Admin repeated submission runs alongside a member-owner rename with distinct project names and request identities.",
+          "preconditions": {
+            "acting_identity_reference": "admin",
+            "project_reference": "projects created from submission_project_name",
+            "task_reference": null,
+            "required_check_ids": [
+              "H08.pending-operation",
+              "H08.pending-settled",
+              "H08.pending-persisted"
+            ],
+            "session_order": "Three independent identities and project targets. The single owner creation is not a duplicate-submission test; match findings to the correct branch."
+          }
         }
       ],
       "required_goal_ids": [
@@ -1249,11 +1948,140 @@
         "fresh_verification_required": true
       },
       "current_formal_readiness": "ready",
-      "readiness_issues": []
+      "readiness_issues": [],
+      "required_checks": [
+        {
+          "check_id": "H08.owned-created",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-LIFECYCLE",
+          "identity_reference": "member2",
+          "description": "Create owned_project_name once as member2 and observe its stable row."
+        },
+        {
+          "check_id": "H08.saved-immediate",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-SAVE",
+          "identity_reference": "member2",
+          "description": "Save edited_project_name; after the dialog closes and before refresh/navigation, the same row immediately shows the new name.",
+          "depends_on": [
+            "H08.owned-created"
+          ]
+        },
+        {
+          "check_id": "H08.saved-persisted",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-SAVE",
+          "identity_reference": "member2",
+          "description": "Refresh after the immediate check; the same project shows the persisted new name.",
+          "depends_on": [
+            "H08.saved-immediate"
+          ]
+        },
+        {
+          "check_id": "H08.saved-reopened",
+          "goal_id": "owner-save",
+          "behavior_id": "EB-PROJECT-SAVE",
+          "identity_reference": "member2",
+          "description": "Leave and reopen Projects; that same renamed project still shows the new name.",
+          "depends_on": [
+            "H08.saved-persisted"
+          ]
+        },
+        {
+          "check_id": "H08.pending-operation",
+          "goal_id": "admin-submission",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "admin",
+          "description": "Execute two pending submissions with the same nonempty operation ID and submission_project_name.",
+          "action_type": "repeat_submit"
+        },
+        {
+          "check_id": "H08.pending-settled",
+          "goal_id": "admin-submission",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "admin",
+          "description": "After settling, exactly one same-operation project row exists.",
+          "depends_on": [
+            "H08.pending-operation"
+          ]
+        },
+        {
+          "check_id": "H08.pending-persisted",
+          "goal_id": "admin-submission",
+          "behavior_id": "EB-PROJECT-SUBMIT",
+          "identity_reference": "admin",
+          "description": "Refresh after settling; exactly one matching project remains.",
+          "depends_on": [
+            "H08.pending-settled"
+          ]
+        },
+        {
+          "check_id": "H08.task-created",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Create task_title only in joined_project_id, leaving both other branch projects untouched."
+        },
+        {
+          "check_id": "H08.task-edited",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "The same task shows edited_task_title after Save.",
+          "depends_on": [
+            "H08.task-created"
+          ]
+        },
+        {
+          "check_id": "H08.task-edit-persisted",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Refresh and reselect the same joined project; the edited title remains.",
+          "depends_on": [
+            "H08.task-edited"
+          ]
+        },
+        {
+          "check_id": "H08.task-edit-reopened",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "Leave and reopen its Tasks view; the saved task title remains.",
+          "depends_on": [
+            "H08.task-edit-persisted"
+          ]
+        },
+        {
+          "check_id": "H08.joined-access-preserved",
+          "goal_id": "joined-task-edit",
+          "behavior_id": "EB-TASK-LIFECYCLE",
+          "identity_reference": "member",
+          "description": "After this workflow the member retains access to joined_project_id; neither other branch modifies that membership.",
+          "depends_on": [
+            "H08.task-edit-reopened"
+          ]
+        }
+      ],
+      "required_check_ids": [
+        "H08.owned-created",
+        "H08.saved-immediate",
+        "H08.saved-persisted",
+        "H08.saved-reopened",
+        "H08.pending-operation",
+        "H08.pending-settled",
+        "H08.pending-persisted",
+        "H08.task-created",
+        "H08.task-edited",
+        "H08.task-edit-persisted",
+        "H08.task-edit-reopened",
+        "H08.joined-access-preserved"
+      ]
     }
   ],
   "observed_unseeded_limitations": [
     "Resolved: Task and Member view loaders discard stale overlapping responses using per-view request sequence counters. Seeded defect semantics remain unchanged."
   ],
-  "evaluation_version": "development-v2-checks-20261008"
+  "evaluation_version": "development-v2-checks-20261008",
+  "holdout_evaluation_version": "holdout-v2-checks-20261008"
 }
