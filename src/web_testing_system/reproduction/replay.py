@@ -122,6 +122,18 @@ class ReplayPlanBuilder:
         owner_session_reference = str(histories[-1]["browser_session_id"])
         cutoff = histories[-1]["ended_at"]
         related = set(related_task_ids) | set(task["dependencies"])
+        # Live-session 不使用整 Task 等待边；回放从已记录 Check 的前置关系恢复参与者。
+        tasks = self.store.list_tasks(run_id)
+        specifications = {check["check_id"]: check for item in tasks for check in item["data_requirements"].get("required_checks", [])}
+        pending_checks = [dependency for history in histories for dependency in specifications.get(history["action_data"].get("check_id"), {}).get("depends_on", [])]
+        visited_checks: set[str] = set()
+        while pending_checks:
+            check_id = pending_checks.pop()
+            if check_id in visited_checks:
+                continue
+            visited_checks.add(check_id)
+            pending_checks.extend(specifications.get(check_id, {}).get("depends_on", []))
+            related.update(item["task_id"] for item in tasks if any(check["check_id"] == check_id for check in item["data_requirements"].get("required_checks", [])))
         checked = {task_id}
         while related:
             reference = related.pop()

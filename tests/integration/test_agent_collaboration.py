@@ -597,7 +597,7 @@ async def test_two_testers_share_finding_and_main_agent_replans_running_task() -
         ]
         assert all(event["result"]["identity_id"] for event in assignment_events)
         assert all(event["result"]["data_namespace"] for event in assignment_events)
-        assert all(event["result"]["step_budget"] == 6 for event in assignment_events)
+        assert all(event["result"]["step_budget"] == run_config.budget.max_browser_steps_per_task for event in assignment_events)
         assert event_types.index("FINDING_CREATED") < event_types.index(
             "COORDINATION_SNAPSHOT_READ"
         ) < event_types.index("PLAN_CHANGE")

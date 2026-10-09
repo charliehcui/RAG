@@ -61,6 +61,9 @@ class PlanningClient(FunctionInvocationLayer, ChatMiddlewareLayer, BaseChatClien
             self.summary_facts = json.loads(messages[-1].text.split("Final Report: ", 1)[1])
             summary = self.summary_facts["test_summary"]
             return ChatResponse(messages=[Message(role="assistant", contents=[f"Tested {summary['total_tasks']} tasks; {summary['successful_tasks']} passed, {summary['unknown_success_tasks']} uncertain. See report.json for findings and evidence."])])
+        if any(tool.name == "submit_task_plan" for tool in options.get("tools", [])):
+            tasks = [{"goal_id": task["task_id"], "goal": task["goal"], "priority": task["priority"], "required_operations": task["required_operations"]} for task in self.tasks]
+            return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("whole-main-plan", "submit_task_plan", arguments={"tasks": tasks})])])
         if self.calls <= len(self.tasks):
             content = Content.from_function_call(f"plan-{self.calls}", "create_task", arguments=self.tasks[self.calls - 1])
         else:

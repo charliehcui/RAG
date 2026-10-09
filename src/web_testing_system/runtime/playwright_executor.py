@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from playwright.async_api import Locator, Page, Route, expect
+from playwright.async_api import Locator, Page, Response, Route, expect
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from web_testing_system.evidence import EvidenceBuffer
@@ -118,8 +118,23 @@ class PlaywrightExecutor:
             return page.locator(action.target)
         matches = page.locator(action.target)
         count = await matches.count()
+        if action.action_type == ActionType.ASSERTION and action.target.startswith("text="):
+            selected_controls = matches.and_(page.locator("option:checked")).locator("xpath=ancestor::select").filter(visible=True)
+            if await selected_controls.count():
+                # 文本定位到已选 option 时，检查实际显示该文本的唯一可见控件。
+                displayed_matches = matches.filter(visible=True).or_(selected_controls)
+                if await displayed_matches.count() != 1:
+                    raise ValueError("target matches multiple objects")
+                return displayed_matches
         if count > 1 and action.action_type != ActionType.DOM_INSPECTION:
-            raise ValueError("target matches multiple objects")
+            visible_matches = matches.filter(visible=True)
+            if await visible_matches.count() != 1:
+                if action.action_type == ActionType.ASSERTION and action.assertion in {"visible", "hidden"} and await visible_matches.evaluate_all("elements => elements.length > 0 && elements.every(element => element.tagName === 'TD')"):
+                    rows = visible_matches.locator("xpath=ancestor::tr[1]")
+                    if await rows.count() == 1 and await rows.evaluate("row => ['data-project-id', 'data-task-id', 'data-member-id', 'data-username'].some(name => row.hasAttribute(name))"):
+                        return rows
+                raise ValueError("target matches multiple objects")
+            matches = visible_matches
         locator = matches.first
         if action.action_type == ActionType.ASSERTION:
             return locator
@@ -242,11 +257,19 @@ class PlaywrightExecutor:
         completed = asyncio.Event()
         records: list[dict[str, Any]] = []
         finished = 0
+        received = asyncio.Event()
+        browser_responses: list[Response] = []
+
+        def receive_response(response: Response) -> None:
+            if response.url == action.url and response.request.method == "POST":
+                browser_responses.append(response)
+                if len(browser_responses) == 2:
+                    received.set()
 
         async def hold_response(route: Route) -> None:
             nonlocal finished
             request = route.request
-            if request.method != "POST":
+            if request.method != "POST" or len(records) >= 2:
                 await route.continue_()
                 return
             body = request.post_data_json
@@ -270,19 +293,25 @@ class PlaywrightExecutor:
                 if finished == 2:
                     completed.set()
 
-        # 等待当前视图加载完成；拦截规则只处理本次两次请求，避免与后续 GET 竞争。
+        # 只暂存本次两次 POST；GET 直接继续，直到页面接收完响应再移除路由。
         await page.wait_for_load_state("networkidle", timeout=action.timeout_ms)
-        await page.route(action.url, hold_response, times=2)
+        page.on("response", receive_response)
+        await page.route(action.url, hold_response)
         try:
             await locator.dblclick(delay=20, timeout=action.timeout_ms)
             await asyncio.wait_for(ready.wait(), timeout=action.timeout_ms / 1000)
             await asyncio.wait_for(completed.wait(), timeout=action.timeout_ms / 1000)
             if len(records) != 2 or records[0]["submission_id"] != records[1]["submission_id"]:
                 raise ValueError("same pending submission was not established")
+            # Route 已履行不代表页面已收到响应；先完成客户端响应与事件循环，再观察新请求。
+            await asyncio.wait_for(received.wait(), timeout=action.timeout_ms / 1000)
+            await asyncio.wait_for(asyncio.gather(*(response.body() for response in browser_responses)), timeout=action.timeout_ms / 1000)
+            await asyncio.wait_for(page.evaluate("() => new Promise(resolve => requestAnimationFrame(resolve))"), timeout=action.timeout_ms / 1000)
             await page.wait_for_load_state("networkidle", timeout=action.timeout_ms)
             return {"url": page.url, "requests": records}
         finally:
             ready.set()
+            page.remove_listener("response", receive_response)
             await page.unroute(action.url, hold_response)
 
     async def _run_assertion(
@@ -292,6 +321,8 @@ class PlaywrightExecutor:
             raise ValueError("unsupported assertion operator")
         if action.assertion not in {"visible", "hidden"} and action.expected is None:
             raise ValueError("assertion requires an expected value")
+        tag = await locator.evaluate("element => element.tagName") if action.assertion in {"contains", "not_contains", "equals"} and await locator.count() else None
+        text_locator = locator.locator("option:checked") if tag == "SELECT" and action.assertion in {"contains", "not_contains", "equals"} else locator
         try:
             if action.assertion == "visible":
                 await expect(locator).to_be_visible(timeout=action.timeout_ms)
@@ -300,11 +331,16 @@ class PlaywrightExecutor:
             elif action.assertion == "count":
                 await expect(locator).to_have_count(int(action.expected or "0"), timeout=action.timeout_ms)
             elif action.assertion == "equals":
-                await expect(locator).to_have_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
+                if tag in {"INPUT", "TEXTAREA"}:
+                    await expect(locator).to_have_value(action.expected or "", timeout=action.timeout_ms)
+                else:
+                    await expect(text_locator).to_have_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
             elif action.assertion == "not_contains":
-                await expect(locator).not_to_contain_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
+                if tag not in {"INPUT", "TEXTAREA"}:
+                    await expect(text_locator).not_to_contain_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
             else:
-                await expect(locator).to_contain_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
+                if tag not in {"INPUT", "TEXTAREA"}:
+                    await expect(text_locator).to_contain_text(action.expected or "", timeout=action.timeout_ms, use_inner_text=True)
         except AssertionError:
             pass
         if action.assertion == "visible":
@@ -320,7 +356,7 @@ class PlaywrightExecutor:
             return {"matched": actual_count == int(action.expected), "actual": actual_count}
         if action.expected is None:
             raise ValueError("text assertion requires an expected value")
-        actual = await locator.inner_text(timeout=action.timeout_ms) if await locator.count() else ""
+        actual = await locator.input_value(timeout=action.timeout_ms) if tag in {"INPUT", "TEXTAREA"} else await text_locator.inner_text(timeout=action.timeout_ms) if await text_locator.count() else ""
         if action.assertion == "equals":
             matched = actual == action.expected
         elif action.assertion == "not_contains":

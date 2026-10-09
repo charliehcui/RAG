@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 import pytest
 from agent_framework import BaseChatClient, ChatResponse, Content, Message
 from agent_framework._tools import FunctionInvocationLayer
+from test_architecture_fixes import run as run_formal
 
 from demo_app import DEMO_VERSION, DemoAppServer, SeededBugs
 from web_testing_system.agents import (
@@ -40,7 +41,6 @@ from web_testing_system.evaluation.runner import (
 )
 from web_testing_system.evidence import EvidenceStore
 from web_testing_system.findings import FindingService, ScreeningSignals
-from web_testing_system.orchestration.runner import run as run_formal
 from web_testing_system.orchestration.scheduler import LocalTesterScheduler
 from web_testing_system.orchestration.scheduler import (
     TesterInstance as ScheduledInstance,
@@ -283,7 +283,8 @@ async def test_model_every_step_route_calls_tester_before_known_navigation(tmp_p
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_fake_evaluation_runner_reuses_formal_run_with_isolated_databases(tmp_path: Path) -> None:
+async def test_fake_evaluation_runner_reuses_formal_run_with_isolated_databases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("web_testing_system.orchestration.runner.run", run_formal)
     with DemoAppServer() as app:
         config = make_run_config(app.base_url)
         settings = Settings(_env_file=None, main_agent_model="fake-gemini-main", tester_agent_provider="relace", tester_agent_model="fake-groq-tester", state_db_path=tmp_path / "unused.db", artifacts_dir=tmp_path / "unused-runs")
@@ -308,7 +309,7 @@ def make_tester(*, store: StateStore, manager: BrowserManager, base_url: str, te
     budget = make_budget()
     checker = PermissionChecker(store=store, policy=ExecutionPolicy(allowed_url_prefixes=(f"{base_url}/",)), run_id="run-phase5", task_id=task_id, tester_id=tester_id)
     executor = PlaywrightExecutor(store=store, permission_checker=checker, run_id="run-phase5", task_id=task_id, tester_id=tester_id)
-    runtime = WebTestingRuntime(store=store, browser_manager=manager, executor=executor, page_state_reader=PageStateReader(), candidate_builder=CandidateBuilder(checker), jev_selector=JevSelector(jev), budget=budget, run_id="run-phase5", task_id=task_id, tester_id=tester_id, identity_id=identity_id, budget_id=f"budget-{task_id}")
+    runtime = WebTestingRuntime(store=store, browser_manager=manager, executor=executor, page_state_reader=PageStateReader(), candidate_builder=CandidateBuilder(checker), jev_selector=JevSelector(jev), budget=budget, run_id="run-phase5", task_id=task_id, tester_id=tester_id, identity_id=identity_id, budget_id=f"budget-{task_id}", input_values={f"{role}_username": role, f"{role}_password": "demo-" + role})
     assignment = Assignment(run_id="run-phase5", task_id=task_id, tester_id=tester_id, identity_id=identity_id, role=role, data_namespace=build_data_namespace("run-phase5", tester_id, task_id), scope=(f"{base_url}/",), step_budget=100)
     tools = AgentTools(assignment=assignment, runtime=runtime, store=store)
     agent = create_tester_agent(client=FakeTesterClient(), assignment=assignment, tools=tools)

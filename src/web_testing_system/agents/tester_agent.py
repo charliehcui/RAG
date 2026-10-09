@@ -121,6 +121,8 @@ class TesterAgentTools:
         self.pending_goal: str | None = None
         self.plan_started = bool(store.list_events(assignment.run_id, task_id=assignment.task_id, event_types=("TESTER_PLAN",))) if store is not None else False
         self.executing_plan = False
+        self.readonly_tail = False
+        self.checking_readonly_tail = False
         self.task_context_supplied = task_context is not None
         self.task_context = task_context or {}
         if task_context is not None:
@@ -187,16 +189,32 @@ class TesterAgentTools:
         checks = getattr(self.runtime, "required_checks", [])
         completed = self.task_context.get("completed_check_ids", [])
         remaining = [check["check_id"] for check in checks if check["check_id"] not in completed]
-        coverage = []
+        coverage: list[dict[str, Any]] = []
         for check_id in remaining:
-            locations = []
+            locations: list[dict[str, Any]] = []
             for location in ("before_steps", "checks", "after_steps"):
                 locations.append({"required": [location], "properties": {location: {"contains": {"required": ["check_id"], "properties": {"check_id": {"const": check_id}}}}}})
             coverage.append({"contains": {"anyOf": locations}})
+        for check_id in sorted(self._permission_delete_checks() - self._attempted_permission_checks() - set(completed)) if not self.plan_started else []:
+            locations = [{"required": [location], "properties": {location: {"contains": {"required": ["check_id"], "properties": {"check_id": {"const": check_id}}}}}} for location in ("checks", "after_steps")]
+            coverage.append({"contains": {"required": ["operation"], "properties": {"operation": {"const": "delete"}, "run_operations": {"const": True}}, "anyOf": locations}})
         if coverage:
             schema["properties"]["goals"]["allOf"] = coverage
             schema["properties"]["goals"]["description"] = f"Complete remaining plan. Must contain evidence for EVERY ID: {', '.join(remaining)}. No browser action runs until the entire plan passes preflight."
         for definition in (assertion, boundary):
+            if definition is assertion:
+                definition["required"] = list(dict.fromkeys([*definition["required"], "target", "control", "assertion", "expected", "expected_reference"]))
+            nonempty = {"type": "string", "minLength": 1, "pattern": "\\S"}
+            target_required = {"anyOf": [{"required": [name], "properties": {name: nonempty}} for name in ("target", "control")]}
+            expected_required = {"anyOf": [{"required": ["expected"], "properties": {"expected": {"type": "string"}}}, {"required": ["expected_reference"], "properties": {"expected_reference": {"type": "string"}}}]}
+            definition["allOf"] = [
+                {"if": {"properties": {"action_type": {"const": "assertion"}}, "required": ["action_type"]}, "then": target_required},
+                {"if": {"anyOf": [{"properties": {"action_type": {"const": "url_check"}}, "required": ["action_type"]}, {"properties": {"action_type": {"const": "assertion"}, "assertion": {"enum": ["contains", "not_contains", "equals", "count"]}}, "required": ["action_type"]}]}, "then": expected_required},
+                {"if": {"properties": {"action_type": {"const": "navigation"}}, "required": ["action_type"]}, "then": {"anyOf": [{"required": [name], "properties": {name: nonempty}} for name in ("url", "control")]}}
+            ]
+            definition["properties"]["wait_ms"] = {"type": "integer", "minimum": 0, "maximum": 2000, "default": 0}
+            definition["properties"]["target"]["description"] = "Required target OR control for assertions. Use an observed stable locator. Never omit both."
+            definition["properties"]["expected"]["description"] = "Required expected OR expected_reference for text/count/URL assertions. For visible/hidden omit both. Select text means the SELECTED option label, never all options."
             definition["properties"]["context"] = {"type": "string", "enum": scopes["object_contexts"], "default": "", "description": "Exact entity reference/value or observed row selector for a scoped table assertion. Never a form/page description."}
             for key, allowed in (("value_reference", references), ("expected_reference", public), ("project_reference", objects)):
                 definition["properties"][key] = {"enum": [None, *allowed], "default": None}
@@ -204,9 +222,44 @@ class TesterAgentTools:
                 definition["properties"]["check_id"] = {"enum": [None, *[check["check_id"] for check in checks]], "description": "Use each assigned ID exactly once on its actual assertion or repeat_submit evidence, never on navigation/refresh/wait.", "default": None}
                 definition["properties"]["behavior_id"] = {"enum": [None, *sorted({check["behavior_id"] for check in checks})], "default": None}
         definitions.pop("PageStep", None)
+        boundary["properties"]["assertion"] = {"enum": [None, "contains", "not_contains", "equals", "visible", "hidden", "count"], "default": "contains", "description": "Only used by assertion/url_check. Omit for navigation/refresh/wait/repeat_submit; null on those actions is ignored."}
+        boundary["allOf"].append({"if": {"properties": {"action_type": {"enum": ["assertion", "url_check"]}}, "required": ["action_type"]}, "then": {"required": ["assertion"], "properties": {"assertion": assertion["properties"]["assertion"]}}})
         definitions.pop("ActionType", None)
         # Dictionary schemas advertise constraints; the existing preflight remains authoritative.
         return FunctionTool(name=tool.name, description=tool.description, func=self.execute_test_plan, input_model=schema)
+
+    def _permission_delete_checks(self) -> set[str]:
+        if self.assignment.role.casefold() == "admin":
+            return set()
+        behaviors = {behavior["behavior_id"] for behavior in self.task_context.get("expected_behaviors", []) if behavior.get("applies_to", "").casefold() == f"permission/{self.assignment.role.casefold()}/delete"}
+        checks = set()
+        for check in self.runtime.required_checks:
+            words = {word.strip(".,;:()") for word in check.get("description", "").casefold().replace("-", " ").split()}
+            if check["behavior_id"] in behaviors and "delete" in words and words & {"reject", "rejected", "rejection", "deny", "denied", "denial", "unavailable"}:
+                checks.add(check["check_id"])
+        return checks
+
+    def _attempted_permission_checks(self) -> set[str]:
+        return {check_id for event in self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("PLAN_GOAL_PREPARED",)) if event["result"].get("operation_binding", {}).get("operation") == "delete" for check_id in event["result"].get("check_ids", [])}
+
+    def _bind_permission_result_assertions(self, goal: PageGoal) -> None:
+        checks = self._permission_delete_checks()
+        prepared = self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("PLAN_GOAL_PREPARED",))
+        for location in ("checks", "after_steps"):
+            steps = getattr(goal, location)
+            for index, step in enumerate(steps):
+                if step.check_id not in checks or step.action_type != ActionType.ASSERTION:
+                    continue
+                attempt = next((event["result"] for event in reversed(prepared) if step.check_id in event["result"].get("check_ids", []) and event["result"].get("operation_binding", {}).get("operation") == "delete"), None)
+                if attempt is None or not attempt.get("forbidden_delete_object"):
+                    continue
+                operation = attempt["operation_binding"]
+                reference = operation.get("row_reference") or operation.get("context")
+                project_reference = operation.get("project_reference")
+                target = attempt["forbidden_delete_object"]["target"]
+                # 明确禁止删除的已执行操作检查原对象保留，按钮消失不能证明操作被拒绝。
+                steps[index] = replace(step, target=target, control=None, context="", project_reference=project_reference, assertion="count", expected="1", expected_reference=None)
+                self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="PERMISSION_ASSERTION_BOUND", tool="TesterPlan", action="preservation", result={"check_id": step.check_id, "target": target, "row_reference": reference, "project_reference": project_reference}, latency_ms=0)
 
     async def planning_context(self, latest_failure: dict[str, Any] | None = None) -> dict[str, Any]:
         outcome = await self.runtime.record_task_outcome()
@@ -220,13 +273,18 @@ class TesterAgentTools:
         page = await self._page_summary() if self.runtime.browser_session_id else {}
         preparation = self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("TESTER_PREPARATION",))
         context = {"task_id": self.assignment.task_id, "goal": self.task_context.get("goal", ""), "identity_reference": self.task_context.get("identity_reference"), "role": self.assignment.role, "scope": list(self.assignment.scope), "target_url": self.task_context.get("target_url"), "denied_operations": self.task_context.get("denied_operations", []), "required_operations": self.task_context.get("required_operations", []), "assigned_checks": checks, "allowed_check_ids": [check["check_id"] for check in assigned], "completed_check_ids": completed, "remaining_check_ids": [check["check_id"] for check in assigned if check["check_id"] not in completed], "prepared_check_ids": sorted(self.runtime.prepared_check_ids), "allowed_input_references": sorted(references), "test_inputs": {reference: self.runtime.input_values[reference] for reference in sorted(references) if not reference.startswith("env:")}, "secret_references": [reference for reference in sorted(references) if reference.startswith("env:")], "assigned_behavior_ids": list(self.runtime.expected_behavior_ids), "preparation": preparation[-1]["result"] if preparation else {}, "current_page": page, "latest_failure": latest_failure, "plan_rules": {"checks_actions": ["assertion", "url_check"], "boundary_actions": ["navigation", "refresh", "wait", "repeat_submit", "assertion", "url_check"], "operation_actions": "Inputs belong in PageGoal.inputs; declare one operation and its constraints for Runtime. Jev only selects current candidates. No click/input/select in boundary steps.", "check_ids": "Exactly one occurrence per remaining Check ID, paired with its assigned behavior_id. Incidental setup boundaries have neither ID. A refresh then assertion uses the ID only on the assertion.", "ordering": "Honor depends_on before the dependent check. Preserve necessary refresh/reopen/logout/login/pending-submit boundaries.", "repeat_submit": "Use run_operations=true with inputs; Runtime stops after filling, then after_steps.repeat_submit supplies the sole pending-operation check ID. Subsequent DOM assertions have their own IDs.", "references": "Only the supplied exact reference keys. Blank input values are legal. Secret references may fill fields but cannot be assertion values.", "objects": "project_reference selects a Project; row_reference identifies an existing row; form_context scopes a form. Do not use prose in object reference fields."}}
+        prepared = self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("PLAN_GOAL_PREPARED",))
+        context["prepared_operations"] = [event["result"] for event in prepared if event["result"].get("operation_binding") and set(event["result"].get("check_ids", [])) & set(context["remaining_check_ids"])]
         context["binding_scopes"] = self.binding_scopes(page)
         context["current_object"] = page.get("current_object", {})
         context["object_bindings"] = page.get("object_bindings", [])
+        context["pending_progress_signals"] = self._pending_progress_signals()
         context["plan_rules"]["completeness"] = "All remaining_check_ids must have actual evidence in this replacement, including downstream checks unrelated to the latest blocker. Required local dependencies must precede their checks. Navigation must have a nonblank destination; never rely on goal prose."
         context["plan_rules"]["object_availability"] = "Use current observed object_bindings, not cached intent. unavailable means the object cannot be selected/mutated now; not_observed is not proof of deletion. Navigate without binding to an unavailable object to reobserve the view. Check-only assertions may still record a deviation against the original missing object; never substitute a different object or invent successful evidence."
         context["plan_rules"]["operations"] = "Every goal declares operation: navigate/create/edit/delete/submit/login/logout/observe. Navigate uses destination=<human navigation label>; create/submit binds supplied inputs; edit/delete uses a stable row_reference. Reopen a view with a navigate goal, then observe/check; do not hide navigation, mutations or logout inside a compound operation. Runtime phases these operations; Jev only selects legal current candidates. Preserve all explicit Check boundaries and existing budgets."
         context["plan_rules"]["contexts"] = "Context fields are binding keys, NEVER explanatory prose. For create/register/login set goal.context='', omit row_reference/project_reference, and normally omit form_context and input.context. Put all operation instructions in goal. For editing/deleting existing objects use row_reference; project_reference selects the containing Project only. Table assertions use the exact entity key/value, not a page or table description."
+        context["expected_behaviors"] = self.task_context.get("expected_behaviors", [])
+        context["plan_rules"]["permission_evidence"] = "A visible enabled button is NOT evidence that its operation is permitted. If a forbidden control is absent, assert that protection. If it is available, attempt the scoped operation and assert denial/result/object preservation. Never report a permission bug solely from button visibility."
         context["plan_rules"]["max_steps"] = "Each goal allows 1..30; default 12. The original Task/step/Replan budgets remain binding."
         return context
 
@@ -266,34 +324,115 @@ class TesterAgentTools:
                 if not preparation["success"]:
                     return {**preparation, "failed_goal": index}
             goal_checks = {step.check_id for step in goal_steps if step.check_id}
-            prepared = bool(goal_checks) and goal_checks <= self.runtime.prepared_check_ids
+            prepared = self._operation_prepared(goal)
+            forbidden_delete_object = None
+            if goal.operation == "delete" and not prepared and goal_checks & self._permission_delete_checks() and self.runtime.browser_session_id:
+                page = self.runtime.browser_manager.get_session(self.runtime.browser_session_id).page
+                rows = await self.runtime.page_state_reader.read_rows(page)
+                matching = [row for row in rows if self.runtime._row_matches_context(row, goal.row_reference or goal.context) and row.get("identity", {}).get("data-project-id")]
+                actor = self.runtime.input_values.get(self.task_context.get("username_reference") or f"{self.task_context.get('identity_reference', self.assignment.role)}_username")
+                if len(matching) == 1 and actor:
+                    owner = next((cell["text"] for cell in matching[0]["cells"] if cell["header"].casefold() == "owner"), None)
+                    if owner == actor:
+                        return {"success": False, "failed_goal": index, "reason": "PERMISSION_SUBJECT_IS_OWNER", "check_id": next(iter(goal_checks & self._permission_delete_checks())), "instruction": "This assigned non-owner rejection check cannot target the actor's owned Project. Use the supplied non-owner object; preserve completed owner cleanup."}
+                    if owner and owner != actor:
+                        forbidden_delete_object = {"target": matching[0]["target"], "identity": matching[0]["identity"]}
             operations = await self.runtime.execute_page_goal(goal.goal, inputs=[asdict(binding) for binding in goal.inputs], context=goal.context, project_reference=goal.project_reference, row_reference=goal.row_reference, form_context=goal.form_context, max_steps=goal.max_steps, stop_after_inputs=any(step.action_type == ActionType.REPEAT_SUBMIT for step in goal.after_steps), operation=goal.operation, destination=goal.destination) if goal.run_operations and not prepared else {"success": True, "reason": "CHECK_ONLY", "actions": []}
             result: dict[str, Any] = {"goal": index, "operations": operations}
             results.append(result)
+            if not operations["success"] and operations.get("reason") == "OBJECT_UNAVAILABLE_IN_CURRENT_VIEW" and goal.operation in {"observe", "navigate"} and not goal.inputs and goal.checks:
+                targets = []
+                for check in goal.checks:
+                    action = WebAction(check.action_type, target=check.target, assertion=check.assertion, expected=self.runtime.input_values.get(check.expected_reference) if check.expected_reference else check.expected, project_reference=check.project_reference, check_id=check.check_id, behavior_id=check.behavior_id)
+                    targets.append(await self.runtime.original_absence_target(action, control=check.control, context=check.context, allow_parent=True))
+                if all(targets):
+                    operations.update(success=True, reason="ORIGINAL_OBJECT_ABSENCE_CHECK")
+                    self.runtime._record_goal_recovery("OBJECT_UNAVAILABLE_IN_CURRENT_VIEW", "ORIGINAL_OBJECT_ABSENCE_CHECK", True)
             if not operations["success"]:
                 return {"success": False, "failed_goal": index, "results": results, "page": await self._page_summary()}
+            observed = operations.get("object_before")
+            if goal_checks & self._permission_delete_checks() and observed and observed.get("owner_is_actor") is False:
+                forbidden_delete_object = {"target": observed["target"], "identity": observed["identity"]}
             project_reference = goal.project_reference or (self.runtime.active_project["reference"] if self.runtime.active_project else None)
             for step in [*goal.checks, *goal.after_steps]:
                 if step.project_reference is None:
                     step.project_reference = project_reference
-            if goal_checks and goal.run_operations:
+            if goal_checks and goal.run_operations and not prepared:
                 self.runtime.prepared_check_ids.update(goal_checks)
-                self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="PLAN_GOAL_PREPARED", tool="TesterPlan", action="prepare_checks", result={"check_ids": sorted(goal_checks)}, latency_ms=0)
+                self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="PLAN_GOAL_PREPARED", tool="TesterPlan", action="prepare_checks", result={"check_ids": sorted(goal_checks), "operation_binding": self._operation_binding(goal), "forbidden_delete_object": forbidden_delete_object}, latency_ms=0)
+            self._bind_permission_result_assertions(goal)
+            safe_tail = self.readonly_tail and not any(step.action_type == ActionType.REPEAT_SUBMIT for step in goal.after_steps)
             if goal.checks:
-                checks = await self.execute_page_steps(goal.checks, related_task_ids=related_task_ids)
+                self.checking_readonly_tail = safe_tail
+                try:
+                    checks = await self.execute_page_steps(goal.checks, related_task_ids=related_task_ids)
+                finally:
+                    self.checking_readonly_tail = False
                 result["checks"] = checks["results"]
                 if not checks["success"]:
-                    return {"success": False, "failed_goal": index, "reason": checks.get("reason") or checks.get("error_type"), "results": results, "page": checks.get("page", {})}
+                    return {"success": False, "failed_goal": index, "reason": checks.get("reason") or checks.get("error_type"), "failed_check": checks.get("failed_check"), "auxiliary_assertion_failure": checks.get("auxiliary_assertion_failure", False), "results": results, "page": checks.get("page", {})}
             if goal.after_steps:
-                after = await self.execute_page_steps(goal.after_steps, related_task_ids=related_task_ids)
+                self.checking_readonly_tail = safe_tail
+                try:
+                    after = await self.execute_page_steps(goal.after_steps, related_task_ids=related_task_ids)
+                finally:
+                    self.checking_readonly_tail = False
                 result["after_steps"] = after["results"]
                 if not after["success"]:
-                    return {"success": False, "failed_goal": index, "reason": after.get("reason") or after.get("error_type"), "results": results, "page": after.get("page", {})}
+                    return {"success": False, "failed_goal": index, "reason": after.get("reason") or after.get("error_type"), "failed_check": after.get("failed_check"), "auxiliary_assertion_failure": after.get("auxiliary_assertion_failure", False), "results": results, "page": after.get("page", {})}
             if goal.publish_progress:
-                await self.update_task_progress(True, goal.publish_progress)
+                published = self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("TASK_PROGRESS",))
+                if not any(event["result"].get("progressed") is True and event["result"].get("summary") == goal.publish_progress for event in published):
+                    await self.update_task_progress(True, goal.publish_progress)
         if finish:
             return {"success": True, "results": results, "outcome": await self.finish_task()}
         return {"success": True, "results": results, "page": await self._page_summary()}
+
+    @staticmethod
+    def _order_pending_submission_checks(goal: PageGoal, check_specs: dict[str, Any]) -> None:
+        submissions = [(index, step) for index, step in enumerate(goal.after_steps) if step.action_type == ActionType.REPEAT_SUBMIT]
+        if len(submissions) != 1 or not goal.checks:
+            return
+        index, submission = submissions[0]
+        if submission.check_id not in check_specs:
+            return
+        for check in goal.checks:
+            if check.check_id not in check_specs:
+                return
+            dependencies = list(check_specs[check.check_id].get("depends_on", []))
+            visited: set[str] = set()
+            while dependencies:
+                dependency = dependencies.pop()
+                if dependency in visited:
+                    continue
+                visited.add(dependency)
+                dependencies.extend(check_specs.get(dependency, {}).get("depends_on", []))
+            if submission.check_id not in visited:
+                return
+        boundary = index + 1
+        while boundary < len(goal.after_steps) and goal.after_steps[boundary].action_type == ActionType.WAIT:
+            boundary += 1
+        # 显式依赖提交的结果检查应在提交及其等待之后、刷新边界之前执行。
+        goal.after_steps = [*goal.after_steps[:boundary], *goal.checks, *goal.after_steps[boundary:]]
+        goal.checks = []
+
+    @staticmethod
+    def _operation_binding(goal: PageGoal) -> dict[str, Any]:
+        return {"operation": goal.operation, "destination": goal.destination, "context": goal.context, "project_reference": goal.project_reference, "row_reference": goal.row_reference, "form_context": goal.form_context, "inputs": [asdict(binding) for binding in goal.inputs], "pending_submission": any(step.action_type == ActionType.REPEAT_SUBMIT for step in goal.after_steps)}
+
+    def _operation_prepared(self, goal: PageGoal) -> bool:
+        if goal.operation not in {"create", "edit", "delete", "submit"}:
+            return False
+        checks = {step.check_id for step in [*goal.before_steps, *goal.checks, *goal.after_steps] if step.check_id}
+        binding = self._operation_binding(goal)
+        events = self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("PLAN_GOAL_PREPARED",))
+        return bool(checks) and any(checks <= set(event["result"].get("check_ids", [])) and event["result"].get("operation_binding") == binding for event in events)
+
+    def _pending_progress_signals(self) -> list[str]:
+        plans = self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("RUNTIME_SIGNAL_PLAN",))
+        progress = self.store.list_events(self.assignment.run_id, task_id=self.assignment.task_id, event_types=("TASK_PROGRESS",))
+        published = {event["result"].get("summary") for event in progress if event["result"].get("progressed") is True}
+        return sorted({signal["name"] for event in plans for signal in event["result"].get("signals", [])} - published)
 
     async def execute_test_plan(self, goals: list[PageGoal], related_task_ids: list[str] | None = None) -> dict[str, Any]:
         """Trace the initial plan and each exceptional remaining-plan replacement."""
@@ -305,13 +444,17 @@ class TesterAgentTools:
             except ValidationError as error:
                 result = {"success": False, "reason": "INVALID_TEST_PLAN_SCHEMA", "validation_errors": error.errors(include_input=False, include_context=False, include_url=False)}
                 self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="TESTER_PLAN", tool="TesterPlan", action="exception_replan" if phase == "tester_exception_replan" else "initial_plan", result={"schema_rejected": True}, latency_ms=0)
-            failure = {key: result[key] for key in ("reason", "failed_goal", "unavailable_references", "unavailable_object_references", "missing_check_ids", "missing_behavior_ids", "check_id", "unmet_dependencies", "validation_errors", "binding_field", "allowed_contexts", "instruction") if key in result} if not result["success"] else None
+            failure = {key: result[key] for key in ("reason", "failed_goal", "unavailable_references", "unavailable_object_references", "missing_check_ids", "missing_behavior_ids", "missing_progress_signals", "check_id", "unmet_dependencies", "validation_errors", "binding_field", "allowed_contexts", "instruction") if key in result} if not result["success"] else None
             if failure is not None:
                 execution = result.get("failed_execution", {})
+                if execution.get("failed_check"):
+                    failure["failed_check"] = execution["failed_check"]
                 operations = (execution.get("results") or [{}])[-1].get("operations", {})
                 failure["pending_inputs"] = operations.get("pending_inputs", [])
                 last_action = (operations.get("actions") or [{}])[-1]
                 failure["last_action"] = {key: last_action[key] for key in ("action", "control", "value_reference") if key in last_action} or None
+                if self.store is not None:
+                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="TESTER_PLAN_FAILED", tool="TesterPlan", action=phase, result=failure, latency_ms=0)
             self.task_context["latest_plan_failure"] = failure
             self.task_context["last_plan_submitted"] = True
             trace_result(span, success=result["success"], failure_reason=result.get("reason"))
@@ -328,7 +471,18 @@ class TesterAgentTools:
             self.runtime.budget.record_replan()
         phase = "exception_replan" if self.plan_started else "initial_plan"
         self.plan_started = True
+        for goal in goals:
+            if isinstance(goal, dict):
+                for step in goal.get("checks", []):
+                    if "action_type" not in step and (step.get("target") or step.get("control")) and step.get("assertion") in {"contains", "not_contains", "equals", "visible", "hidden", "count"}:
+                        step["action_type"] = "assertion"
+                for step in [*goal.get("before_steps", []), *goal.get("checks", []), *goal.get("after_steps", [])]:
+                    if step.get("action_type") not in {"assertion", "url_check"} and step.get("assertion") is None:
+                        step.pop("assertion", None)
         goals = TypeAdapter(list[PageGoal]).validate_python(goals)
+        for goal in goals:
+            if goal.operation != "navigate" and goal.destination and (not goal.before_steps or goal.before_steps[-1].action_type != ActionType.NAVIGATION or goal.before_steps[-1].control != goal.destination):
+                goal.before_steps.append(PageStep(ActionType.NAVIGATION, control=goal.destination, project_reference=goal.project_reference))
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="TESTER_PLAN", tool="TesterPlan", action=phase, result={"phase": phase, "goal_count": len(goals), "goals": [{"goal": goal.goal, "inputs": [asdict(binding) for binding in goal.inputs], "context": goal.context, "project_reference": goal.project_reference, "row_reference": goal.row_reference, "form_context": goal.form_context, "operation": goal.operation, "destination": goal.destination, "run_operations": goal.run_operations, "check_ids": [step.check_id for step in [*goal.before_steps, *goal.checks, *goal.after_steps] if step.check_id]} for goal in goals]}, latency_ms=0)
         current_outcome = await self.runtime.record_task_outcome()
         current_assertions = current_outcome["assertions"]
@@ -337,8 +491,6 @@ class TesterAgentTools:
         planned: set[str] = set()
         planned_checks: set[str] = set()
         check_specs = {check["check_id"]: check for check in self.runtime.required_checks}
-        current_checks = current_outcome["checks"]
-        assert isinstance(current_checks, list)
         boundaries = {ActionType.NAVIGATION, ActionType.REFRESH, ActionType.REPEAT_SUBMIT, ActionType.WAIT, ActionType.ASSERTION, ActionType.URL_CHECK}
         page = await self._page_summary()
         scopes = self.binding_scopes(page)
@@ -382,8 +534,9 @@ class TesterAgentTools:
                 if step.expected_reference and step.expected_reference.startswith("env:"):
                     return {"success": False, "reason": "ASSERTION_VALUE_UNAVAILABLE"}
                 if step.check_id is not None:
-                    if step.check_id not in check_specs or step.behavior_id != check_specs[step.check_id]["behavior_id"]:
-                        return {"success": False, "reason": "UNKNOWN_OR_INVALID_CHECK_ID"}
+                    if step.check_id not in check_specs or step.behavior_id is not None and step.behavior_id != check_specs[step.check_id]["behavior_id"]:
+                        return {"success": False, "reason": "UNKNOWN_OR_INVALID_CHECK_ID", "check_id": step.check_id}
+                    step.behavior_id = check_specs[step.check_id]["behavior_id"]
                     expected_action = check_specs[step.check_id].get("action_type", "assertion")
                     allowed_actions = {"assertion", "url_check"} if expected_action == "assertion" else {expected_action}
                     if step.action_type.value not in allowed_actions:
@@ -391,36 +544,47 @@ class TesterAgentTools:
                     if step.check_id in planned_checks:
                         return {"success": False, "reason": "DUPLICATE_CHECK_ID"}
                     planned_checks.add(step.check_id)
-                elif check_specs and step.behavior_id:
-                    return {"success": False, "reason": "CHECK_ID_REQUIRED", "remaining_check_ids": [check["check_id"] for check in current_checks if not check["completed"]], "instruction": "Include every remaining required Check ID on its actual check before submitting the replacement plan."}
+                if check_specs and step.action_type == ActionType.REPEAT_SUBMIT and step.check_id is None:
+                    return {"success": False, "reason": "CHECK_ID_REQUIRED", "instruction": "A pending repeated submission must carry its assigned repeat_submit Check ID."}
                 if step.behavior_id:
-                    if step.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK, ActionType.REPEAT_SUBMIT} or step.behavior_id not in self.runtime.expected_behavior_ids:
+                    if step.behavior_id not in self.runtime.expected_behavior_ids or not check_specs and step.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK, ActionType.REPEAT_SUBMIT}:
                         return {"success": False, "reason": "UNKNOWN_OR_INVALID_BEHAVIOR_CHECK", "invalid_behavior_id": step.behavior_id, "assigned_behavior_ids": list(self.runtime.expected_behavior_ids), "instruction": "Use only the actual assigned behavior IDs for goal checks. Do not invent IDs for setup checks."}
                     planned.add(step.behavior_id)
         missing = sorted(set(self.runtime.expected_behavior_ids) - recorded - planned)
         scored_checks = current_outcome["checks"]
         assert isinstance(scored_checks, list)
         recorded_checks = {check["check_id"] for check in scored_checks if check["completed"]}
+        for check_id in sorted(self._permission_delete_checks() - self._attempted_permission_checks() - recorded_checks) if phase == "initial_plan" else []:
+            if not any(goal.operation == "delete" and goal.run_operations and any(step.check_id == check_id for step in [*goal.checks, *goal.after_steps]) for goal in goals):
+                return {"success": False, "reason": "PERMISSION_OPERATION_PLAN_REQUIRED", "check_id": check_id, "instruction": "This explicit forbidden Delete check needs a scoped delete operation, not button visibility. Runtime checks the same original object's preservation after an attempt; an unavailable forbidden control can record protection without fabricating a click."}
         missing_checks = sorted(set(check_specs) - recorded_checks - planned_checks)
         if missing_checks:
-            if phase == "exception_replan" and any(step.check_id is None for goal in goals for step in goal.checks):
+            if any(step.check_id is None and (step.behavior_id or phase == "exception_replan") for goal in goals for step in goal.checks):
                 return {"success": False, "reason": "CHECK_ID_REQUIRED", "missing_check_ids": missing_checks, "remaining_check_ids": sorted(set(check_specs) - recorded_checks), "instruction": "Attach the exact missing required IDs to their actual checks; preserve every remaining Check."}
             return {"success": False, "reason": "INCOMPLETE_TEST_PLAN", "missing_check_ids": missing_checks}
+        if check_specs:
+            # 完整性先按真实 Check ID 校验，辅助断言不能冒充或阻塞必测检查的 ID。
+            for goal in goals:
+                for step in [*goal.before_steps, *goal.checks, *goal.after_steps]:
+                    if step.behavior_id and step.check_id is None:
+                        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="PLAN_AUXILIARY_ASSERTION", tool="TesterPlan", action="unscored_assertion", result={"behavior_id": step.behavior_id, "target": step.target, "control": step.control, "context": step.context}, latency_ms=0)
+                        step.behavior_id = None
+        missing_signals = sorted(set(self._pending_progress_signals()) - {goal.publish_progress for goal in goals})
+        if missing_signals:
+            return {"success": False, "reason": "INCOMPLETE_PROGRESS_PLAN", "missing_progress_signals": missing_signals, "instruction": "Preserve unpublished live-session continuations from the accepted plan, including those whose checks already completed."}
         if not goals and current_outcome["ready_to_finish"]:
             return {"success": True, "outcome": await self.finish_task(), "completed_check_ids": sorted(recorded_checks)}
         if not goals or missing:
             return {"success": False, "reason": "INCOMPLETE_TEST_PLAN", "missing_behavior_ids": missing, "instruction": "Submit every remaining required operation and actual assertion before execution."}
         seen_checks = set(recorded_checks)
         for goal in goals:
+            self._order_pending_submission_checks(goal, check_specs)
             for step in [*goal.before_steps, *goal.checks, *goal.after_steps]:
                 if step.check_id in check_specs and step.check_id not in recorded_checks:
                     unmet = sorted(set(check_specs[step.check_id].get("depends_on", [])) & set(check_specs) - seen_checks)
                     if unmet:
                         return {"success": False, "reason": "CHECK_DEPENDENCY_ORDER_REQUIRED", "check_id": step.check_id, "unmet_dependencies": unmet}
                     seen_checks.add(step.check_id)
-            unavailable_objects = self._unavailable_plan_objects(goal, page)
-            if unavailable_objects:
-                return {"success": False, "reason": "OBJECT_REFERENCE_UNAVAILABLE", "unavailable_object_references": unavailable_objects, "instruction": "Use current observed objects. Reobserve without selecting the unavailable object, or retain original-object check-only evidence. Do not rebind the check to another object."}
         failure = self.runtime.validate_plan_assertions([asdict(goal) for goal in goals])
         if failure:
             return failure
@@ -429,6 +593,7 @@ class TesterAgentTools:
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="TESTER_PLAN_VALIDATED", tool="TesterPlan", action=phase, result={"remaining_check_ids": sorted(set(check_specs) - recorded_checks), "planned_check_ids": sorted(planned_checks), "state_id": page.get("state_id")}, latency_ms=0)
         try:
             for index, goal in enumerate(goals):
+                self.readonly_tail = all(item.operation in {"navigate", "observe"} and not item.inputs and all(step.action_type in {ActionType.NAVIGATION, ActionType.REFRESH, ActionType.WAIT, ActionType.ASSERTION, ActionType.URL_CHECK} for step in [*item.before_steps, *item.after_steps]) for item in goals[index + 1:])
                 current_outcome = await self.runtime.record_task_outcome()
                 outcome_checks = current_outcome["checks"]
                 assert isinstance(outcome_checks, list)
@@ -436,6 +601,11 @@ class TesterAgentTools:
                 goal_steps = [*goal.before_steps, *goal.checks, *goal.after_steps]
                 goal_checks = {step.check_id for step in goal_steps if step.check_id}
                 if goal_checks and goal_checks <= recorded_checks:
+                    # Check 完成不代表后续边界或 live-session 信号已完成。
+                    continuation = replace(goal, run_operations=False, inputs=[], wait_for_progress=None, before_steps=[], checks=[], after_steps=[step for step in goal.after_steps if step.check_id not in recorded_checks])
+                    result = await self.execute_page_goals([continuation], related_task_ids=related_task_ids)
+                    if not result["success"]:
+                        return {"success": False, "reason": result.get("reason", "PLAN_EXECUTION_BLOCKED"), "failed_goal": index, "failed_execution": result}
                     continue
                 if not check_specs:
                     behaviors = {step.behavior_id for step in goal_steps if step.behavior_id}
@@ -449,6 +619,11 @@ class TesterAgentTools:
                 result = await self.execute_page_goals([goal], related_task_ids=related_task_ids)
                 operations = (result.get("results") or [{}])[-1].get("operations", {})
                 if not result["success"]:
+                    remaining = [goal, *goals[index + 1:]]
+                    readonly = all(item.operation in {"navigate", "observe"} and not item.inputs and all(step.action_type in {ActionType.NAVIGATION, ActionType.REFRESH, ActionType.WAIT, ActionType.ASSERTION, ActionType.URL_CHECK} for step in [*item.before_steps, *item.after_steps]) for item in remaining)
+                    if result.get("auxiliary_assertion_failure") and readonly and not goal_checks and not goal.publish_progress and not goal.after_steps:
+                        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="READ_ONLY_ASSERTION_CONTINUATION", tool="TesterPlan", action="continue_observation", result={"failed_goal": index, "reason": result.get("reason"), "remaining_check_ids": sorted(set(check_specs) - recorded_checks)}, latency_ms=0)
+                        continue
                     reason = result.get("reason") or result.get("error_type") or operations.get("reason") or "PLAN_EXECUTION_BLOCKED"
                     if str(reason).startswith("JEV_ERROR:"):
                         await self.runtime.stop_task(str(reason))
@@ -463,10 +638,13 @@ class TesterAgentTools:
             return {"success": bool(outcome["finished"]), "outcome": outcome, "completed_check_ids": sorted(check["check_id"] for check in outcome_checks if check["completed"])}
         finally:
             self.executing_plan = False
+            self.readonly_tail = False
+            self.checking_readonly_tail = False
 
     def _unavailable_plan_objects(self, goal: PageGoal, page: dict[str, Any]) -> list[str]:
-        check_ids = {step.check_id for step in [*goal.before_steps, *goal.checks, *goal.after_steps] if step.check_id}
-        if not goal.run_operations or check_ids and check_ids <= self.runtime.prepared_check_ids:
+        if any(step.action_type == ActionType.NAVIGATION for step in goal.before_steps):
+            return []
+        if not goal.run_operations or goal.operation in {"navigate", "observe", "create", "login", "logout"} or self._operation_prepared(goal):
             return []
         unavailable = {binding["reference"] for binding in page.get("object_bindings", []) if binding["status"] == "unavailable"}
         references = {goal.project_reference, goal.row_reference, goal.context} - {None, ""}
@@ -489,7 +667,12 @@ class TesterAgentTools:
                 return {"success": False, "failed_step": index, "error_type": "COUNT_REQUIRES_ROW_SELECTOR", "instruction": "Use a target matching all relevant rows, not one selected cell.", "results": results}
             if step.action_type in {ActionType.INPUT, ActionType.SELECT} and step.value_reference is None:
                 return {"success": False, "failed_step": index, "error_type": "INPUT_REFERENCE_REQUIRED", "results": results}
-            if step.control is not None:
+            if await self._unsupported_permission_oracle(step):
+                return {"success": False, "failed_step": index, "reason": "PERMISSION_OPERATION_EVIDENCE_REQUIRED", "check_id": step.check_id, "target": step.target, "control": step.control, "failed_check": {"check_id": step.check_id, "target": step.target, "control": step.control, "object": {"context": step.context, "project_reference": step.project_reference}, "assertion": step.assertion}, "instruction": "The available control does not prove authorization. Attempt the scoped forbidden operation and verify denial or object preservation; do not report button visibility as a bug.", "results": results, "page": await self._page_summary()}
+            if step.control is not None and step.action_type == ActionType.NAVIGATION:
+                navigation = await self.runtime.execute_page_goal("Navigate to the explicit boundary destination", operation="navigate", destination=step.control, project_reference=step.project_reference)
+                result = {"success": navigation["success"], "error_type": None if navigation["success"] else navigation.get("reason"), "source": "RUNTIME", "resolved_target": None}
+            elif step.control is not None:
                 if step.action_type not in {ActionType.INPUT, ActionType.SELECT, ActionType.CLICK, ActionType.REPEAT_SUBMIT, ActionType.ASSERTION}:
                     return {"success": False, "failed_step": index, "error_type": "CONTROL_ACTION_UNSUPPORTED", "results": results}
                 if step.value_reference is not None and step.value_reference not in self.runtime.input_values:
@@ -505,8 +688,8 @@ class TesterAgentTools:
                 result = await self.execute_known_action(step.action_type, target=step.target, value_reference=step.value_reference, url=step.url, expected=step.expected, assertion=step.assertion, behavior_id=step.behavior_id, check_id=step.check_id, project_reference=step.project_reference, goal_check=step.behavior_id is not None, key=step.key, wait_ms=step.wait_ms)
                 result["source"] = "PLAYWRIGHT"
                 result["resolved_target"] = step.target
-            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="PAGE_STEP", tool="TesterPageSteps", action=step.action_type.value, result={"source": result["source"], "semantic_control": step.control is not None, "success": result["success"], "behavior_id": step.behavior_id, "browser_event_id": result.get("event_id")}, latency_ms=0)
-            compact = {"step": index, "action": step.action_type.value, "success": result["success"], "source": result["source"]}
+            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="PAGE_STEP", tool="TesterPageSteps", action=step.action_type.value, result={"source": result["source"], "semantic_control": step.control is not None, "success": result["success"], "behavior_id": step.behavior_id, "check_id": step.check_id, "target": result.get("resolved_target"), "control": step.control, "object": {"context": step.context, "project_reference": step.project_reference}, "failure_reason": result.get("error_type"), "browser_event_id": result.get("event_id")}, latency_ms=0)
+            compact = {"step": index, "action": step.action_type.value, "success": result["success"], "source": result["source"], "check_id": step.check_id, "control": step.control, "target": result.get("resolved_target"), "object": {"context": step.context, "project_reference": step.project_reference}}
             if step.behavior_id:
                 compact["behavior_id"] = step.behavior_id
             if not result["success"]:
@@ -516,19 +699,70 @@ class TesterAgentTools:
                     session_id = self.runtime.browser_session_id
                     assert session_id is not None
                     page = self.runtime.browser_manager.get_session(session_id).page
-                    expected_result = f"{result.get('resolved_target') or 'body'} {step.assertion} {step.expected or ''}"
+                    observed_action: dict[str, Any] = next((item["action_data"] for item in self.store.list_action_history(run_id=self.assignment.run_id, task_id=self.assignment.task_id) if item["event_id"] == result.get("event_id")), {})
+                    observed_assertion = observed_action.get("assertion", step.assertion)
+                    expected_result = f"{observed_action.get('target') or result.get('resolved_target') or 'body'} {observed_assertion} {observed_action.get('expected', step.expected) or ''}"
                     finding = next((finding for finding in self.store.list_recent_findings(self.assignment.run_id, limit=1000) if finding["task_id"] == self.assignment.task_id and finding["action"] == step.behavior_id and finding["expected_result"] == expected_result), None)
                     if finding is None:
-                        finding = await self.record_finding(title=f"{step.behavior_id}: {step.assertion} check failed", status="ANOMALY", expected_result=expected_result, actual_result=str(compact["actual"]), affected_page=page.url, action=step.behavior_id, behavior_id=step.behavior_id, check_id=step.check_id, related_task_ids=related_task_ids)
+                        finding = await self.record_finding(title=f"{step.behavior_id}: {observed_assertion} check failed", status="ANOMALY", expected_result=expected_result, actual_result=json.dumps(compact["actual"], ensure_ascii=False), affected_page=page.url, action=step.behavior_id, behavior_id=step.behavior_id, check_id=step.check_id, related_task_ids=related_task_ids)
                     compact["finding_id"] = finding["finding_id"]
                     self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="CHECK_FINDING_LINKED", tool="Python", action="link_check_evidence", result={"finding_id": finding["finding_id"], "check_id": step.check_id, "behavior_id": step.behavior_id, "boundary_event_id": result.get("event_id")}, latency_ms=0)
-                elif result.get("error_type") != "ASSERTION_FAILURE":
+                else:
+                    if result.get("error_type") == "ASSERTION_FAILURE" and step.check_id is None and step.behavior_id is None and self.checking_readonly_tail:
+                        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="READ_ONLY_ASSERTION_CONTINUATION", tool="TesterPlan", action="continue_checks", result={"target": compact["target"], "control": step.control, "assertion": step.assertion, "browser_event_id": result.get("event_id")}, latency_ms=0)
+                        results.append(compact)
+                        continue
                     results.append(compact)
-                    return {"success": False, "failed_step": index, "reason": result.get("error_type") or "PAGE_STEP_BLOCKED", "results": results, "page": await self._page_summary()}
+                    return {"success": False, "failed_step": index, "reason": result.get("error_type") or "PAGE_STEP_BLOCKED", "failed_check": {"check_id": step.check_id, "target": step.target, "control": step.control, "object": {"context": step.context, "project_reference": step.project_reference}, "assertion": step.assertion}, "auxiliary_assertion_failure": result.get("error_type") == "ASSERTION_FAILURE" and step.check_id is None and step.behavior_id is None, "results": results, "page": await self._page_summary()}
             results.append(compact)
         if finish:
             return {"success": True, "results": results, "outcome": await self.finish_task()}
         return {"success": True, "results": results, "page": await self._page_summary()}
+
+    async def _unsupported_permission_oracle(self, step: PageStep) -> bool:
+        if step.action_type == ActionType.ASSERTION and step.check_id in self._permission_delete_checks() and step.check_id not in self._attempted_permission_checks() and self.runtime.browser_session_id:
+            page = self.runtime.browser_manager.get_session(self.runtime.browser_session_id).page
+            state = await self.runtime.page_state_reader.read(page)
+            rows = await self.runtime.page_state_reader.read_rows(page)
+            self.runtime.remember_assertion_targets(rows, step.context)
+            scoped = [row for row in rows if row.get("identity", {}).get("data-project-id") and (step.context and self.runtime._row_matches_context(row, step.context) or step.target and all(f"[{attribute}={json.dumps(value)}]" in step.target.replace("'", '"') for attribute, value in row["identity"].items()))]
+            controls = [element for element in state.interactive_elements if element.enabled and element.label.casefold() in {"delete", "remove"} and any(element.context_target and str(row["target"]).endswith(element.context_target) for row in scoped)]
+            if controls:
+                return True
+            absence = step.assertion == "hidden" or step.assertion == "count" and (step.expected == "0" or step.expected_reference and self.runtime.input_values.get(step.expected_reference) == "0")
+            if absence and step.target:
+                targets = [(target, container) for known in self.runtime.assertion_targets.values() for target, container in known.items() if '[data-project-id=' in target and '[data-project-id=' in step.target]
+                known_scope = bool(scoped)
+                for cached_target, container in targets:
+                    identity = '[data-project-id=' + cached_target.split('[data-project-id=', 1)[1].split(']', 1)[0] + ']'
+                    if container and identity in step.target.replace("'", '"') and await page.locator(container).is_visible():
+                        known_scope = True
+                        break
+                original = page.locator(step.target)
+                if known_scope and (await original.count() == 0 or step.assertion == "hidden" and not await original.first.is_visible()):
+                    return False
+            if absence and step.control and step.control.casefold() in {"delete", "remove"} and len(scoped) == 1:
+                return False
+            return True
+        if step.action_type != ActionType.ASSERTION or step.assertion != "hidden" or not step.check_id or self.runtime.browser_session_id is None:
+            return False
+        behaviors = self.task_context.get("expected_behaviors", [])
+        if not any(behavior["behavior_id"] == step.behavior_id and behavior.get("applies_to", "").casefold().startswith("permission/") for behavior in behaviors):
+            return False
+        page = self.runtime.browser_manager.get_session(self.runtime.browser_session_id).page
+        selector = step.target
+        if selector is None and step.control:
+            state = await self.runtime.page_state_reader.read(page)
+            rows = await self.runtime.page_state_reader.read_rows(page)
+            matches = [element for element in state.interactive_elements if self.runtime._field_matches(element, step.control) and (not step.context or any(row["target"].endswith(element.context_target or "missing") and self.runtime._row_matches_context(row, step.context) for row in rows))]
+            if len(matches) == 1:
+                selector = matches[0].target
+        if selector is None:
+            return False
+        target = page.locator(selector)
+        if await target.count() != 1 or not await target.is_visible() or not await target.is_enabled():
+            return False
+        return bool(await target.evaluate("element => element.matches('button, a, input[type=submit], [role=button]')"))
 
     async def _page_summary(self) -> dict[str, Any]:
         if self.runtime.browser_session_id is None:
@@ -573,8 +807,7 @@ class TesterAgentTools:
             project_references.add(selected["reference"])
         if project_selects:
             for reference in sorted(project_references & references):
-                value = self.runtime.input_values[reference]
-                present = any(value in {label, option} for element in project_selects for label, option in element.options)
+                present = any(self.runtime._project_options(element, reference) for element in project_selects)
                 bindings.append({"reference": reference, "kind": "project", "status": "present" if present else "unavailable"})
         summary["current_object"] = current
         summary["object_bindings"] = bindings

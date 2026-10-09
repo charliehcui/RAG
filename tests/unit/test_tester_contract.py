@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from types import MethodType, SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -10,11 +11,16 @@ import pytest
 from agent_framework import BaseChatClient, ChatResponse, Content, Message
 from agent_framework._tools import FunctionInvocationLayer
 
+from web_testing_system.agents.tester_agent import (
+    PageGoal,
+    PageStep,
+    create_tester_agent,
+)
 from web_testing_system.agents.tester_agent import TesterAgentTools as AgentTools
 from web_testing_system.agents.tester_agent import TesterAssignment as Assignment
 from web_testing_system.agents.tester_agent import TesterRunner as Runner
-from web_testing_system.agents.tester_agent import create_tester_agent
 from web_testing_system.runtime.budget import BudgetGuard, BudgetLimits
+from web_testing_system.runtime.models import ActionType, InteractiveElement
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
 from web_testing_system.state import StateStore
 
@@ -63,17 +69,73 @@ def test_plan_schema_advertises_task_ids_and_position_specific_actions(contract_
     assert "destination" in definitions["PageGoal"]["required"]
     assert definitions["PageGoal"]["allOf"][0]["then"]["properties"]["destination"]["type"] == "string"
     assert len(schema["properties"]["goals"]["allOf"]) == 2
+    assert len(definitions["PlanAssertion"]["allOf"]) == 3
+    assert definitions["PlanBoundary"]["properties"]["wait_ms"]["maximum"] == 2000
+    assert "assertion" not in definitions["PlanBoundary"]["required"]
+
+
+@pytest.mark.asyncio
+async def test_unused_boundary_assertion_null_is_normalized_without_weakening_real_assertions(contract_tools: AgentTools) -> None:
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
+    goal = {"goal": "Verify checks after refresh", "operation": "observe", "run_operations": False, "before_steps": [{"action_type": "refresh", "assertion": None}], "checks": [assertion("C.empty"), assertion("C.valid")]}
+    result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert result["reason"] == "LOCAL_EXECUTION_MARKER", result
+    assert contract_tools.execute_page_goals.call_args.args[0][0].before_steps[0].assertion == "contains"
+    goal["checks"][0]["assertion"] = None
+    result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert result["reason"] == "INVALID_TEST_PLAN_SCHEMA"
+
+
+@pytest.mark.asyncio
+async def test_invalid_wait_is_rejected_before_any_operation(contract_tools: AgentTools) -> None:
+    result = await contract_tools.execute_test_plan([{"goal": "Create then settle", "operation": "create", "inputs": [{"control": "Name", "value_reference": "valid_name"}], "checks": [assertion("C.empty"), assertion("C.valid")], "after_steps": [{"action_type": "wait", "wait_ms": 3000}]}])  # type: ignore[list-item]
+    assert result["reason"] == "INVALID_WAIT_DURATION"
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replan", [False, True])
-async def test_complete_required_ids_do_not_reject_an_unscored_auxiliary_assertion(contract_tools: AgentTools, replan: bool) -> None:
+@pytest.mark.parametrize("behavior_id", [None, "EB-name"])
+@pytest.mark.parametrize("boundary", [False, True])
+async def test_complete_required_ids_do_not_reject_an_unscored_auxiliary_assertion(contract_tools: AgentTools, replan: bool, behavior_id: str | None, boundary: bool) -> None:
     contract_tools.plan_started = replan
     contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
-    goal = {"goal": "Verify supplied checks and an incidental page precondition", "operation": "observe", "run_operations": False, "checks": [assertion("C.empty"), assertion("C.valid"), {"action_type": "assertion", "target": "body", "assertion": "visible"}]}
+    goal = {"goal": "Verify supplied checks and an incidental page precondition", "operation": "observe", "run_operations": False, "checks": [assertion("C.empty"), assertion("C.valid"), {"action_type": "assertion", "target": "body", "assertion": "visible", "behavior_id": behavior_id}]}
+    if boundary:
+        goal["before_steps"] = [{"action_type": "refresh", "behavior_id": behavior_id}]
     result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
     assert result["reason"] == "LOCAL_EXECUTION_MARKER", result
     contract_tools.execute_page_goals.assert_awaited_once()
+    executed = contract_tools.execute_page_goals.call_args.args[0][0]
+    assert executed.checks[-1].behavior_id is None and executed.checks[-1].check_id is None
+
+
+@pytest.mark.asyncio
+async def test_check_id_supplies_redundant_behavior_id_without_guessing_missing_checks(contract_tools: AgentTools) -> None:
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
+    checks = [{**assertion(check_id), "behavior_id": None} for check_id in ["C.empty", "C.valid"]]
+    result = await contract_tools.execute_test_plan([{"goal": "Check assigned IDs", "operation": "observe", "checks": checks}])  # type: ignore[list-item]
+    assert result["reason"] == "LOCAL_EXECUTION_MARKER"
+    assert all(step.behavior_id == "EB-name" for step in contract_tools.execute_page_goals.call_args.args[0][0].checks)
+
+
+@pytest.mark.asyncio
+async def test_behavior_only_assertion_does_not_replace_a_missing_required_check(contract_tools: AgentTools) -> None:
+    result = await contract_tools.execute_test_plan([{"goal": "Incomplete evidence", "operation": "observe", "checks": [assertion("C.empty"), {"action_type": "assertion", "target": "body", "expected": "Validation", "behavior_id": "EB-name"}]}])  # type: ignore[list-item]
+    assert result["reason"] == "CHECK_ID_REQUIRED" and result["missing_check_ids"] == ["C.valid"]
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_replan_must_preserve_a_completed_checks_unpublished_live_signal(contract_tools: AgentTools) -> None:
+    contract_tools.runtime.register_progress_plan([{"publish_progress": "member-session-ready", "checks": [assertion("C.empty")]}])
+    contract_tools.runtime.record_task_outcome.return_value["checks"][0]["completed"] = True  # type: ignore[attr-defined]
+    context = await contract_tools.planning_context()
+    assert context["pending_progress_signals"] == ["member-session-ready"]
+    result = await contract_tools.execute_test_plan([{"goal": "Remaining check with lost continuation", "operation": "observe", "checks": [assertion("C.valid")]}])  # type: ignore[list-item]
+    assert result["reason"] == "INCOMPLETE_PROGRESS_PLAN"
+    assert result["missing_progress_signals"] == ["member-session-ready"]
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
@@ -123,7 +185,7 @@ async def test_replan_cannot_drop_a_downstream_check_after_current_blocker(contr
 @pytest.mark.parametrize("field,value", [("project_reference", "valid_name"), ("row_reference", "valid_name"), ("context", "Contract Project")])
 async def test_known_unavailable_object_cannot_be_used_for_an_operation(contract_tools: AgentTools, field: str, value: str) -> None:
     contract_tools._page_summary = AsyncMock(return_value={"object_bindings": [{"reference": "valid_name", "status": "unavailable"}]})  # type: ignore[method-assign]
-    goal = {"goal": "Navigate using stale object", "operation": "navigate", "destination": "Tasks", field: value, "checks": [assertion("C.empty"), assertion("C.valid")]}
+    goal = {"goal": "Delete using stale object", "operation": "delete", "row_reference": "valid_name", field: value, "checks": [assertion("C.empty"), assertion("C.valid")]}
     result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
     assert result["reason"] == "OBJECT_REFERENCE_UNAVAILABLE"
     assert result["unavailable_object_references"] == ["valid_name"]
@@ -207,6 +269,145 @@ async def test_contract_preserves_independent_check_state_and_hides_unassigned_i
 
 def assertion(check_id: str) -> dict[str, Any]:
     return {"action_type": "assertion", "target": "body", "expected": "Validation", "behavior_id": "EB-name", "check_id": check_id}
+
+
+def test_entity_name_is_not_an_action_button_assertion_alias() -> None:
+    button = InteractiveElement(kind="button", label="Add Member", target="#add-member")
+    assert not WebTestingRuntime._field_matches(button, "Member")
+    assert WebTestingRuntime._field_matches(button, "Add Member")
+    assert WebTestingRuntime._field_matches(InteractiveElement(kind="select", label="Member project", target="#project"), "Project")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replan", [False, True])
+async def test_explicit_operation_destination_is_executed_after_existing_preparation(contract_tools: AgentTools, replan: bool) -> None:
+    contract_tools.plan_started = replan
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
+    goal = {"goal": "Create in the declared destination", "operation": "create", "destination": "Projects", "before_steps": [{"action_type": "refresh"}], "checks": [assertion("C.empty"), assertion("C.valid")]}
+    result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert result["reason"] == "LOCAL_EXECUTION_MARKER"
+    compiled = contract_tools.execute_page_goals.call_args.args[0][0]
+    assert [step.action_type for step in compiled.before_steps] == [ActionType.REFRESH, ActionType.NAVIGATION]
+    assert compiled.before_steps[-1].control == "Projects"
+    assert compiled.before_steps[-1].check_id is None
+
+
+def test_permission_contract_uses_assigned_checks_even_when_main_operations_are_business_descriptions(contract_tools: AgentTools) -> None:
+    contract_tools.assignment = replace(contract_tools.assignment, role="member")
+    contract_tools.task_context.update(required_operations=["attempt-supplied-project-delete-or-record-protection"], expected_behaviors=[{"behavior_id": "EB-name", "applies_to": "Permission/member/delete"}, {"behavior_id": "unassigned", "applies_to": "Permission/member/delete"}])
+    for check in contract_tools.runtime.required_checks:
+        check["description"] = "Attempt Delete and verify rejection"
+    assert contract_tools._permission_delete_checks() == {"C.empty", "C.valid"}
+    assert len(contract_tools.plan_tool().parameters()["properties"]["goals"]["allOf"]) == 4
+
+
+def test_permission_setup_and_preservation_checks_do_not_require_repeated_delete(contract_tools: AgentTools) -> None:
+    contract_tools.assignment = replace(contract_tools.assignment, role="member")
+    contract_tools.task_context["expected_behaviors"] = [{"behavior_id": "EB-name", "applies_to": "Permission/member/delete"}]
+    contract_tools.runtime.required_checks = [{"check_id": "prep", "behavior_id": "EB-name", "description": "Observe the provided joined project and its admin owner"}, {"check_id": "probe", "behavior_id": "EB-name", "description": "The non-owner Delete attempt is rejected or unavailable"}, {"check_id": "project", "behavior_id": "EB-name", "description": "Refresh and verify the same project remains"}, {"check_id": "task", "behavior_id": "EB-name", "description": "Reopen Tasks and verify the same task remains"}]
+    assert contract_tools._permission_delete_checks() == {"probe"}
+    assert len(contract_tools.plan_tool().parameters()["properties"]["goals"]["allOf"]) == 5
+
+
+@pytest.mark.asyncio
+async def test_initial_permission_plan_requires_the_declared_operation_but_replan_preserves_check_only_protection(contract_tools: AgentTools) -> None:
+    contract_tools.assignment = replace(contract_tools.assignment, role="member")
+    contract_tools.task_context.update(required_operations=["delete"], expected_behaviors=[{"behavior_id": "EB-name", "applies_to": "Permission/member/delete"}])
+    for check in contract_tools.runtime.required_checks:
+        check["description"] = "Attempt Delete and verify rejection"
+    schema = contract_tools.plan_tool().parameters()
+    assert len(schema["properties"]["goals"]["allOf"]) == 4
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
+    goal = {"goal": "Verify supplied forbidden object", "operation": "observe", "run_operations": False, "checks": [assertion("C.empty"), assertion("C.valid")]}
+    initial = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert initial["reason"] == "PERMISSION_OPERATION_PLAN_REQUIRED"
+    contract_tools.execute_page_goals.assert_not_awaited()
+    goal.update(operation="delete", run_operations=True, row_reference="valid_name")
+    accepted = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert accepted["reason"] == "LOCAL_EXECUTION_MARKER"
+    goal.update(operation="observe", run_operations=False, row_reference=None)
+    protection = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert protection["reason"] == "LOCAL_EXECUTION_MARKER"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replan", [False, True])
+@pytest.mark.parametrize("semantic", [False, True])
+async def test_missing_assertion_type_is_unambiguous_only_with_explicit_target_and_operator(contract_tools: AgentTools, replan: bool, semantic: bool) -> None:
+    contract_tools.plan_started = replan
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
+    checks = [assertion("C.empty"), assertion("C.valid")]
+    for check in checks:
+        check.pop("action_type")
+        check["assertion"] = "contains"
+        if semantic:
+            check.pop("target")
+            check["control"] = "Name"
+    result = await contract_tools.execute_test_plan([{"goal": "Check explicit targets", "operation": "observe", "run_operations": False, "checks": checks}])  # type: ignore[list-item]
+    assert result["reason"] == "LOCAL_EXECUTION_MARKER", result
+    assert all(step.action_type == ActionType.ASSERTION for step in contract_tools.execute_page_goals.call_args.args[0][0].checks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["explicit_null", "no_target", "boundary"])
+async def test_assertion_type_default_does_not_invent_missing_targets_or_boundary_actions(contract_tools: AgentTools, bad: str) -> None:
+    checks = [assertion("C.empty"), assertion("C.valid")]
+    checks[0]["assertion"] = "contains"
+    checks[0].pop("action_type")
+    goal = {"goal": "Reject ambiguous step", "operation": "observe", "run_operations": False, "checks": checks}
+    if bad == "explicit_null":
+        checks[0]["action_type"] = None
+    elif bad == "no_target":
+        checks[0].pop("target")
+    else:
+        goal["before_steps"] = [{"target": "#refresh", "assertion": "visible"}]
+    result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert result["reason"] == "INVALID_TEST_PLAN_SCHEMA"
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_replan_failure_keeps_exact_assertion_contract_without_nested_history(contract_tools: AgentTools) -> None:
+    detail = {"check_id": "C.empty", "target": None, "control": "Member", "object": {"context": "valid_name", "project_reference": None}, "assertion": "hidden"}
+    contract_tools.runtime.execute_page_goal.side_effect = None  # type: ignore[attr-defined]
+    contract_tools.runtime.active_project = None  # type: ignore[attr-defined]
+    contract_tools.runtime.execute_page_goal.return_value = {"success": True, "actions": []}  # type: ignore[attr-defined]
+    contract_tools.execute_page_steps = AsyncMock(return_value={"success": False, "reason": "CONTROL_NOT_FOUND", "failed_check": detail, "results": []})  # type: ignore[method-assign]
+    await contract_tools.execute_test_plan([{"goal": "Inspect scoped check", "operation": "observe", "checks": [assertion("C.empty"), assertion("C.valid")]}])  # type: ignore[list-item]
+    failure = contract_tools.task_context["latest_plan_failure"]
+    context = await contract_tools.planning_context(failure)
+    assert context["latest_failure"]["failed_check"] == detail
+    assert context["remaining_check_ids"] == ["C.empty", "C.valid"]
+    assert "failed_execution" not in json.dumps(context)
+
+
+@pytest.mark.parametrize("dependent", [False, True])
+def test_pending_submission_phase_uses_explicit_dependencies_without_crossing_refresh(dependent: bool) -> None:
+    checks = {"pending": {"depends_on": []}, "settled": {"depends_on": ["pending"] if dependent else []}, "persisted": {"depends_on": ["settled"]}}
+    settled = PageStep(ActionType.ASSERTION, target="#rows", assertion="count", expected="1", check_id="settled")
+    goal = PageGoal("Pending creation", operation="create", checks=[settled], after_steps=[PageStep(ActionType.REPEAT_SUBMIT, target="#submit", check_id="pending"), PageStep(ActionType.WAIT, wait_ms=10), PageStep(ActionType.REFRESH), PageStep(ActionType.ASSERTION, target="#rows", assertion="count", expected="1", check_id="persisted")])
+    AgentTools._order_pending_submission_checks(goal, checks)
+    if dependent:
+        assert not goal.checks
+        assert [step.action_type for step in goal.after_steps] == [ActionType.REPEAT_SUBMIT, ActionType.WAIT, ActionType.ASSERTION, ActionType.REFRESH, ActionType.ASSERTION]
+        assert [step.check_id for step in goal.after_steps if step.check_id] == ["pending", "settled", "persisted"]
+    else:
+        assert goal.checks == [settled]
+        assert [step.action_type for step in goal.after_steps] == [ActionType.REPEAT_SUBMIT, ActionType.WAIT, ActionType.REFRESH, ActionType.ASSERTION]
+
+
+@pytest.mark.asyncio
+async def test_pending_submission_phase_is_compiled_before_initial_and_replan_validation(contract_tools: AgentTools) -> None:
+    runtime = contract_tools.runtime
+    runtime.required_checks[0]["action_type"] = "repeat_submit"
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
+    for _ in range(2):
+        goal = {"goal": "Submit then check settled state", "operation": "create", "checks": [assertion("C.valid")], "after_steps": [{"action_type": "repeat_submit", "target": "#submit", "url": "http://app.test/api/projects", "check_id": "C.empty"}, {"action_type": "wait", "wait_ms": 10}]}
+        result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+        assert result["reason"] == "LOCAL_EXECUTION_MARKER", result
+        compiled = contract_tools.execute_page_goals.call_args.args[0][0]
+        assert not compiled.checks
+        assert [step.check_id for step in compiled.after_steps] == ["C.empty", None, "C.valid"]
 
 
 @pytest.mark.asyncio

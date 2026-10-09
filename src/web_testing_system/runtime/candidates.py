@@ -159,6 +159,7 @@ class PageStateReader:
     async def read_rows(self, page: Page) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = await page.locator("tr").evaluate_all("""elements => elements.flatMap((row, index) => {
             if (!row.getClientRects().length) return [];
+            if (row.closest('thead') || Array.from(row.children).every(cell => cell.tagName === 'TH')) return [];
             const table = row.closest('table');
             const headers = table?.querySelector('thead tr')?.children || [];
             const attribute = Array.from(row.attributes).find(item => item.name.startsWith('data-') && (item.name.endsWith('-id') || item.name === 'data-username')) || Array.from(row.attributes).find(item => item.name.startsWith('data-'));
@@ -277,7 +278,15 @@ class CandidateBuilder:
         ranked.sort(key=lambda item: (-item[0], item[1].candidate_id))
         if excluded_candidates:
             ranked = [item for item in ranked if item[1].candidate_id not in excluded_candidates]
-        candidates = [item[1] for item in ranked[: self.max_candidates]]
+        unique: dict[str, ActionCandidate] = {}
+        for _, candidate in ranked:
+            previous = unique.get(candidate.candidate_id)
+            if previous is not None:
+                if any(getattr(previous, name) != getattr(candidate, name) for name in candidate.__dataclass_fields__ if name != "label"):
+                    raise ValueError("CONFLICTING_CANDIDATE_ID")
+                continue
+            unique[candidate.candidate_id] = candidate
+        candidates = list(unique.values())[: self.max_candidates]
         if include_controls:
             candidates.extend(self._control_candidates(page_state.state_id))
         return candidates

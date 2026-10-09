@@ -1,5 +1,36 @@
 # Main Optimization
 
+## Final Stabilization 最终结论 — 2026-10-10
+
+- Problem：需要确认下游集中修复没有回退既有工作流/依赖/预算继承。
+- Why：后续业务失败不能通过改 Main 或压缩/扩大执行预算掩盖。
+- Change：Main 源码保持冻结，仅核对当前真实 state.db、报告和 trace。
+- Before：既有 Main 规划/预算检查通过，后续失败归属 Tester/Runtime 接口。
+- After：最终 D12 必要任务启动 2/2、依赖/死锁/关闭重定向/预算缩减 0、每个 Task 90，Main Requests 2（Planning 1、Summary 1）、Replan 0。下游严格 2/2 Tasks、7/7 Checks、FP 0、E2E PASS；415 Span 树完整，保护文件哈希未变。
+- Final Decision：Main 不再优化；FINAL_BENCHMARK_READY = YES，整体代码冻结并停止。最新测量仅 D12，不与旧 D03/D13 混合分数；最终 Benchmark/Holdout 仍等待用户单独授权，benchmark_history.md 不更新。
+
+## Final Stabilization：业务操作描述与执行接口分离 — 2026-10-09
+
+- Problem：D12 Main 的 required_operations 是 attempt-project-1-delete-or-record-protection 等业务步骤，Tester 接口若只识别字面 delete 会遗漏已明确分配的权限检查。
+- Why：Main 负责工作流，其业务步骤不是 Runtime opcode 或浏览器预算。纠正接口不应把 Main 退回页面规划。
+- Change：Main 未修改。下游以实际分配 Check ID、既有可信规格及角色确定必要权限操作，仍由 Tester 生成高层计划、Runtime 绑定和执行；不解析业务描述猜步骤。
+- Before：005 两个必要任务均启动、预算 90、依赖/死锁/缩减 0，Main Requests 1、Replan 0；业务失败来自后续计划/断言接口。
+- After：新 Main→Tester→Runtime 正常/缺陷双会话本地集成通过，所有步骤与权限职责保持；正式代码及预算冻结。
+- Final Decision：Main 继续停止优化，仅修正确性接口。不修改 benchmark_history.md。
+
+## Final Stabilization：继续保留 Main 冻结状态 — 2026-10-09
+
+- Problem：后续检查仍有业务失败，需要确认并非任务依赖或 Main 缩减执行预算复发。
+- Why：Runtime / Tester 失败不能通过重新规划架构或增加 Main 调用掩盖。
+- Change：Main 源码、依赖编译、预算配置均未修改；只读整理最新已有 state.db 与报告。
+- Before：此前必要工作流均启动，Task Budget 继承固定配置 90，Main Replan 0。
+- After：最新 D03/D12/D13 必要工作流启动 8/8、无无效依赖/死锁、八个 Task 均继承 90、Main Replan 0、Requests 4。三个中止来自 Runtime/Tester 接口阻塞及原时长上限，没有 Main 导致的步数停止。
+- Final Decision：Main 保持冻结，不重新优化。后续修复只限 Tester/Runtime 正确性；正式 Benchmark/Holdout 未运行，benchmark_history.md 未修改。
+
+Final Stabilization 继续（2026-10-09）：沿用已验证的 Workflow / Check Dependency Compilation 与固定 execution budget inheritance。本轮目前没有 Main 源码修改；后续代表性验证检查 required task startup、dependency/deadlock、重复 Task 和每 Task 固定预算。上一轮 8/8 Tasks 启动、预算全部 90、Main Replan 0 的记录保留，不以其他层失败调整 Main。
+
+Final Stabilization（2026-10-09）：Main 源码、Workflow/Dependency Compilation 与确定性 Execution Budget Inheritance 保持原冻结版本。完整本地回归包含启动、依赖、预算、并行和关闭任务保护；此次只在既有 Replay 接口中从 Check 依赖恢复实时参与者，未重新引入整 Task 等待边。唯一 D03/D12/D13 Readiness Checkpoint 验证必要工作流启动 8/8，全部 Task budget = 90，无无效/循环依赖、死锁、关闭重定向、重复 Task 或 Main 分配导致的 step stop。Main Requests 6（Planning 3、Summary 3）、Main Replan 0，完整实时信号顺序正确。Main 无本轮新增待修根因，继续冻结。系统总体仍为 FINAL_BENCHMARK_READY = NO：剩余候选重复、断言接口及错误测试 Oracle 属于 Runtime / Tester，详见 [Final Readiness Summary](final_readiness_summary.md)。不开始新的 Main 优化或正式 Benchmark，不修改 benchmark_history.md。
+
 ## 连续工作流与依赖编译（Workflow Planning / Dependency Compilation）— 2026-10-08
 
 - Problem：D12 的成员会话等待管理员撤权，Main 却将管理员依赖于整个成员 Task 完成；触发 LIVE_PARTICIPANT_DEPENDS_ON_OBSERVER。既有 Replan 将原来的两个连续角色工作流拆成准备、管理员操作、成员验证、保留性检查四个新 Task，并重复分配 Check，最终留下四个未启动 Task。历史接口也允许模型逐次猜 Task ID/依赖和重规划对象，未知依赖/关闭 Task 只能在工具调用时被拒绝。

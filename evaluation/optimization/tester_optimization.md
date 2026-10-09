@@ -1,5 +1,77 @@
 # Tester Optimization
 
+## Final Stabilization 最终结论 — 2026-10-10
+
+- Problem：Baseline 的重规划限制与不可执行计划，后续还出现作用域、目的地及无操作权限 Finding；不能靠换模型、放宽评分或加预算处理。
+- Why：业务目标、计划结构、页面状态及真实证据之间的确定性契约没有闭合。
+- Change：保留 Initial Plan / Exception Replan，集中补齐计划、输入、Check、对象、目的地、权限证据与只读续接；Runtime 恢复已知视图，Jev 保持有限判断，Playwright 执行，Scoring/Evaluation 不变。
+- Before：保留冻结 Baseline v2 与 001–007 的有效质量失败；006 即便 7/7 Checks 仍 FP 1，007 受异常重规划后原时长限制导致复现不足，均不替换。
+- After：最终冻结 D12：Task Success 2/2、Checks 7/7、FP 0、Tester 3/2 = 1.5、计划 Initial 2 / Exception 1、Validation 0、Replan Limit 0，严格 E2E PASS；B2/B6 全检出，8/8 复现匹配。新增 45 项相关测试通过；旧全量 355+安全 1 的证据保留而不重跑。最新版本仅测 D12，旧 D03/D13 成绩不合并。见 [Final Readiness Summary](final_readiness_summary.md)。
+- Final Decision：FINAL_BENCHMARK_READY = YES。达到四项核心条件，停止优化、冻结代码，不再做真实 checkpoint，不运行最终 Benchmark/Holdout，不更新 benchmark_history.md。
+
+## Final Stabilization：对象视图恢复保留原权限结果 — 2026-10-09
+
+- Problem：007 合法剩余计划仍需 Tester 为已知 Project 的错误视图恢复，导致最终复现赶上原时长上限。
+- Why：Exception Replan 不应承担已知容器恢复；恢复后不能继续使用恢复前错误页面的 Owner 快照。
+- Change：Runtime 先有限恢复原已绑定 Project 容器；返回实际选中动作对应的原对象快照和非敏感 Owner/Actor 关系，Tester 的已有结果契约继续使用该原对象。高层计划、剩余 Check ID、权限准备/独立保留性检查及预算规则保持。
+- Before：007 0/2 Tasks、7/7 Checks、Tester 4/2，FP 0，必要信号齐全，复现没有在原上限内完成。
+- After：新增完整缺陷双会话不调用 Exception Replan，2/2、7/7、FP 0，两类缺陷全部检出且回放完成；包含未知对象、同名对象与步数限制验证。45 项新增测试最终通过，原通过内容不重测。
+- Final Decision：保留 Tester = Initial Plan / Exception Replan，已知视图恢复由 Runtime 完成；最新版本待冻结验证，正式 Benchmark/Holdout 不运行。
+
+## Final Stabilization：目的地执行与权限证据边界 — 2026-10-09
+
+- Problem：006 两个 Task 已关闭、7/7 Checks，但 1 个 FP 使严格 Task Success 1/2。Member 的 delete 目标声明 destination=Projects，却停留 Tasks；Replan 未尝试 Delete，把项目仍存在错误归成删除越权。稳定回放不等于正确 Finding。
+- Why：非 navigate 操作的显式 destination 没有执行；权限保护仅挡按钮 hidden，未挡无操作证据的 Project count/visibility。相同行为还包含准备及独立保留性检查，不能都强制删除或改写断言。
+- Change：把明确目的地编译成原 before_steps 之后、实际操作之前的无评分导航，保留原顺序及全部预算；当前视图不可见时不能在导航前断言对象消失。删除权限 Finding 必须有真实操作证据；可见 Project/按钮不能证明破坏权限，真正不可用控件仍可记录保护。仅明确描述删除拒绝/不可用结果的已分配 Check 获得操作约束与原对象保留性契约，准备/刷新/Task 保留性检查独立且不改写。已观察 Owner 等于 Actor 时，非所有者探测在执行前拒绝；正常所有者/管理员删除保持原语义。
+- Before：006 Task Success 1/2、Checks 7/7、Tester 4/2、FP 1；检测 B6，B2 未执行，三个 Finding 全部稳定回放，错误 oracle 被冻结 GT 正确拒绝。
+- After：新增目的地 Initial/Replan、完整正常/缺陷双会话、无操作权限误报拒绝、真实不可用控件、独立准备/保留性检查及非所有者对象安全验证通过；本次续做累计 41 项新测试，原完整回归及通过的 D03/D13 不重复。Ruff/mypy/diff 通过。
+- Final Decision：保留严格 GT/Scoring 和全部有效历史。等待最新冻结 D12 必要验证，不拼接旧成绩、不运行正式 Benchmark/Holdout。
+
+## Final Stabilization：显式权限操作与只读结果续接 — 2026-10-09
+
+- Problem：005 字段/ID 校验拒绝已为 0，但成员计划仍用 Delete 按钮隐藏替代操作证据；实际 Delete 后无评分的项目可见检查阻止正式 Check，最终 0/2 Tasks、5/7 Checks、Tester 5/2，原时长中止。
+- Why：只检查检查数量不等于覆盖必要操作；无评分的操作后观察不应阻断后续只读证据。Main 的 required_operations 是业务描述，不能依赖字面 delete 枚举来识别权限任务。
+- Change：按当前实际分配的稳定 Check ID、可信权限规格和角色，Initial Plan 明确包含关联的 scoped Delete；不从通用规格扩展检查。Replan 保留已执行操作及不可用控件保护。仅在已完成操作、剩余步骤全部只读时保留辅助失败并继续正式检查；提交前及后续仍有修改时严格中止。已实际尝试非所有者删除时，用操作前明确 Owner/Actor 和原稳定对象校验保留性，按钮消失不能伪装拒绝；所有者/管理员正常删除不改写。准备操作复用不覆盖原对象/权限证据，不增加预算或修改评分。
+- Before：005 计划字段拒绝 0，目标/权限/辅助边界造成三次异常计划，最后检查及信号未完成；历史质量结果保留。
+- After：新增 10 项必要测试通过：正常/缺陷双会话均 2/2 Tasks、7/7 Checks、FP 0；缺陷路径 Initial Plans 2、Exception Replan 0、两类缺陷全检出并完整回放。覆盖所有者权限不变、类型明确的实体行、辅助观察与真实前置条件隔离、已完成 Check 的后续安全边界、Main 业务描述兼容。Ruff、mypy、diff 通过；原完整回归及通过的 D03/D13 不重复。
+- Final Decision：代码集中完成，等待最新冻结 D12 的必要验证。权限校验加强同一对象的结果标准，不降低 Evaluation；不运行最终 Benchmark/Holdout。
+
+## Final Stabilization：异常断言契约与确定性类型补齐 — 2026-10-09
+
+- Problem：004 中 D03 已 3/3 Tasks、18/18 Checks；D12 第一次重规划四个检查省略 action_type，导致额外模型等待并耗尽原时长。此前 CONTROL_NOT_FOUND 的具体 Check/control/object 已写事件，却未传入异常计划。
+- Why：checks 本来限定 assertion/url_check，有明确目标和合法断言运算符时类型可确定；异常返回又把具体失败目标压缩成笼统原因。
+- Change：仅在 checks 内、action_type 键缺失、存在明确 target/control 且提供合法断言运算符时确定补齐 assertion；显式 null/错误类型、无目标、无运算符或未知边界仍拒绝。不补 Check ID/输入/目标/预期。异常上下文保留最新失败 Check ID、control/target、对象引用和运算符，不重传完整历史，不自动猜失效对象。实体控件名不再通过后缀误匹配动作按钮，未明确的 Member 目标不会被 Add Member 按钮冒充。
+- Before：004 D03/D12 为 3/5 Tasks、19/25 Checks、FP 0、Tester 8/5；D12 为 0/2、1/7，初始控制描述失败、一次 Schema 拒绝及原时长中止，均保留有效历史。
+- After：新增 11 项相关测试通过，含确定性类型、严格拒绝、失败目标上下文、未来行创建及实体/按钮隔离；完整本地双会话重现“已撤权但语义断言目标错误→重规划”，不重复撤权、覆盖所有剩余 Check、保留信号和自动回放。冻结 GT 后验为 2/2 Tasks、7/7 Checks、FP 0、两类缺陷全部检出。D03、D13 和此前通过的完整回归不重跑。修复版本必要真实验证只针对尚失败的 D12，不拼接版本成绩。
+- Final Decision：保留原架构和全部严格条件。最新版本尚未完成真实验证，不标记 ready；不运行正式 Benchmark/Holdout。
+
+## Final Stabilization：显式检查依赖与提交阶段 — 2026-10-09
+
+- Problem：已有有效 D13 记录中，pending-settled 放在 checks，而其依赖的 repeat_submit 放在 after_steps；预检正确拒绝顺序，但引发一次不必要重规划。
+- Why：模型输出的列表位置与稳定 Check ID 的明确依赖不一致。完整覆盖检查并不保证可执行顺序。
+- Change：仅在当前 checks 全部通过明确依赖指向同一个 after_steps.repeat_submit 时，将这些结果检查放到提交及紧邻等待之后、原刷新边界之前。保留全部 Check ID、动作、等待、刷新和检查标准；辅助前置检查或无依赖检查不移动。Initial Plan / Exception Replan 共用此编排，不修改 Prompt、模型或预算。
+- Before：上一冻结版本 D03/D12/D13 为 5/8 Tasks、27/39 Checks、FP 0、Tester 13/8；D13 自身 3/3、14/14，但存在一次 CHECK_DEPENDENCY_ORDER_REQUIRED。
+- After：新增 Initial/Replan 编排及依赖边界本地测试通过。已通过的 D13 和原完整回归不重跑；下一次必要真实验证只覆盖修复后仍失败的普通流程与实时双会话，不将不同版本结果拼成最终达标数字。
+- Final Decision：保留确定性编排，历史有效结果不替换。当前尚未完成修复版本的真实验证，不能标记 ready；不运行最终 Benchmark 或 Holdout。
+
+## Final Stabilization 继续：可执行契约与权限证据 — 2026-10-09
+
+- Problem：上一轮真实检查的 6/19 计划提交遗漏 assertion target / expected state / navigation destination；非法等待在已执行操作后才拒绝；D12 把按钮可见误报为删除越权。
+- Why：输出 Schema 没有完整表达执行前校验；可见控件与业务操作结果不是同一证据，稳定回放也不能证明错误 oracle 正确。
+- Change：Schema 明确 assertion target/control、expected/reference 与导航条件；整份计划在执行前检查现有等待上限。权限规格下，当前可用按钮的 hidden 断言不能形成权限 Finding，返回明确操作证据缺失原因；真正不可用控件仍可记录保护。提供原有可信 expected_behaviors，不新增必测目标。语义导航保留显式 Project 引用。后续集中修复非断言边界的无关 null 运算符；空字符串使用 JSON 明确记录，Finding 预期从实际断言事件读取。辅助失败仅允许继续原计划的只读观察，禁止后续修改、漏检或发布成功信号。
+- Before：D03/D12/D13：Task Success 5/8、Checks 27/39、Tester Calls 19/8、False Positive 1。
+- After：首组集中修改后全量本地测试 350/350 通过。冻结的 D03/D12/D13 验证为 Task Success 5/8、Checks 38/39、Tester 14/8、FP 1。D03 暴露导航跳过显式 Project 输入；D12 空字符串证据被误当成缺失而多发起无效 Replan，管理员辅助前置失败也造成不必要 Replan；D13 非断言 null 运算符有两次 Schema 拒绝，最终 3/3 Tasks、14/14 Checks、FP 0。所有结果保留为有效质量测量。后续相关 111 个本地测试通过，完整双会话缺陷路径改为两份 Initial Plan、无 Exception Replan；最终全量回归和下一份冻结验证进行中，尚不宣称 ready。
+- Final Decision：按用户新的继续指令集中修复并验证，直到四个核心指标同时达标；正式 Development Benchmark 和 Holdout 不运行。此前一次检查及失败结果保留。
+
+## Final Stabilization：完整计划、辅助边界与恢复契约 — 2026-10-09
+
+- Problem：最新 D12 四份计划已列齐必要 Check ID，仍被 CHECK_ID_REQUIRED 拒绝；恢复只记录 prepared_check_ids，可能跳过不同操作或丢失已完成检查后的信号。
+- Why：逐步检查 behavior 标记早于整份计划完整性判断；Check 完成、操作已执行、后续边界及信号发布被混为同一状态。辅助断言失败也可能被继续执行，历史计划失败缺少具体目标信息。
+- Change：先严格校验全部剩余 Check ID、动作、输入和顺序；合法 ID 的冗余 behavior 由程序补齐，冲突、重复和真实遗漏仍拒绝。完整覆盖之外的辅助断言/刷新保持未评分，辅助失败阻止危险后续动作。仅复用相同操作、对象引用和输入的已执行准备；完成检查后的边界与信号继续处理，信号幂等发布，Replan 不得丢弃已接受计划的未发布信号。明确导航边界交给 Runtime。记录 Check ID、control/target、对象和失败原因，不修改 Prompt、模型或预算。
+- Before：Runtime Checkpoint D12 为 0/2 Tasks、1/7 Checks，Tester 6 Calls；四次拒绝摘要均覆盖必要 ID。此前整 Goal 跳过会忽略 publisher。
+- After：344 个当前本地测试最终全部通过（全量回归加相关修改后的针对性回归）；完整双会话正常及缺陷流程、本地自动跨角色 Replay、严格评分/报告一致性、Tracing 和 Safety 均覆盖。开发阶段真实 LLM 调用 0。冻结后唯一一次 D03/D12/D13 检查：Task Success 5/8（62.50%）、Checks 27/39（69.23%）、Tester 19 Calls（2.375/Task），Initial 8、Exception Replan 11；两个 Task 停在 Replan Limit（25%）。Check ID / Input Reference 拒绝为 0，但缺 Target ×4、缺 Expected State ×1、缺 Navigation Destination ×1，合计 6/19 计划提交被预检拒绝；另有一份进入执行的计划在动作发生后因非法 wait duration 返回。所有被接受计划均覆盖剩余必要 ID，未通过 Check 并未被伪造为完成。
+- Final Decision：FINAL_BENCHMARK_READY = NO，停止，不进行第二次真实检查或进一步代码修改。剩余 Tester / Plan Contract 问题是断言目标/预期和导航边界没有完整反映到输出约束，等待限制还在执行阶段拒绝，以及业务测试语义校验不足。D12 把 Delete 按钮隐藏当作删除权限目标，没有实际触发 Delete；该错误断言虽能稳定回放，仍是 FP，正式评分正确让成员 Task FAIL。重复 Project 候选导致的 Jev 低置信度是 Runtime 问题，不能只归因于 Tester。详见 [Final Readiness Summary](final_readiness_summary.md) 和 [Native Review](../../artifacts/runs/final-readiness-cp-20261009-001/final_readiness_review.json)。正式 Benchmark/Holdout 与 benchmark_history.md 均未运行或更新。
+
 状态：新的 Runtime / Jev 职责纠正阶段已完成一次冻结的 D05/D07/D13 代表性检查（Representative Checkpoint）并停止。Task Success、Check Completion、Tester Calls 和 Replan Limit 达标，Plan Validation Failure 仍为 2/8，目标未全部达到；不追加检查或修改，等待用户确认。以下前两轮结果保留为历史，不补跑。正式比较基准为 Baseline v2。完整基线（Baseline）见 [Benchmark History](../benchmark_history.md)。
 
 这里只记录已实现的优化方向。本地验证数字说明执行路径，不能与完整基线（Baseline）直接相减计算性能收益；成熟版本的正式数字统一记录到基准历史（Benchmark History）。

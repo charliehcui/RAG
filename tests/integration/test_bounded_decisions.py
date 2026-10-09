@@ -142,7 +142,7 @@ async def test_disappearance_between_goals_blocks_stale_operation_then_allows_or
     try:
         first = {"action_type": "assertion", "control": "Name", "context": "name", "assertion": "hidden", "behavior_id": "EB-flow", "check_id": "local.first"}
         last = {**first, "check_id": "local.last", "assertion": "visible"}
-        result = await tools.execute_test_plan([{"goal": "Delete original object", "operation": "delete", "row_reference": "name", "checks": [first]}, {"goal": "Reopen using the old object", "operation": "navigate", "destination": "Projects", "row_reference": "name", "checks": [last]}])  # type: ignore[list-item]
+        result = await tools.execute_test_plan([{"goal": "Delete original object", "operation": "delete", "row_reference": "name", "checks": [first]}, {"goal": "Edit the vanished original object", "operation": "edit", "row_reference": "name", "checks": [last]}])  # type: ignore[list-item]
         assert result["reason"] == "OBJECT_REFERENCE_UNAVAILABLE"
         assert result["remaining_check_ids"] == ["local.last"]
         assert len(phase2_store.list_events("run-1", event_types=("PAGE_GOAL_OPERATION_COMPLETED",))) == 1

@@ -200,6 +200,40 @@ class WebTestingRuntime:
         if changed:
             self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PROJECT_BOUND", tool="WebTestingRuntime", action="bind_project", result={"reference": reference, "object_id": value, "target": target}, latency_ms=0)
 
+    async def original_absence_target(self, action: WebAction, *, control: str | None = None, context: str = "", allow_parent: bool = False) -> str | None:
+        positive = action.assertion == "visible" or action.assertion in {"contains", "equals"} and bool(action.expected and action.expected.strip()) or action.assertion == "count" and bool(action.expected and action.expected.isdigit() and int(action.expected) > 0)
+        if action.action_type != ActionType.ASSERTION or not (action.assertion == "hidden" or action.assertion == "count" and action.expected == "0" or allow_parent and positive and action.check_id and any(check["check_id"] == action.check_id for check in self.required_checks)):
+            return None
+        project_id = self.project_ids.get(action.project_reference or "")
+        if not project_id or self.browser_session_id is None:
+            return None
+        page = self.browser_manager.get_session(self.browser_session_id).page
+        if allow_parent and positive:
+            scopes = [project["value"] for (alias, _, _), project in self.object_projects.items() if alias == context.casefold()]
+            if scopes and project_id not in scopes:
+                return None
+            state = await self.page_state_reader.read(page)
+            selects = [element for element in state.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
+            if len(selects) == 1 and not self._project_options(selects[0], action.project_reference):
+                return f"{selects[0].target} >> option[value={json.dumps(project_id)}]"
+            return None
+        for (alias, container, scope), row_target in self.object_targets.items():
+            identity = self.object_identities.get((alias, scope), {})
+            if scope != project_id and identity.get("data-project-id") != project_id or not container or not await page.locator(container).is_visible():
+                continue
+            target = action.target
+            if control and self.input_values.get(context, context).casefold() != self.input_values.get(alias, alias).casefold():
+                continue
+            if control and context.casefold() == alias:
+                header = {"project name": "name", "task title": "title", "member username": "username", "member name": "name", "display name": "name"}.get(control.casefold(), control.casefold())
+                remembered = self.assertion_targets.get((header, alias), {})
+                targets = [candidate for candidate in remembered if candidate.startswith(row_target + " >>")]
+                if len(targets) == 1:
+                    target = targets[0]
+            if target and identity and all(f"[{attribute}={json.dumps(value)}]" in target.replace("'", '"') for attribute, value in identity.items()):
+                return target
+        return None
+
     def validate_assertion_contract(self, action: WebAction, *, control: str | None = None, context: str = "") -> dict[str, Any] | None:
         if action.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK}:
             return None
@@ -208,6 +242,10 @@ class WebTestingRuntime:
             reason = "ASSERTION_TARGET_REQUIRED"
         elif action.action_type == ActionType.URL_CHECK and action.expected is None or action.action_type == ActionType.ASSERTION and action.assertion in {"contains", "not_contains", "equals", "count"} and action.expected is None:
             reason = "ASSERTION_EXPECTED_STATE_REQUIRED"
+        elif action.action_type == ActionType.ASSERTION and action.assertion in {"visible", "hidden"} and action.expected is not None:
+            reason = "VISIBILITY_DOES_NOT_COMPARE_TEXT"
+        elif action.action_type == ActionType.ASSERTION and action.assertion == "count" and control:
+            reason = "COUNT_REQUIRES_ROW_SELECTOR"
         if reason is None:
             return None
         failure = {"success": False, "reason": reason, "check_id": action.check_id, "target": action.target, "control": control, "object": {"context": context, "project_reference": action.project_reference}, "expected_state": action.assertion}
@@ -217,6 +255,8 @@ class WebTestingRuntime:
     def validate_plan_assertions(self, goals: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
         for goal in goals:
             for step in [*goal.get("before_steps", []), *goal.get("checks", []), *goal.get("after_steps", [])]:
+                if step["action_type"] == ActionType.WAIT and not step.get("target") and not 0 <= step.get("wait_ms", 0) <= 2000:
+                    return {"success": False, "reason": "INVALID_WAIT_DURATION", "check_id": step.get("check_id")}
                 action = WebAction(action_type=ActionType(step["action_type"]), target=step.get("target"), assertion=step.get("assertion", "contains"), expected=self.input_values.get(step["expected_reference"]) if step.get("expected_reference") else step.get("expected"), check_id=step.get("check_id"), behavior_id=step.get("behavior_id"), project_reference=step.get("project_reference") or goal.get("project_reference"))
                 failure = self.validate_assertion_contract(action, control=step.get("control"), context=step.get("context") or goal.get("row_reference") or goal.get("context", ""))
                 if failure:
@@ -296,7 +336,19 @@ class WebTestingRuntime:
     def _field_matches(element: InteractiveElement, control: str) -> bool:
         names = (element.label, element.target, *element.field_names)
         normalized = " ".join(control.casefold().split())
-        return any(normalized == " ".join(name.casefold().split()) or " " not in normalized and " ".join(name.casefold().split()).endswith(" " + normalized) for name in names)
+        if element.kind == "select":
+            for suffix in (" selector", " dropdown", " select", " combobox"):
+                if normalized.endswith(suffix):
+                    normalized = normalized.removesuffix(suffix)
+                    break
+        elif element.kind in {"input", "textarea"}:
+            for suffix in (" field", " input", " textbox"):
+                if normalized.endswith(suffix):
+                    normalized = normalized.removesuffix(suffix)
+                    break
+        if normalized == "task name" and element.kind in {"input", "textarea"} and element.label.casefold() == "task title":
+            return True
+        return any(normalized == " ".join(name.casefold().split()) or element.kind in {"input", "textarea", "select", "cell"} and " " not in normalized and " ".join(name.casefold().split()).endswith(" " + normalized) for name in names)
 
     async def _form_inputs_bound(self, elements: Sequence[InteractiveElement], submit: InteractiveElement) -> bool:
         assert self.browser_session_id is not None
@@ -361,6 +413,9 @@ class WebTestingRuntime:
         session = self.browser_manager.get_session(self.browser_session_id)
         if action.action_type == ActionType.ASSERTION and action.target and isinstance(self.executor, PlaywrightExecutor):
             rows = await self.page_state_reader.read_rows(session.page)
+            for row in rows:
+                if row.get("identity") and all(f"[{attribute}={json.dumps(value)}]" in action.target.replace("'", '"') for attribute, value in row["identity"].items()):
+                    self._bind_rows(rows, str(row["target"]))
             for reference, value in self.input_values.items():
                 if not reference.startswith("env:") and value.strip() and ("project" in reference.casefold() or reference == action.project_reference or any(row.get("identity", {}).get("data-project-id") == value for row in rows)) and any(row.get("identity", {}).get("data-project-id") and self._row_matches_context(row, reference) for row in rows):
                     self._bind_rows(rows, reference)
@@ -384,7 +439,13 @@ class WebTestingRuntime:
             observed = await self.page_state_reader.read(session.page)
             project_selects = [element for element in observed.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
             if any(len(self._project_options(element, action.project_reference)) != 1 or element.selected_value != self._project_options(element, action.project_reference)[0][1] for element in project_selects):
-                return self._stopped_result("OBJECT_PROJECT_MISMATCH")
+                observed = await self.page_state_reader.read(session.page)
+                project_selects = [element for element in observed.interactive_elements if element.kind == "select" and "project" in element.label.casefold()]
+                absence_target = await self.original_absence_target(action, allow_parent=True)
+                if not project_selects or any(self._project_options(element, action.project_reference) for element in project_selects) or absence_target is None:
+                    return self._stopped_result("OBJECT_PROJECT_MISMATCH")
+                if action.assertion != "hidden" and not (action.assertion == "count" and action.expected == "0"):
+                    action = replace(action, target=absence_target, assertion="count", expected="1")
         if action.action_type in {ActionType.CLICK, ActionType.REPEAT_SUBMIT} and action.target and isinstance(self.executor, PlaywrightExecutor):
             observed = await self.page_state_reader.read(session.page)
             locator = session.page.locator(action.target)
@@ -468,8 +529,10 @@ class WebTestingRuntime:
             input_progress = False
             modal_row = self.modal_row
             operation_done = False
+            operation_object: dict[str, Any] | None = None
             refresh_reason: str | None = None
             previous_candidates: tuple[str, ...] = ()
+            restored_container: str | None = None
             # 末次动作后再观察一次；到达 max_steps 时禁止新的候选选择或执行。
             for step_index in range(max_steps + 1):
                 try:
@@ -481,6 +544,19 @@ class WebTestingRuntime:
                     modal_row = None
                     self.modal_row = None
                 rows = await self.page_state_reader.read_rows(session.page)
+                if operation in {"edit", "delete"} and row_context and not modal_row and not operation_done:
+                    known = [(target, container) for (alias, container, scope), target in self.object_targets.items() if alias == row_context.casefold() and container and self.object_identities.get((alias, scope), {}).get("data-project-id") and not await session.page.locator(container).is_visible()]
+                    if len(set(known)) == 1 and restored_container != known[0][1] and step_index < max_steps:
+                        navigation = [element for element in page_state.interactive_elements if element.label.casefold() == "projects" and element.context_kind not in {"tr", "form", "dialog"} and element.kind in {"button", "a"}]
+                        if len(navigation) == 1:
+                            candidates = self.candidate_builder.build(goal="Restore the known original Project view", page_state=replace(page_state, interactive_elements=tuple(navigation)), include_controls=False, business_actions=[BusinessAction("Restore Projects view", WebAction(ActionType.CLICK, target=navigation[0].target))])
+                            if len(candidates) == 1:
+                                restored = await self._execute_candidate("Restore the original bound Project container", page_state, candidates[0], source="RUNTIME_TO_PLAYWRIGHT")
+                                if restored.action_result is not None and restored.action_result.success:
+                                    restored_container = known[0][1]
+                                    actions.append({"action": "click", "control": navigation[0].label, "value_reference": None})
+                                    self._record_goal_recovery("OBJECT_NOT_VISIBLE_IN_CURRENT_VIEW", "ORIGINAL_CONTAINER_REOBSERVED", True)
+                                    continue
                 for reference, value in self.input_values.items():
                     project_input = any(binding["value_reference"] == reference and "project" in binding["control"].casefold() for binding in inputs)
                     if not reference.startswith("env:") and value.strip() and ("project" in reference.casefold() or reference == project_reference or project_input or any(row.get("identity", {}).get("data-project-id") == value for row in rows)) and any(row.get("identity", {}).get("data-project-id") and self._row_matches_context(row, reference) for row in rows):
@@ -511,7 +587,8 @@ class WebTestingRuntime:
                     self.active_project = None
                 project_ready = not project_selects
                 project_actions: list[BusinessAction] = []
-                if project_selects:
+                project_inputs = [binding for binding in inputs if any(self._field_matches(element, binding["control"]) for element in project_selects)]
+                if project_selects and not (operation == "navigate" and project_reference is None and not project_inputs):
                     if project_reference is None:
                         bound = {binding["value_reference"] for binding in inputs if not binding["value_reference"].startswith("env:") and any(self._field_matches(element, binding["control"]) for element in project_selects)}
                         if len(bound) == 1:
@@ -566,7 +643,7 @@ class WebTestingRuntime:
                         available = scoped
                     matched = [element for element in available if self._field_matches(element, binding["control"])]
                     bound_rows = [row for row in rows if row_context and self._row_matches_context(row, row_context)]
-                    editing = row_reference is not None or bound_rows and binding["value_reference"] not in {row_context, project_reference}
+                    editing = operation == "edit" or operation is None and (row_reference is not None or bound_rows and binding["value_reference"] not in {row_context, project_reference})
                     if editing and modal_row is None:
                         matched = [element for element in matched if element.context_kind == "tr"]
                     if not matched and modal_row is not None:
@@ -578,6 +655,14 @@ class WebTestingRuntime:
                     for element in matched:
                         action_type = ActionType.SELECT if element.kind == "select" else ActionType.INPUT
                         reference = binding["value_reference"]
+                        if element.kind == "select" and "project" in element.label.casefold() and project_reference:
+                            if reference != project_reference:
+                                return {"success": False, "reason": "CONFLICTING_PROJECT_INPUT", "control": binding["control"], "actions": actions}
+                            options = self._project_options(element, reference)
+                            if len(options) == 1 and element.selected_value == options[0][1]:
+                                completed_inputs[index] = element.target
+                                self.input_targets[element.target] = reference
+                                continue
                         action = WebAction(action_type=action_type, target=element.target, value=self.input_values[reference], value_reference=reference)
                         business_actions.append(BusinessAction(label=f"Fill {element.label} using {reference} ({element.context})", action=action))
                         candidate_id = self.candidate_builder._candidate_id(page_state.state_id, action_type.value, f"{element.target}:{reference}")
@@ -592,7 +677,7 @@ class WebTestingRuntime:
                         form_ready = form_ready and (form_context in {element.form_target, element.context_target, element.context} or element.form_target == f"[id={json.dumps(form_context.removeprefix('#'))}]")
                     if inputs:
                         form_ready = form_ready and all(any(item.target == target and (item.form_target or item.context_target) == (element.form_target or element.context_target) for item in elements) for target in completed_inputs.values())
-                    if row_reference:
+                    if row_reference and operation in {None, "edit"}:
                         form_ready = form_ready and element.context_kind == "dialog" and modal_row is not None
                     if form_ready:
                         form_ready = await self._form_inputs_bound(elements, element)
@@ -603,11 +688,11 @@ class WebTestingRuntime:
                 phase = "legacy"
                 eligible = list(elements)
                 if operation:
-                    if operation_done and operation == "navigate" and project_reference is None or operation_done and project_ready and not pending or operation == "observe" and project_ready and not pending:
+                    if operation_done and operation == "navigate" and project_reference is None and not pending or operation_done and project_ready and not pending or operation == "observe" and project_ready and not pending:
                         if refresh_reason:
                             self._record_goal_recovery(refresh_reason, "OPERATION_EXECUTED_AND_OBSERVED", True)
                         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="PAGE_GOAL_OPERATION_COMPLETED", tool="WebTestingRuntime", action=operation, result={"operation": operation, "state_id": page_state.state_id, "assertions_pending": True}, latency_ms=0)
-                        return {"success": True, "reason": "OPERATION_EXECUTED_AND_OBSERVED", "actions": actions}
+                        return {"success": True, "reason": "OPERATION_EXECUTED_AND_OBSERVED", "actions": actions, "object_before": operation_object}
                     if operation == "navigate" and not operation_done:
                         phase = "navigate"
                         eligible = [element for element in elements if element.kind not in {"input", "select", "textarea"} and element.context_kind not in {"tr", "form", "dialog"} and self._field_matches(element, destination or "")]
@@ -681,6 +766,12 @@ class WebTestingRuntime:
                     completed_inputs[input_candidates[candidate.candidate_id]] = candidate.target
                 clicked = next((element for element in elements if element.target == candidate.target), None)
                 if candidate.action == "click" and clicked is not None and clicked.context_kind == "tr":
+                    if operation == "delete":
+                        original = next((row for row in rows if clicked.context_target and str(row["target"]).endswith(clicked.context_target)), None)
+                        if original and original.get("identity", {}).get("data-project-id"):
+                            actor = self.input_values.get(f"{getattr(self.executor, 'identity_reference', None)}_username")
+                            owner = next((cell["text"] for cell in original["cells"] if cell["header"].casefold() == "owner"), None)
+                            operation_object = {"target": original["target"], "identity": original["identity"], "owner_is_actor": owner == actor if owner and actor else None}
                     modal_row = clicked.context_target
                     self.modal_row = modal_row
                 actions.append({"action": candidate.action, "control": candidate.label, "value_reference": candidate.value_reference})
@@ -723,9 +814,9 @@ class WebTestingRuntime:
                 return DecisionResult(source="RUNTIME", reason=failure["reason"], needs_tester_llm=True)
             first_reason = None
             for attempt in range(2):
-                result = await self._resolve_page_action(action, control=control, context=context, project_reference=project_reference, refused_state_id=self.last_decision_state_id if attempt and first_reason in {"LOW_JEV_CONFIDENCE", "NO_SELECTION"} else None)
+                result = await self._resolve_page_action(action, control=control, context=context, project_reference=project_reference, refused_state_id=self.last_decision_state_id if attempt and first_reason in {"LOW_JEV_CONFIDENCE", "NO_SELECTION"} else None, allow_project_absence=attempt > 0)
                 if attempt:
-                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="RUNTIME_RECOVERY", tool="WebTestingRuntime", action="reobserve_control", result={"reason": first_reason, "final_reason": result.reason, "recovered": result.action_result is not None and result.action_result.success}, latency_ms=0)
+                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="RUNTIME_RECOVERY", tool="WebTestingRuntime", action="reobserve_control", result={"reason": first_reason, "final_reason": result.reason, "recovered": result.action_result is not None and (result.action_result.success or result.action_result.error_type == "ASSERTION_FAILURE")}, latency_ms=0)
                 if result.reason not in {"CONTROL_NOT_FOUND", "CANDIDATE_EXPIRED", "TARGET_INVALID", "LOW_JEV_CONFIDENCE", "NO_SELECTION", "PROJECT_BINDING_UNAVAILABLE"}:
                     return result
                 first_reason = result.reason
@@ -734,7 +825,7 @@ class WebTestingRuntime:
                 result = replace(result, reason="OBJECT_UNAVAILABLE_IN_CURRENT_VIEW")
             return replace(result, source="TESTER_LLM", needs_tester_llm=True)
 
-    async def _resolve_page_action(self, action: WebAction, *, control: str, context: str, project_reference: str | None, refused_state_id: str | None = None) -> DecisionResult:
+    async def _resolve_page_action(self, action: WebAction, *, control: str, context: str, project_reference: str | None, refused_state_id: str | None = None, allow_project_absence: bool = False) -> DecisionResult:
         if self.task_finished:
             return DecisionResult(source="STOP", reason="TASK_ALREADY_FINISHED")
         if self.browser_session_id is None:
@@ -756,6 +847,15 @@ class WebTestingRuntime:
             for element in project_selects:
                 options = self._project_options(element, project_reference)
                 if len(options) != 1:
+                    target = await self.original_absence_target(action, control=control, context=context, allow_parent=True) if allow_project_absence and not options else None
+                    if target:
+                        positive = action.assertion not in {"hidden"} and not (action.assertion == "count" and action.expected == "0")
+                        if positive:
+                            self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="ASSERTION_PARENT_UNAVAILABLE", tool="WebTestingRuntime", action="assert_original_parent", result={"check_id": action.check_id, "project_reference": project_reference, "object_id": self.project_ids.get(project_reference), "control": control, "context": context, "target": target, "expected_state": "original parent exists", "scoped_assertion": action.assertion}, latency_ms=0)
+                            action = replace(action, assertion="count", expected="1")
+                        result = await self._execute_known_action(replace(action, target=target))
+                        candidate = ActionCandidate(candidate_id="original-absence", action="assertion", label=control, target=target, state_id=page_state.state_id, expected=action.expected, assertion=action.assertion)
+                        return DecisionResult(source="RUNTIME", reason="ORIGINAL_OBJECT_ABSENCE_CHECK", candidate=candidate, action_result=result)
                     return DecisionResult(source="RUNTIME", reason="PROJECT_BINDING_UNAVAILABLE" if not options else "AMBIGUOUS_PROJECT_BINDING", needs_tester_llm=True)
                 if element.selected_value != options[0][1]:
                     result = await self._execute_known_action(WebAction(ActionType.SELECT, target=element.target, value=self.input_values[project_reference], value_reference=project_reference))
@@ -768,6 +868,7 @@ class WebTestingRuntime:
                 selected_value = project_selects[0].selected_value
                 if selected_value is not None:
                     self.active_project = {"reference": project_reference, "target": project_selects[0].target, "value": selected_value}
+                    self._remember_project(project_reference, project_selects[0].target, selected_value)
         elif context:
             projects = [project for (alias, _, _), project in self.object_projects.items() if alias == context.casefold()]
             current_projects = [project for project in projects if any(element.target == project["target"] and element.selected_value == project["value"] for element in project_selects)]
@@ -792,9 +893,20 @@ class WebTestingRuntime:
             if matching_projects:
                 self.last_project_reference = matching_projects[0]
         self.remember_assertion_targets(rows, context)
-        kinds = {ActionType.INPUT: {"input", "textarea"}, ActionType.SELECT: {"select"}, ActionType.REPEAT_SUBMIT: {"button"}, ActionType.ASSERTION: {"cell", "input", "textarea", "select"} if action.assertion in {"visible", "hidden"} else {"cell"}}
+        entity_attribute = {"project": "data-project-id", "task": "data-task-id", "member": "data-username"}.get(control.casefold())
+        if action.action_type == ActionType.ASSERTION and action.assertion in {"visible", "hidden"} and entity_attribute and context:
+            project_value = self.active_project["value"] if self.active_project else None
+            identity = self.object_identities.get((context.casefold(), project_value), {})
+            targets = {target for (alias, container, value), target in self.object_targets.items() if alias == context.casefold() and value == project_value and entity_attribute in identity and (container is None or await session.page.locator(container).is_visible())}
+            if len(targets) == 1:
+                target = next(iter(targets))
+                result = await self._execute_known_action(replace(action, target=target))
+                candidate = ActionCandidate(candidate_id="bound-entity-assertion", action=action.action_type.value, label=control, target=target, state_id=page_state.state_id)
+                return DecisionResult(source="PLAYWRIGHT", reason="BOUND_ENTITY_ASSERTION", candidate=candidate, action_result=result)
+        kinds = {ActionType.INPUT: {"input", "textarea"}, ActionType.SELECT: {"select"}, ActionType.REPEAT_SUBMIT: {"button"}, ActionType.ASSERTION: {"cell", "input", "textarea", "select", "button", "a"} if action.assertion in {"visible", "hidden"} else {"cell", "input", "textarea", "select"}}
         candidates = []
         exact = []
+        columns = []
         for element in page_state.interactive_elements:
             matches_context = not context or context.casefold() in element.context.casefold() or context == element.context_target or f"={json.dumps(context)}]" in (element.context_target or "")
             row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target) or row["text"] == element.context), None)
@@ -824,6 +936,10 @@ class WebTestingRuntime:
                 candidates.append(candidate)
             if matches_control:
                 exact.append(candidate)
+                if element.kind == "cell" and element.label.casefold() == control.casefold():
+                    columns.append(candidate)
+        if action.action_type == ActionType.ASSERTION and len(exact) > 1 and len(columns) == 1 and not any(element.kind != "cell" and element.label.casefold() == control.casefold() and any(candidate.target == element.target for candidate in exact) for element in page_state.interactive_elements):
+            exact = columns
         if action.action_type in {ActionType.INPUT, ActionType.SELECT} and len(exact) != 1:
             return DecisionResult(source="TESTER_LLM", reason="AMBIGUOUS_INPUT_BINDING" if len(exact) > 1 else "CONTROL_NOT_FOUND", needs_tester_llm=True)
         if action.action_type == ActionType.ASSERTION and len(exact) > 1:
@@ -832,18 +948,33 @@ class WebTestingRuntime:
             return await self._execute_candidate(control, page_state, exact[0], source="PLAYWRIGHT")
         if not candidates:
             known = self.assertion_targets.get((control.casefold(), context.casefold()), {})
+            if not known:
+                project_value = self.active_project["value"] if self.active_project else None
+                identity = self.object_identities.get((context.casefold(), project_value), {})
+                cached_headers: dict[str, str] = {}
+                if "data-project-id" in identity:
+                    cached_headers = {"project name": "name"}
+                elif "data-task-id" in identity:
+                    cached_headers = {"task title": "title"}
+                elif "data-username" in identity:
+                    cached_headers = {"display name": "name", "member name": "name", "member username": "username"}
+                known = self.assertion_targets.get((cached_headers.get(control.casefold(), control.casefold()), context.casefold()), {})
             available_known = {target: container for target, container in known.items() if container is None or await session.page.locator(container).is_visible()}
             if available_known:
                 known = available_known
             if action.action_type == ActionType.ASSERTION and len(known) == 1:
                 target, container = next(iter(known.items()))
-                if container is None or await session.page.locator(container).is_visible():
+                row_target = target.split(" >> :scope >", 1)[0]
+                project_value = self.active_project["value"] if self.active_project else None
+                other_project = any(bound == row_target and alias == context.casefold() and value != project_value for (alias, _, value), bound in self.object_targets.items())
+                if not other_project and (container is None or await session.page.locator(container).is_visible()) and await session.page.locator(row_target).count() == 0:
                     # 删除后缺失的单元格仍须用此前观察到的定位器做真实断言。
                     result = await self._execute_known_action(replace(action, target=target))
                     candidate = ActionCandidate(candidate_id="recorded-assertion", action=action.action_type.value, label=control, target=target, state_id=page_state.state_id)
                     return DecisionResult(source="PLAYWRIGHT", reason="RECORDED_ASSERTION_TARGET", candidate=candidate, action_result=result)
-                self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="ASSERTION_TARGET_UNAVAILABLE", tool="WebTestingRuntime", action="resolve_control", result={"check_id": action.check_id, "target": target, "control": control, "object": {"context": context, "project_reference": project_reference}, "failure_reason": "ASSERTION_PREREQUISITE_UNAVAILABLE", "state_id": page_state.state_id}, latency_ms=0)
-                return DecisionResult(source="RUNTIME", reason="ASSERTION_PREREQUISITE_UNAVAILABLE", needs_tester_llm=True)
+                reason = "CONTROL_NOT_FOUND" if (container is None or await session.page.locator(container).is_visible()) and await session.page.locator(row_target).count() and not other_project else "ASSERTION_PREREQUISITE_UNAVAILABLE"
+                self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="ASSERTION_TARGET_UNAVAILABLE", tool="WebTestingRuntime", action="resolve_control", result={"check_id": action.check_id, "target": target, "control": control, "object": {"context": context, "project_reference": project_reference}, "failure_reason": reason, "state_id": page_state.state_id}, latency_ms=0)
+                return DecisionResult(source="RUNTIME", reason=reason, needs_tester_llm=True)
             failure = {"check_id": action.check_id, "target": action.target, "control": control, "object": {"context": context, "project_reference": project_reference}, "failure_reason": "CONTROL_NOT_FOUND", "state_id": page_state.state_id}
             self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="ASSERTION_TARGET_UNAVAILABLE" if action.action_type == ActionType.ASSERTION else "CONTROL_UNAVAILABLE", tool="WebTestingRuntime", action="resolve_control", result=failure, latency_ms=0)
             return DecisionResult(source="TESTER_LLM", reason="CONTROL_NOT_FOUND", needs_tester_llm=True)

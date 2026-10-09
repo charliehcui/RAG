@@ -994,7 +994,7 @@ async def test_complete_plan_preserves_pending_submit_input_references_and_nativ
 
         async def _inner_get_response(self, *, messages: Sequence[Message], stream: bool, options: Mapping[str, Any], **kwargs: Any) -> ChatResponse:
             self.calls += 1
-            assert self.calls == 1, str(messages[-1])[:4000]
+            assert self.calls == 1, messages[-1].text[:6000]
             assert "demo-member2" not in "\n".join(message.text for message in messages)
             goal = {"goal": "Prepare one pending project submission", "operation": "create", "inputs": [{"control": "Project name", "value_reference": "project_name"}], "after_steps": [{"action_type": "repeat_submit", "target": "#project-submit", "url": self.target_url + "/api/projects"}, {"action_type": "wait", "target": '#projects-table .project-name:text-is("repeat-plan")'}, {"action_type": "assertion", "target": '#projects-table .project-name:text-is("repeat-plan")', "assertion": "count", "expected": "1", "behavior_id": "EB-submit"}]}
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("pending-plan", "execute_test_plan", arguments={"goals": [goal]})])])

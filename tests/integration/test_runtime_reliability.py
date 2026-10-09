@@ -256,7 +256,7 @@ async def test_row_identity_survives_table_and_name_changes_then_records_real_ab
         assert current.action_result is not None and current.action_result.success
         assert 'fresh-table' in current.candidate.target and 'data-project-id="p1"' in current.candidate.target
         await page.evaluate("document.querySelector('tr[data-project-id]').remove()")
-        absent = await runtime.execute_page_action(WebAction(ActionType.ASSERTION, assertion="hidden"), control="Name", context="name")
+        absent = await runtime.execute_page_action(WebAction(ActionType.ASSERTION, assertion="hidden"), control="Project name", context="name")
         assert absent.action_result is not None and absent.action_result.success
         assert 'fresh-table' in absent.candidate.target
     finally:
@@ -367,3 +367,101 @@ async def test_false_or_similar_signal_does_not_unlock_a_check(phase2_store: Sta
     for index, summary in enumerate(["membership-removed", "membership-removed-later"]):
         phase2_store.append_event(event_id=f"invalid-{index}", run_id="run-1", task_id="producer", event_type="TASK_PROGRESS", action="publish", result={"summary": summary, "progressed": index != 0}, latency_ms=0)
     assert not (await runtime.wait_for_shared_progress("membership-removed", timeout_seconds=0))["ready"]
+
+
+@pytest.mark.asyncio
+async def test_missing_column_does_not_use_an_old_cell_position_as_assertion_evidence(phase2_store: StateStore) -> None:
+    runtime = await form_runtime(phase2_store, ChoiceClient(), '<table id="projects"><thead><tr><th>Name</th><th>Owner</th></tr></thead><tbody><tr data-project-id="p1"><td>Provided</td><td>admin</td></tr></tbody></table>')
+    page = runtime.browser_manager.get_session(runtime.browser_session_id).page
+    try:
+        runtime._bind_rows(await runtime.page_state_reader.read_rows(page), "name")
+        runtime.remember_assertion_targets(await runtime.page_state_reader.read_rows(page), "name")
+        await page.evaluate("document.querySelector('th').remove(); document.querySelector('td').remove()")
+        result = await runtime.execute_page_action(WebAction(ActionType.ASSERTION, assertion="equals", expected="admin"), control="Name", context="name")
+        assert result.reason == "CONTROL_NOT_FOUND" and result.action_result is None
+        assert not [item for item in phase2_store.list_action_history(run_id="run-1", task_id="task-1") if item["action"] == "assertion"]
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_auxiliary_precondition_failure_blocks_operations_and_is_not_a_finding(phase2_store: StateStore) -> None:
+    runtime = await form_runtime(phase2_store, ChoiceClient())
+    tools = tools_for(runtime, phase2_store)
+    try:
+        result = await tools.execute_page_goals([PageGoal("Guard current precondition", operation="create", inputs=[PageInput("Name", "name"), PageInput("Note", "note")], before_steps=[PageStep(ActionType.ASSERTION, target="#missing", assertion="visible")])])
+        assert not result["success"] and result["reason"] == "ASSERTION_FAILURE"
+        assert await runtime.browser_manager.get_session(runtime.browser_session_id).page.locator("#status").inner_text() == "Ready"
+        assert not phase2_store.list_recent_findings("run-1")
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_prepared_operation_does_not_skip_different_replan_navigation(phase2_store: StateStore) -> None:
+    runtime = await form_runtime(phase2_store, ChoiceClient())
+    tools = tools_for(runtime, phase2_store)
+    checks = [PageStep(ActionType.ASSERTION, target="#status", assertion="visible", check_id="local.first")]
+    goal = PageGoal("Original create", operation="create", inputs=[PageInput("Name", "name"), PageInput("Note", "note")], checks=checks)
+    try:
+        first = await tools.execute_page_goals([goal])
+        assert first["success"]
+        assert tools._operation_prepared(goal)
+        assert not tools._operation_prepared(PageGoal("Different operation", operation="navigate", destination="Tasks", checks=checks))
+        assert not tools._operation_prepared(PageGoal("Different object", operation="create", row_reference="note", inputs=goal.inputs, checks=checks))
+        assert not tools._operation_prepared(PageGoal("Different input", operation="create", inputs=[PageInput("Name", "note")], checks=checks))
+        assert tools._operation_prepared(PageGoal("Changed prose", operation="create", inputs=goal.inputs, checks=checks))
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_completed_check_continuation_publishes_missing_signal_once(phase2_store: StateStore) -> None:
+    from unittest.mock import AsyncMock
+
+    runtime = await form_runtime(phase2_store, ChoiceClient())
+    tools = tools_for(runtime, phase2_store)
+    runtime.record_task_outcome = AsyncMock(return_value={"assertions": [{"behavior_id": "EB-flow"}], "checks": [{"check_id": "local.first", "completed": True}], "ready_to_finish": True})
+    runtime.required_checks = [{"check_id": "local.first", "behavior_id": "EB-flow"}]
+    runtime.expected_behavior_ids = ("EB-flow",)
+    tools.finish_task = AsyncMock(return_value={"finished": True, "checks": [{"check_id": "local.first", "completed": True}]})
+    goal = PageGoal("Completed result but unpublished continuation", operation="create", inputs=[PageInput("Name", "name")], checks=[PageStep(ActionType.ASSERTION, target="#status", assertion="visible", behavior_id="EB-flow", check_id="local.first")], publish_progress="member-session-ready")
+    try:
+        for _ in range(2):
+            result = await tools.execute_test_plan([goal])
+            assert result["success"], result
+        events = phase2_store.list_events("run-1", event_types=("TASK_PROGRESS",))
+        assert len(events) == 1 and events[0]["result"]["summary"] == "member-session-ready"
+        assert not [item for item in phase2_store.list_action_history(run_id="run-1", task_id="task-1") if item["action"] != "navigation"]
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["raw", "semantic", "goal"])
+async def test_original_negative_assertion_survives_project_revocation_without_selecting_another_project(phase2_store: StateStore, mode: str) -> None:
+    html = '<select aria-label="Task project"><option value="p1">Provided</option></select><table id="tasks"><thead><tr><th>Title</th></tr></thead><tbody><tr data-task-id="t1"><td>Original Task</td></tr></tbody></table>'
+    runtime = await form_runtime(phase2_store, ChoiceClient(), html)
+    runtime.input_values["title"] = "Original Task"
+    page = runtime.browser_manager.get_session(runtime.browser_session_id).page
+    try:
+        original = await runtime.execute_page_action(WebAction(ActionType.ASSERTION, assertion="equals", expected="Original Task"), control="Task title", context="title", project_reference="name")
+        assert original.action_result is not None and original.action_result.success
+        await page.evaluate("document.querySelector('option').remove(); document.querySelector('tr[data-task-id]').remove()")
+        action = WebAction(ActionType.ASSERTION, target='#tasks tr[data-task-id="t1"]', assertion="hidden", project_reference="name")
+        if mode == "semantic":
+            result = await runtime.execute_page_action(action, control="Task title", context="title", project_reference="name")
+            assert result.action_result is not None and result.action_result.success, result
+        elif mode == "goal":
+            result = await tools_for(runtime, phase2_store).execute_page_goals([PageGoal("Observe original absence", operation="observe", project_reference="name", row_reference="title", checks=[PageStep(ActionType.ASSERTION, control="Task title", context="title", assertion="hidden")])])
+            assert result["success"], result
+        else:
+            result = await runtime.execute_known_action(action)
+            assert result.success, result
+        assert runtime.budget.usage.task_replans == 0
+        history = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
+        assert not any(item["action"] == "select" for item in history)
+        invented = await runtime.execute_known_action(WebAction(ActionType.ASSERTION, target='#tasks tr[data-task-id="unobserved"]', assertion="hidden", project_reference="name"))
+        assert invented.error_type == "OBJECT_PROJECT_MISMATCH"
+    finally:
+        await runtime.browser_manager.close()

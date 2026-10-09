@@ -402,7 +402,7 @@ async def test_replan_restores_remaining_check_ids_and_shared_final_score(phase2
         assert (await runtime.record_task_outcome())["check_completion"] == "1/2 checks completed"
         await page.locator("body").evaluate("element => element.insertAdjacentHTML('beforeend', '<p id=missing>Recovered</p>')")
         restored_tools = tools_for(runtime, phase2_store)
-        completed = await restored_tools.execute_test_plan([PageGoal("Completely different wording", checks=[first, last])])
+        completed = await restored_tools.execute_test_plan([PageGoal("Completely different wording", operation="observe", run_operations=False, checks=[first, last])])
         assert completed["success"], completed
         assert completed["completed_check_ids"] == ["local.first", "local.last"]
         assert len(selector.states) == 1
