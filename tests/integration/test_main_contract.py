@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -24,9 +25,11 @@ from web_testing_system.agents.tester_agent import TesterAssignment as Assignmen
 from web_testing_system.agents.tester_agent import TesterRunner as Worker
 from web_testing_system.config import RunConfig, Settings
 from web_testing_system.evaluation.scenarios import load_run_config
+from web_testing_system.orchestration.runner import _budget_limits
 from web_testing_system.orchestration.runner import run as run_system
 from web_testing_system.orchestration.scheduler import LocalTesterScheduler
 from web_testing_system.orchestration.scheduler import TesterInstance as WorkerInstance
+from web_testing_system.runtime.budget import BudgetGuard
 from web_testing_system.runtime.jev_selector import JevSelector
 from web_testing_system.runtime.web_runtime import WebTestingRuntime
 from web_testing_system.state import StateStore
@@ -43,7 +46,7 @@ def tools_for(tmp_path: Path, case_id: str = "D12", supplied_config: RunConfig |
 
 
 def drafts(tools: MainAgentTools) -> list[dict[str, Any]]:
-    return [{"goal_id": group["goal_id"], "goal": group["description"], "priority": "P1", "step_budget": tools.max_step_budget, "required_operations": ["read"]} for group in tools.planning_contract()["workflows"] if group["editable"]]
+    return [{"goal_id": group["goal_id"], "goal": group["description"], "priority": "P1", "required_operations": ["read"]} for group in tools.planning_contract()["workflows"] if group["editable"]]
 
 
 @pytest.mark.parametrize("case_id", ["D01", "D03", "D12", "D13"])
@@ -60,13 +63,16 @@ def test_plan_covers_whole_role_workflows_with_authoritative_inputs(tmp_path: Pa
         assert task["data_requirements"]["identity_reference"] == group["identity_reference"]
         assert task["data_requirements"]["test_data_keys"] == group["test_data_keys"]
         assert group["description"] in task["goal"]
+        assert task["step_budget"] == config.budget.max_browser_steps_per_task
+        limits = _budget_limits(config, task_steps=task["step_budget"], remaining=config.budget.model_dump())
+        assert limits.max_task_steps == config.budget.max_browser_steps_per_task
     assert all(not task["dependencies"] for task in tasks)
     if case_id == "D12":
         assert tools.live_peers == {"offboarded-access": {"offboard-member"}, "offboard-member": {"offboarded-access"}}
         assert len(tasks) == 2
 
 
-@pytest.mark.parametrize("problem", ["missing_workflow", "duplicate_workflow", "invalid_budget", "denied_operation"])
+@pytest.mark.parametrize("problem", ["missing_workflow", "duplicate_workflow", "empty_goal", "denied_operation"])
 def test_entire_plan_is_validated_before_any_task_is_created(tmp_path: Path, problem: str) -> None:
     tools, _ = tools_for(tmp_path, "D03")
     plan = drafts(tools)
@@ -74,13 +80,70 @@ def test_entire_plan_is_validated_before_any_task_is_created(tmp_path: Path, pro
         plan.pop()
     elif problem == "duplicate_workflow":
         plan.append(dict(plan[0]))
-    elif problem == "invalid_budget":
-        plan[-1]["step_budget"] = tools.max_step_budget + 1
+    elif problem == "empty_goal":
+        plan[-1]["goal"] = " "
     else:
         plan[-1]["required_operations"] = [next(iter(tools.denied_operations))]
     result = tools.submit_task_plan(plan)  # type: ignore[arg-type]
     assert not result["ok"]
     assert tools.store.list_tasks("main") == []
+
+
+@pytest.mark.parametrize("case_id, proposed_budgets", [("D13", [10, 8, 18]), ("D12", [10, 12]), ("D02", [45]), ("D13", [0, -1, 1000])])
+def test_main_cannot_choose_task_execution_budgets(tmp_path: Path, case_id: str, proposed_budgets: list[int]) -> None:
+    tools, config = tools_for(tmp_path, case_id)
+    original_config = config.model_dump()
+    original_run = tools.store.get_run("main")
+    contract = tools.planning_contract()
+    schema = tools.plan_tool(contract).parameters()["$defs"]["MainTaskPlan"]
+    assert "step_budget" not in schema["properties"] and "step_budget" not in schema["required"]
+    assert contract["execution_budget"]["new_task_steps"] == config.budget.max_browser_steps_per_task
+    plan = drafts(tools)
+    for task, budget in zip(plan, proposed_budgets, strict=True):
+        task["step_budget"] = budget
+    result = tools.submit_task_plan(plan)  # type: ignore[arg-type]
+    assert result["ok"], result
+    assert all(task["step_budget"] == config.budget.max_browser_steps_per_task for task in tools.store.list_tasks("main"))
+    assert config.model_dump() == original_config and tools.store.get_run("main") == original_run
+
+
+@pytest.mark.parametrize("proposed_budget", [1, 1000, None])
+def test_legacy_main_creation_also_inherits_fixed_budget(tmp_path: Path, proposed_budget: int | None) -> None:
+    tools, config = tools_for(tmp_path, "D02")
+    group = next(iter(tools.workflow_contract.values()))
+    result = tools.create_task(task_id="legacy", goal=group["description"], feature=group["feature"], priority="P1", dependencies=[], step_budget=proposed_budget, data_requirements={"identity_reference": group["identity_reference"], "expected_behavior_ids": list({check["behavior_id"] for check in group["checks"]}), "check_ids": [check["check_id"] for check in group["checks"]]}, scope_targets=group["scope_targets"], required_operations=["read"])
+    assert result["task"]["step_budget"] == config.budget.max_browser_steps_per_task
+
+
+def test_execution_budget_is_inherited_from_config_not_hardcoded(tmp_path: Path) -> None:
+    config = load_run_config(Path("evaluation/scenarios.json"), scenario_id="D13", target_url="http://app.test/", tester_count=3)
+    config = config.model_copy(update={"budget": config.budget.model_copy(update={"max_browser_steps_per_task": 37})})
+    tools, config = tools_for(tmp_path, supplied_config=config)
+    assert tools.submit_task_plan(drafts(tools))["ok"]  # type: ignore[arg-type]
+    tasks = tools.store.list_tasks("main")
+    assert len(tasks) == 3 and all(task["step_budget"] == 37 for task in tasks)
+    assert config.budget.max_browser_steps_per_task == 37
+
+
+@pytest.mark.parametrize("status", ["PENDING", "BLOCKED", "WAITING_FOR_DATA", "COMPLETED"])
+def test_replan_preserves_existing_budget_without_resetting_it(tmp_path: Path, status: str) -> None:
+    tools, config = tools_for(tmp_path, "D13")
+    assert tools.submit_task_plan(drafts(tools))["ok"]  # type: ignore[arg-type]
+    task_id = "name-validation"
+    with sqlite3.connect(tools.store.database_path) as connection:
+        connection.execute("UPDATE tasks SET step_budget = ?, status = ? WHERE task_id = ?", (37, status, task_id))
+    original = tools.store.get_task(task_id)
+    plan = drafts(tools)
+    for task in plan:
+        task["step_budget"] = 1
+    assert tools.submit_task_plan(plan)["ok"]  # type: ignore[arg-type]
+    current = tools.store.get_task(task_id)
+    assert current is not None and current["step_budget"] == 37
+    if status == "COMPLETED":
+        assert current == original
+    else:
+        assert current["status"] == "PENDING"
+        assert _budget_limits(config, task_steps=current["step_budget"], remaining=config.budget.model_dump()).max_task_steps == 37
 
 
 def test_forward_dependency_is_compiled_in_creation_order(tmp_path: Path) -> None:
@@ -157,7 +220,10 @@ async def test_single_initial_request_commits_all_tasks_without_a_done_call(tmp_
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("plan", "submit_task_plan", arguments={"tasks": drafts(tools)})])])
 
     client = PlanClient()
-    runner = MainAgentRunner(agent=create_main_agent(client=client, settings=Settings(_env_file=None), tools=tools), tools=tools, run_id="main", max_replans=2)
+    agent = create_main_agent(client=client, settings=Settings(_env_file=None), tools=tools)
+    legacy_tool = next(tool for tool in agent.default_options["tools"] if tool.name == "create_task")
+    assert "step_budget" not in legacy_tool.parameters()["properties"]
+    runner = MainAgentRunner(agent=agent, tools=tools, run_id="main", max_replans=2)
     tools.workflow_contract.clear()
     await runner.create_initial_plan(config)
     assert client.calls == 1 and len(tools.store.list_tasks("main")) == 2
@@ -180,6 +246,13 @@ async def test_compiled_live_tasks_start_together_and_exchange_progress_in_the_s
         tools.store.create_identity(identity_id=identity, run_id="main", role=role, secret_reference=None, permissions=["read"])
         tools.store.register_tester(tester_id=tester_id, run_id="main", session_reference=tester_id, identity_id=identity, role=role, data_namespace=task_id)
         runtime = SimpleNamespace(browser_session_id=None, input_values={}, request_replan=AsyncMock(), stop_task=AsyncMock(), browser_manager=SimpleNamespace(close_session=AsyncMock()))
+        runtime.store = tools.store
+        runtime.run_id = "main"
+        runtime.task_id = task_id
+        runtime.tester_id = tester_id
+        runtime.required_checks = task["data_requirements"]["required_checks"]
+        runtime.budget = BudgetGuard(_budget_limits(config, task_steps=task["step_budget"], remaining=config.budget.model_dump()))
+        runtime.wait_for_shared_progress = MethodType(WebTestingRuntime.wait_for_shared_progress, runtime)
 
         async def start() -> str:
             runtime.browser_session_id = "browser-" + task_id
@@ -202,25 +275,30 @@ async def test_compiled_live_tasks_start_together_and_exchange_progress_in_the_s
         await asyncio.wait_for(both_started.wait(), timeout=3)
         if task_id == "offboarded-access":
             publish(task_id, "member-session-ready")
-            assert (await workers[task_id].wait_for_shared_progress("membership-removed", timeout_seconds=2))["ready"]
+            waiting = await workers[task_id].wait_for_shared_progress("membership-removed", timeout_seconds=2)
+            assert waiting["ready"], waiting
             assert worker.runtime.browser_session_id == sessions[task_id]
             publish(task_id, "member-delete-observed")
         else:
-            assert (await workers[task_id].wait_for_shared_progress("member-session-ready", timeout_seconds=2))["ready"]
+            waiting = await workers[task_id].wait_for_shared_progress("member-session-ready", timeout_seconds=2)
+            assert waiting["ready"], waiting
             publish(task_id, "membership-removed")
-            assert (await workers[task_id].wait_for_shared_progress("member-delete-observed", timeout_seconds=2))["ready"]
+            waiting = await workers[task_id].wait_for_shared_progress("member-delete-observed", timeout_seconds=2)
+            assert waiting["ready"], waiting
         worker.runtime.request_replan.assert_not_awaited()  # type: ignore[attr-defined]
         return "COMPLETED"
 
     scheduler = LocalTesterScheduler(store=tools.store, run_id="main", tester_factory=factory, max_testers=config.budget.max_testers, max_browser_contexts=config.budget.max_parallel_browser_contexts)
     results = await scheduler.run_ready_tasks(execute)
-    assert len(results) == 2 and all(result.status == "COMPLETED" for result in results)
+    assert len(results) == 2 and all(result.status == "COMPLETED" for result in results), json.dumps([result.error for result in results])
     assert len(set(sessions.values())) == 2
 
 
 def test_recovery_preserves_completed_check_evidence_and_original_budget(tmp_path: Path) -> None:
     tools, _ = tools_for(tmp_path, "D03")
     tools.submit_task_plan(drafts(tools))  # type: ignore[arg-type]
+    with sqlite3.connect(tools.store.database_path) as connection:
+        connection.execute("UPDATE tasks SET step_budget = ? WHERE task_id = ?", (37, "project-workflow"))
     original = tools.store.get_task("project-workflow")
     assert original is not None
     check = original["data_requirements"]["required_checks"][0]
@@ -238,7 +316,8 @@ def test_recovery_preserves_completed_check_evidence_and_original_budget(tmp_pat
     assert recovery is not None
     assert check["check_id"] not in recovery["data_requirements"]["check_ids"]
     assert len(recovery["data_requirements"]["check_ids"]) == 3
-    assert recovery["step_budget"] == original["step_budget"]
+    assert recovery["step_budget"] == tools.max_step_budget
+    assert original["step_budget"] == 37
     assert tools.store.get_task(original["task_id"]) == preserved
     assert len(tools.store.list_action_history(run_id="main", task_id=original["task_id"])) == 1
 
@@ -246,6 +325,8 @@ def test_recovery_preserves_completed_check_evidence_and_original_budget(tmp_pat
 def test_running_workflow_is_not_redirected_or_duplicated(tmp_path: Path) -> None:
     tools, _ = tools_for(tmp_path, "D03")
     tools.submit_task_plan(drafts(tools))  # type: ignore[arg-type]
+    with sqlite3.connect(tools.store.database_path) as connection:
+        connection.execute("UPDATE tasks SET step_budget = ? WHERE task_id = ?", (37, "project-workflow"))
     tools.store.create_identity(identity_id="worker", run_id="main", role="admin", secret_reference=None, permissions=["read"])
     tools.store.register_tester(tester_id="worker", run_id="main", session_reference="worker", identity_id="worker", role="admin", data_namespace="worker")
     tools.store.claim_task(task_id="project-workflow", tester_id="worker")
@@ -253,6 +334,7 @@ def test_running_workflow_is_not_redirected_or_duplicated(tmp_path: Path) -> Non
     assert "project-workflow" not in tools.planning_contract()["editable_goal_ids"]
     result = tools.submit_task_plan(drafts(tools))  # type: ignore[arg-type]
     assert result["ok"] and tools.store.get_task("project-workflow") == original
+    assert original is not None and original["step_budget"] == 37
     assert len(tools.store.list_tasks("main")) == 3
 
 
@@ -299,7 +381,7 @@ async def test_compiled_main_plan_runs_through_frozen_tester_runtime_and_report(
                 assert not options.get("tools")
                 return ChatResponse(messages=[Message(role="assistant", contents=["One complete role workflow passed."])])
             assert self.calls == 1
-            task = {"goal_id": "rename-project", "goal": "Admin checks the assigned private Project rename and persistence", "priority": "P1", "step_budget": 90, "required_operations": ["read", "update"]}
+            task = {"goal_id": "rename-project", "goal": "Admin checks the assigned private Project rename and persistence", "priority": "P1", "required_operations": ["read", "update"]}
             return ChatResponse(messages=[Message(role="assistant", contents=[Content.from_function_call("main-plan", "submit_task_plan", arguments={"tasks": [task]})])])
 
     class WorkerClient(FunctionInvocationLayer, BaseChatClient):

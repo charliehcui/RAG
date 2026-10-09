@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from copy import deepcopy
@@ -338,6 +337,8 @@ class TesterAgentTools:
         planned: set[str] = set()
         planned_checks: set[str] = set()
         check_specs = {check["check_id"]: check for check in self.runtime.required_checks}
+        current_checks = current_outcome["checks"]
+        assert isinstance(current_checks, list)
         boundaries = {ActionType.NAVIGATION, ActionType.REFRESH, ActionType.REPEAT_SUBMIT, ActionType.WAIT, ActionType.ASSERTION, ActionType.URL_CHECK}
         page = await self._page_summary()
         scopes = self.binding_scopes(page)
@@ -391,7 +392,7 @@ class TesterAgentTools:
                         return {"success": False, "reason": "DUPLICATE_CHECK_ID"}
                     planned_checks.add(step.check_id)
                 elif check_specs and step.behavior_id:
-                    return {"success": False, "reason": "CHECK_ID_REQUIRED"}
+                    return {"success": False, "reason": "CHECK_ID_REQUIRED", "remaining_check_ids": [check["check_id"] for check in current_checks if not check["completed"]], "instruction": "Include every remaining required Check ID on its actual check before submitting the replacement plan."}
                 if step.behavior_id:
                     if step.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK, ActionType.REPEAT_SUBMIT} or step.behavior_id not in self.runtime.expected_behavior_ids:
                         return {"success": False, "reason": "UNKNOWN_OR_INVALID_BEHAVIOR_CHECK", "invalid_behavior_id": step.behavior_id, "assigned_behavior_ids": list(self.runtime.expected_behavior_ids), "instruction": "Use only the actual assigned behavior IDs for goal checks. Do not invent IDs for setup checks."}
@@ -402,6 +403,8 @@ class TesterAgentTools:
         recorded_checks = {check["check_id"] for check in scored_checks if check["completed"]}
         missing_checks = sorted(set(check_specs) - recorded_checks - planned_checks)
         if missing_checks:
+            if phase == "exception_replan" and any(step.check_id is None for goal in goals for step in goal.checks):
+                return {"success": False, "reason": "CHECK_ID_REQUIRED", "missing_check_ids": missing_checks, "remaining_check_ids": sorted(set(check_specs) - recorded_checks), "instruction": "Attach the exact missing required IDs to their actual checks; preserve every remaining Check."}
             return {"success": False, "reason": "INCOMPLETE_TEST_PLAN", "missing_check_ids": missing_checks}
         if not goals and current_outcome["ready_to_finish"]:
             return {"success": True, "outcome": await self.finish_task(), "completed_check_ids": sorted(recorded_checks)}
@@ -418,6 +421,10 @@ class TesterAgentTools:
             unavailable_objects = self._unavailable_plan_objects(goal, page)
             if unavailable_objects:
                 return {"success": False, "reason": "OBJECT_REFERENCE_UNAVAILABLE", "unavailable_object_references": unavailable_objects, "instruction": "Use current observed objects. Reobserve without selecting the unavailable object, or retain original-object check-only evidence. Do not rebind the check to another object."}
+        failure = self.runtime.validate_plan_assertions([asdict(goal) for goal in goals])
+        if failure:
+            return failure
+        self.runtime.register_progress_plan([asdict(goal) for goal in goals])
         self.executing_plan = True
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="TESTER_PLAN_VALIDATED", tool="TesterPlan", action=phase, result={"remaining_check_ids": sorted(set(check_specs) - recorded_checks), "planned_check_ids": sorted(planned_checks), "state_id": page.get("state_id")}, latency_ms=0)
         try:
@@ -704,23 +711,10 @@ class TesterAgentTools:
         }
 
     async def wait_for_shared_progress(self, summary_contains: str, task_id: str | None = None, timeout_seconds: int = 30) -> dict[str, Any]:
-        """Wait for a structured progress signal without model polling. Stop a live-session deadlock when the required participant depends on this Task."""
+        """Delegate the signal lifecycle and live continuation to Runtime."""
         if not self.shared_state:
             return {"ready": False, "reason": "SHARED_STATE_DISABLED"}
-        started = perf_counter()
-        timeout_seconds = min(max(timeout_seconds, 0), 60)
-        while True:
-            for event in self.store.list_events(self.assignment.run_id, event_types=("TASK_PROGRESS",), limit=100):
-                if event["task_id"] != self.assignment.task_id and (task_id is None or event["task_id"] == task_id) and summary_contains in str(event["result"].get("summary", "")):
-                    return {"ready": True, "task_id": event["task_id"], "event_id": event["event_id"]}
-            participants = [task for task in self.store.list_tasks(self.assignment.run_id) if task["task_id"] != self.assignment.task_id and (task_id is None or task["task_id"] == task_id)]
-            if participants and all(task["status"] == "PENDING" and self.assignment.task_id in task["dependencies"] for task in participants):
-                await self.runtime.request_replan("LIVE_PARTICIPANT_DEPENDS_ON_OBSERVER")
-                await self.runtime.stop_task("LIVE_PARTICIPANT_DEPENDS_ON_OBSERVER")
-                return {"ready": False, "reason": "LIVE_PARTICIPANT_DEPENDS_ON_OBSERVER"}
-            if perf_counter() - started >= timeout_seconds:
-                return {"ready": False, "reason": "PROGRESS_SIGNAL_NOT_AVAILABLE", "tasks": participants}
-            await asyncio.sleep(0.2)
+        return await self.runtime.wait_for_shared_progress(summary_contains, task_id=task_id, timeout_seconds=timeout_seconds)
 
     def check_path_before_exploring(
         self,

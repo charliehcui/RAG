@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -32,6 +32,13 @@ def contract_tools(tmp_path: Any) -> AgentTools:
     budget = BudgetGuard(BudgetLimits(max_runtime_seconds=60, max_llm_calls=3, max_input_tokens=10000, max_output_tokens=10000, max_jev_calls=10, max_computer_use_calls=0, max_task_steps=20, max_task_replans=2, max_browser_contexts=1))
     outcome = {"checks": [{**check, "completed": False} for check in checks], "assertions": [], "ready_to_finish": False}
     runtime = SimpleNamespace(input_values={"empty_name": "", "valid_name": "Contract Project", "other_name": "Unassigned", "admin_username": "admin", "env:PASSWORD": "secret-never-in-context"}, required_checks=checks, expected_behavior_ids=("EB-name",), prepared_check_ids=set(), browser_session_id=None, task_finished=False, budget=budget, record_task_outcome=AsyncMock(return_value=outcome), execute_page_goal=AsyncMock(side_effect=AssertionError("Invalid plans must not reach Jev")))
+    runtime.store = store
+    runtime.run_id = "run"
+    runtime.task_id = "task"
+    runtime.tester_id = "tester"
+    runtime.validate_assertion_contract = MethodType(WebTestingRuntime.validate_assertion_contract, runtime)
+    runtime.validate_plan_assertions = MethodType(WebTestingRuntime.validate_plan_assertions, runtime)
+    runtime.register_progress_plan = MethodType(WebTestingRuntime.register_progress_plan, runtime)
 
     async def stop(reason: str) -> None:
         runtime.task_finished = True
@@ -56,6 +63,17 @@ def test_plan_schema_advertises_task_ids_and_position_specific_actions(contract_
     assert "destination" in definitions["PageGoal"]["required"]
     assert definitions["PageGoal"]["allOf"][0]["then"]["properties"]["destination"]["type"] == "string"
     assert len(schema["properties"]["goals"]["allOf"]) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replan", [False, True])
+async def test_complete_required_ids_do_not_reject_an_unscored_auxiliary_assertion(contract_tools: AgentTools, replan: bool) -> None:
+    contract_tools.plan_started = replan
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": False, "reason": "LOCAL_EXECUTION_MARKER"})  # type: ignore[method-assign]
+    goal = {"goal": "Verify supplied checks and an incidental page precondition", "operation": "observe", "run_operations": False, "checks": [assertion("C.empty"), assertion("C.valid"), {"action_type": "assertion", "target": "body", "assertion": "visible"}]}
+    result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert result["reason"] == "LOCAL_EXECUTION_MARKER", result
+    contract_tools.execute_page_goals.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -161,12 +161,12 @@ class PageStateReader:
             if (!row.getClientRects().length) return [];
             const table = row.closest('table');
             const headers = table?.querySelector('thead tr')?.children || [];
-            const attribute = Array.from(row.attributes).find(item => item.name.startsWith('data-'));
+            const attribute = Array.from(row.attributes).find(item => item.name.startsWith('data-') && (item.name.endsWith('-id') || item.name === 'data-username')) || Array.from(row.attributes).find(item => item.name.startsWith('data-'));
             let target = 'tr >> nth=' + index;
             if (row.id) target = '[id=' + JSON.stringify(row.id) + ']';
             else if (attribute) target = 'tr[' + attribute.name + '=' + JSON.stringify(attribute.value) + ']';
             if (attribute && table?.id) target = '[id=' + JSON.stringify(table.id) + '] ' + target;
-            return [{target, container_target: table?.id ? '[id=' + JSON.stringify(table.id) + ']' : null, text: row.innerText.slice(0, 500), cells: Array.from(row.children).map((cell, position) => ({target: target + ' >> :scope > :nth-child(' + (position + 1) + ')', text: cell.innerText.slice(0, 500), header: headers[position]?.innerText || ''}))}];
+            return [{target, identity: attribute ? {[attribute.name]: attribute.value} : {}, container_target: table?.id ? '[id=' + JSON.stringify(table.id) + ']' : null, text: row.innerText.slice(0, 500), cells: Array.from(row.children).map((cell, position) => ({target: target + ' >> :scope > :nth-child(' + (position + 1) + ')', text: cell.innerText.slice(0, 500), header: headers[position]?.innerText || ''}))}];
         }).slice(0, 12)""")
         return rows
 

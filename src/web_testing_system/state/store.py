@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 from web_testing_system.security import redact_sensitive_data
 
@@ -72,6 +73,25 @@ def decode_row(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 class StateStore:
     """Expose only the state operations needed by the testing workflow."""
+
+    _task_updates: ClassVar[dict[tuple[str, str], set[asyncio.Event]]] = {}
+
+    def subscribe_task_updates(self, run_id: str) -> asyncio.Event:
+        event = asyncio.Event()
+        key = (str(self.database_path.resolve()), run_id)
+        self._task_updates.setdefault(key, set()).add(event)
+        return event
+
+    def unsubscribe_task_updates(self, run_id: str, event: asyncio.Event) -> None:
+        key = (str(self.database_path.resolve()), run_id)
+        events = self._task_updates.get(key, set())
+        events.discard(event)
+        if not events:
+            self._task_updates.pop(key, None)
+
+    def _notify_task_updates(self, run_id: str) -> None:
+        for event in self._task_updates.get((str(self.database_path.resolve()), run_id), set()):
+            event.set()
 
     def __init__(self, database_path: Path, busy_timeout_ms: int = 5_000) -> None:
         if busy_timeout_ms <= 0:
@@ -497,6 +517,7 @@ class StateStore:
                 raise StateConflictError(f"task {task_id!r} was not in expected status {expected_status!r}")
         result = self.get_task(task_id)
         assert result is not None
+        self._notify_task_updates(result["run_id"])
         return result
 
     def create_resource(self, *, resource_id: str, run_id: str, resource_type: str, owner_task: str, owner: str, participants: Sequence[str], allowed_operations: Sequence[str], sharing_mode: str, cleanup_status: str) -> dict[str, Any]:
@@ -720,6 +741,8 @@ class StateStore:
         with self._connect() as connection:
             event = decode_row(connection.execute("SELECT * FROM events WHERE event_id = ?", (event_id,)).fetchone())
         assert event is not None
+        if event_type in {"TASK_PROGRESS", "TASK_FINISHED", "RUNTIME_SIGNAL_PLAN", "RUNTIME_PROGRESS_WAIT"}:
+            self._notify_task_updates(run_id)
         return event
 
     def list_events(self, run_id: str, *, event_types: Sequence[str] | None = None, task_id: str | None = None, limit: int | None = None) -> list[dict[str, Any]]:

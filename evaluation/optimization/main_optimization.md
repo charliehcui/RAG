@@ -18,3 +18,23 @@
 本轮仅一个集中实现方向（工作流契约、整体提交和依赖编译），未启动第二轮真实检查。此前的 Tester/Runtime 改动保持原始工作区状态与哈希，未在 Main 阶段修改。检查跨澳大利亚本地日期完成（2026-10-08 至 2026-10-09），保留开始时的 run ID。
 
 总体 LLM Requests 17（Main 4、Tester 12、Jev 1），Input/Output Tokens 106,644/265,220，总成本 USD 0.136035795678，Wall-clock 2869.325 秒（47.82 分钟）。D13 检出一个真实 Finding、两次 Replay 均匹配，独立 Verification FAIL / RECORDED_OUTCOME_MISMATCH 表示缺陷仍存在；Precision 1/1，Recall 1/4（D13 两个及 D12 两个启用 Case/Bug 配对）。该回放路径有实测证据，但不能据此扩大宣称整体业务或实时会话无回归。
+
+## 执行预算继承（Execution Budget Inheritance）— 2026-10-09
+
+- Problem：Main 将业务步骤数量当作浏览器执行预算。上一轮 D13 分配 10/8/18，三个 Task 均 MAX_TASK_STEPS_REACHED；原 Baseline 为 90/90/90。D02 分配 45、D12 分配 10/12，后二者实际为运行时间耗尽，不将它们错误归因于步数预算。
+- Why：MainTaskPlan 的 step_budget 字段由 LLM 填写，直接进入 Task，并被既有 Runtime BudgetGuard 用作有效上限。业务流程长度与浏览器动作数量不同；仅禁止超过配置最大值仍允许 Main 任意缩减预算。
+- Change：保留既有工作流、依赖编译与调度结构。移除 Initial Plan / Replan 输出 Schema 中的 step_budget；传统 create_task 模型 Schema 同样不暴露该字段，旧 Python 调用参数仅兼容接收，程序覆盖为固定配置值。所有新 Task（含必要的恢复 Task）继承 RunConfig.budget.max_browser_steps_per_task，当前为 90，不按照 Check 数或业务步数估计。更新已有 Task 的 Replan 路径不写预算，运行中和已完成 Task 保持原样；已停止 Task 的历史预算和证据同样不变。契约展示只读预算来源和已有预算。既有 Runtime 继续取 Task 预算与配置上限的较小值；本轮没有修改 Runtime、Tester、Jev、Evaluation 数据或系统预算上限。
+- Before：D13 10/8/18 且 Main 分配引起的步数停止 3；D12 10/12。上一轮这两个 Case 必要 Task 启动 5/5、依赖死锁/无效依赖均 0、Main Replan 0，Main Requests 3（Planning 2、Summary 1；D12 Summary 被运行预算阻止）。
+- After：34 个必要本地测试分两批通过（33+1），Ruff、mypy（41 源文件）和 git diff --check 通过。覆盖模型无法缩减/扩大预算、Initial Plan 的多 Task/实时会话预算继承、非 90 配置继承、已有 Pending/Blocked/Waiting/Completed/Running Task 预算保留、新恢复 Task 使用统一配置、历史已完成检查证据保留、原依赖编译/并行交接及 Main→Tester→Runtime→Report。冻结后只运行一次 D13/D12 检查，各 Case 一次：五个新 Task 均继承 90，MAX_TASK_STEPS_REACHED 为 0；必要任务启动 5/5，依赖死锁/无效依赖/循环/关闭重定向/重复 Task/Main 计划拒绝均为 0。Main Requests 4（Planning 2、Replan 0、Summary 2），平均 Replan 0/Case；同 Case Baseline 为 10。与上一轮比较，Planning 仍为 2，新增的一次 Summary 是 D12 正常完成汇总，不是规划调用增加。D13 Task Success 3/3、Check Completion 14/14、E2E PASS；D12 Task Success 0/2、Check Completion 4/7、E2E FAIL，两个 Task 均达到 Tester Replan Limit，属于有效 Agent Quality Failure，未替换。总体 Task Success 3/5（60%）、Check Completion 18/21（85.71%），Tester Calls 9/5（1.8/Task）。正式 report/evaluation 指标一致，Provider/API 失败 0，测量期间冻结文件哈希一致。详见 [Checkpoint Metrics](../../artifacts/runs/main-budget-cp-20261009-001/checkpoint_metrics.json)、[Budget / Dependency Review](../../artifacts/runs/main-budget-cp-20261009-001/main_budget_review.json) 与 [Validity Review](../../artifacts/runs/main-budget-cp-20261009-001/validity_review.json)。
+- Final Decision：停止 Main Optimization。Main 不再将业务步骤当作执行配额，预算继承、依赖和必要 Task 启动目标已验证，没有发现剩余的 Main 预算/规划问题；不宣称整个系统或完整实时业务流程全部通过。D12 的未完成检查为 revoked-tasks、delete-rejected、delete-preservation：Tester 一次 Replan 遗漏 Check ID（CHECK_ID_REQUIRED）；Runtime 两次 PROJECT_BINDING_UNAVAILABLE 无法恢复、无目标 assertion 导致 INVALID_ACTION，以及两次 PROGRESS_SIGNAL_NOT_AVAILABLE。两个实时任务确实并行，member-session-ready（00:52:41 UTC）→ membership-removed（00:55:21 UTC）→ revoked-project 检查（00:55:50 UTC）顺序正确；后续任务访问/删除拒绝/管理员保留性链条未完成，不能把部分交接成功写成完整 Live-session 成功。剩余失败归入 Tester / Runtime，按本轮规则保留并停止，不修改这些模块，也不进行第二次检查。不运行 Baseline、Holdout、完整 Benchmark，不更新 benchmark_history.md，等待用户确认。
+
+| Case | 新 Task 执行预算 | 必要 Task 启动 | Main Requests（Planning / Replan / Summary） | Task Success | Check Completion | 结果 |
+| --- | --- | --- | --- | --- | --- | --- |
+| D13 | 90 / 90 / 90 | 3/3 | 2（1/0/1） | 3/3 | 14/14 | E2E PASS，无步数停止 |
+| D12 | 90 / 90 | 2/2 | 2（1/0/1） | 0/2 | 4/7 | E2E FAIL，Tester Replan Limit 两次 |
+
+本次只修改 Main Agent、相关 Main 本地测试及本文件；其余源文件、Development / Holdout Scenario、Ground Truth、Scoring、模型、Provider、冻结配置上限和 benchmark_history.md 均未修改。代码在检查前冻结，检查中及结果生成后未修改执行代码。
+
+LangSmith 两条闭合追踪树共 323 个 Span（D13 188、D12 135），父子关系完整，均处于各自同一 Trace；包含 Main Planning / Summary、Tester Initial Plan / Exception Replan、Browser Action、Replay / Verification。Main Replan 与 Jev 调用均为 0，没有虚构对应 Span。见 [Tracing Review](../../artifacts/runs/main-budget-cp-20261009-001/tracing_review.json)。Replay 8/8 匹配，四次 Verification 均 FAIL / RECORDED_OUTCOME_MISMATCH，表示已检出缺陷仍存在；Bug Precision 4/4、Bug Recall 3/4 Case-Bug 配对。原始严格断言及失败完整保留。
+
+本轮总体 LLM Requests 13（Main 4、Tester 9、Jev 0），Input/Output Tokens 114,691/155,402，总成本 USD 0.08241041477，Wall-clock 981.987 秒（16.37 分钟）。Main Input/Output Tokens 51,735/5,755，成本 USD 0.00564815797；记录测量数据，不进行 Token / Latency 优化。

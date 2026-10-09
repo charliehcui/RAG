@@ -60,7 +60,6 @@ class MainTaskPlan:
     goal_id: str
     goal: str
     priority: Literal["P0", "P1", "P2", "P3"]
-    step_budget: int
     required_operations: list[str]
 
 
@@ -158,14 +157,13 @@ class MainAgentTools:
             active = [task for task in tasks if task["status"] in {"PENDING", "RUNNING", "BLOCKED", "WAITING_FOR_DATA"}]
             closed_live = bool(self.live_peers[goal_id]) and any(task["status"] in {"STOPPED", "FAILED", "CANCELLED"} for peer in self.live_peers[goal_id] | {goal_id} for task in grouped[peer])
             editable = bool(remaining) and not closed_live and not any(task["status"] == "COMPLETED" for task in tasks) and (not active or len(active) == 1 and active[0]["assigned_tester"] is None)
-            groups.append({**group, "completed_check_ids": sorted(completed), "remaining_check_ids": remaining, "current_tasks": [{key: task[key] for key in ("task_id", "status", "success_status", "success_reason", "dependencies", "assigned_tester")} for task in tasks], "live_peer_goal_ids": sorted(self.live_peers[goal_id]), "completion_dependency_goal_ids": sorted(self.completion_dependencies[goal_id]), "editable": editable, "blocker": "CLOSED_LIVE_SESSION_CANNOT_RESUME" if closed_live else None})
-        return {"workflows": groups, "editable_goal_ids": [group["goal_id"] for group in groups if group["editable"]], "rules": "One Task per supplied continuous role workflow. Main sets goal/priority within original budgets; Python binds exact identities, inputs, checks and scheduling dependencies. Live peers run concurrently and use their supplied check/progress ordering, never completion dependencies on each other. Preserve completed checks and running Tasks. Closed live sessions cannot be recovered by inventing setup Tasks. No browser steps or expanded tests."}
+            groups.append({**group, "completed_check_ids": sorted(completed), "remaining_check_ids": remaining, "current_tasks": [{key: task[key] for key in ("task_id", "status", "success_status", "success_reason", "dependencies", "assigned_tester", "step_budget")} for task in tasks], "live_peer_goal_ids": sorted(self.live_peers[goal_id]), "completion_dependency_goal_ids": sorted(self.completion_dependencies[goal_id]), "editable": editable, "blocker": "CLOSED_LIVE_SESSION_CANNOT_RESUME" if closed_live else None})
+        return {"workflows": groups, "editable_goal_ids": [group["goal_id"] for group in groups if group["editable"]], "execution_budget": {"source": "RunConfig.budget.max_browser_steps_per_task", "new_task_steps": self.max_step_budget, "existing_tasks": "unchanged"}, "rules": "One Task per supplied continuous role workflow. Main sets goal/priority; execution budgets are inherited by Python from fixed configuration, never estimated from business steps or check counts. Python binds exact identities, inputs, checks and scheduling dependencies. Live peers run concurrently and use their supplied check/progress ordering, never completion dependencies on each other. Preserve completed checks and running Tasks. Closed live sessions cannot be recovered by inventing setup Tasks. No browser steps or expanded tests."}
 
     def plan_tool(self, contract: dict[str, Any]) -> FunctionTool:
         tool = FunctionTool(name="submit_task_plan", func=self.submit_task_plan, description="Submit all editable continuous workflows together. Whole plan validation precedes any state mutation; dependencies and assigned checks are compiled from the supplied contract.", _invoke_sync_on_event_loop=True)
         schema = deepcopy(tool.parameters())
         schema["$defs"]["MainTaskPlan"]["properties"]["goal_id"] = {"type": "string", "enum": contract["editable_goal_ids"]}
-        schema["$defs"]["MainTaskPlan"]["properties"]["step_budget"] = {"type": "integer", "minimum": 1, "maximum": self.max_step_budget}
         schema["properties"]["tasks"]["allOf"] = [{"contains": {"required": ["goal_id"], "properties": {"goal_id": {"const": goal_id}}}} for goal_id in contract["editable_goal_ids"]]
         return FunctionTool(name=tool.name, description=tool.description, func=self.submit_task_plan, input_model=schema, _invoke_sync_on_event_loop=True)
 
@@ -202,12 +200,9 @@ class MainAgentTools:
             group = available[draft.goal_id]
             if not draft.goal.strip():
                 raise ValueError("NONEMPTY_WORKFLOW_GOAL_REQUIRED")
-            self._validate_task_request(feature=group["feature"], dependencies=[], step_budget=draft.step_budget, scope_targets=group["scope_targets"], required_operations=draft.required_operations, parent_finding=None)
+            self._validate_task_request(feature=group["feature"], dependencies=[], step_budget=self.max_step_budget, scope_targets=group["scope_targets"], required_operations=draft.required_operations, parent_finding=None)
             if any(dependency not in task_ids for dependency in self.completion_dependencies[draft.goal_id]):
                 raise ValueError("UNAVAILABLE_WORKFLOW_PREREQUISITE")
-            existing = grouped[draft.goal_id]
-            if existing and draft.step_budget > existing[-1]["step_budget"]:
-                raise ValueError("REPLAN_CANNOT_INCREASE_STEP_BUDGET")
         pending = set(selected)
         ordered: list[str] = []
         while pending:
@@ -226,7 +221,7 @@ class MainAgentTools:
             dependencies = sorted(task_ids[dependency] for dependency in self.completion_dependencies[goal_id])
             current = self.store.get_task(task_ids[goal_id])
             if current is None:
-                self.create_task(task_id=task_ids[goal_id], goal=goal, feature=group["feature"], priority=draft.priority, dependencies=dependencies, step_budget=draft.step_budget, data_requirements=requirements, scope_targets=group["scope_targets"], required_operations=draft.required_operations)
+                self.create_task(task_id=task_ids[goal_id], goal=goal, feature=group["feature"], priority=draft.priority, dependencies=dependencies, data_requirements=requirements, scope_targets=group["scope_targets"], required_operations=draft.required_operations)
             else:
                 self._get_run_task(current["task_id"])
                 if current["assigned_tester"] is not None:
@@ -246,13 +241,15 @@ class MainAgentTools:
         feature: str,
         priority: Literal["P0", "P1", "P2", "P3"],
         dependencies: list[str],
-        step_budget: int,
         data_requirements: dict[str, Any],
         scope_targets: list[str],
         required_operations: list[str],
         parent_finding: str | None = None,
+        step_budget: int | None = None,
     ) -> dict[str, Any]:
-        """Create one validated test Task in Shared State."""
+        """Create one validated Task with its fixed configured execution budget."""
+        # 兼容旧调用参数；模型提供的业务步数不参与执行预算。
+        step_budget = self.max_step_budget
         self._validate_task_request(
             task_id=task_id,
             feature=feature,
@@ -304,6 +301,8 @@ class MainAgentTools:
                 "priority": priority,
                 "dependencies": dependencies,
                 "parent_finding": parent_finding,
+                "step_budget": step_budget,
+                "budget_source": "RunConfig.budget.max_browser_steps_per_task",
             },
         )
         return {"ok": True, "task": task}
@@ -626,7 +625,10 @@ def create_main_agent(
     """Create the Main Agent with SQLite Tasks as its only executable plan."""
     client.function_invocation_configuration["allow_concurrent_invocation"] = False
     create_task_tool = FunctionTool(name="create_task", description="Create one scoped test Task. Login/logout are setup within that Task, not separate Auth Tasks unless Auth is an allowed feature.", func=tools.create_task, _invoke_sync_on_event_loop=True)
-    create_task_tool.parameters()["properties"]["feature"]["enum"] = tools.feature_names
+    create_task_schema = deepcopy(create_task_tool.parameters())
+    create_task_schema["properties"]["feature"]["enum"] = tools.feature_names
+    create_task_schema["properties"].pop("step_budget")
+    create_task_tool = FunctionTool(name="create_task", description=create_task_tool.description, func=tools.create_task, input_model=create_task_schema, _invoke_sync_on_event_loop=True)
     redirect_task_tool = FunctionTool(name="redirect_task", description="Redirect an open Task within the configured feature scope.", func=tools.redirect_task)
     redirect_task_tool.parameters()["properties"]["feature"]["enum"] = tools.feature_names
     agent = create_harness_agent(
@@ -638,6 +640,7 @@ def create_main_agent(
             "Use data_requirements to pass identity_reference, expected_behavior_ids and test_data_keys needed by each Task. "
             "When required_checks are configured, assign their exact check_ids through data_requirements. Every required check must be covered. Keep a continuous same-session workflow within one Task; checks are scored separately. Reference behavior descriptions do not authorize additional tests outside the explicit checks or available inputs. "
             "Keep Tasks independent when possible; use dependencies only for real prerequisites. "
+            "Execution budgets are inherited from fixed configuration by Python. Never estimate or assign step budgets from business steps or check counts. "
             "Never operate a browser, call Playwright, save evidence, replay actions, verify findings, expand scope, or create another Agent. "
             "Read structured Shared State before replanning. A single copy, color, or minor layout observation is not a high-risk replanning trigger. "
             "For the final review, synthesize only the supplied deterministic report facts. Never modify task outcomes, Finding states, evidence, metrics, or expected behavior."
@@ -718,7 +721,7 @@ class MainAgentRunner:
         self.tools.plan_committed = False
         self.agent.default_options["tools"] = [self.tools.plan_tool(contract)]
         self.session = self.agent.create_session()
-        request = "Submit ONE complete Main Task plan through submit_task_plan for exactly the editable_goal_ids. Delegate continuous role workflows; do not author Tester page steps or create preparation sub-Tasks. The contract supplies identities, input keys, checks, existing states, completed work and scheduling rules. Dependencies are compiled from these authoritative constraints, never guessed. Preserve running/completed work; do not try to redirect a closed Task or increase its budget.\nReason: " + reason + "\nPlanning Contract: " + json.dumps(contract, ensure_ascii=False)
+        request = "Submit ONE complete Main Task plan through submit_task_plan for exactly the editable_goal_ids. Delegate continuous role workflows; do not author Tester page steps or create preparation sub-Tasks. The contract supplies identities, input keys, checks, existing states, completed work and scheduling rules. Dependencies are compiled from these authoritative constraints, never guessed. Preserve running/completed work; do not try to redirect a closed Task. Execution budgets are inherited by Python and cannot be assigned or changed by Main.\nReason: " + reason + "\nPlanning Contract: " + json.dumps(contract, ensure_ascii=False)
         with trace_span("MainPlanning" if phase == "main_planning" else "MainReplan", metadata=self._phase_metadata(phase)):
             response = await self.agent.run(request, session=self.session, options={"tool_choice": "auto"})
         assert isinstance(response, AgentResponse)
