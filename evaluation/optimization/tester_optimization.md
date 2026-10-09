@@ -83,3 +83,19 @@
 | Overall | 22 | 155,074 / 108,039 | 0.057979961252 | 1603.465 |
 
 Tester Initial Plan 5 次请求、Exception Replan 3 次请求，按上传 LLM span 的父级 phase 逐 Task 与本地请求记录核对。总 Wall-clock 1498.495 秒（24.97 分钟）；并发请求耗时合计可以超过 Wall-clock。单 Task Tokens／Cost／Latency 详见数据文件。测量期间代码、测试、配置、数据冻结哈希全部一致；本阶段仅修改 Tester／Runtime 候选与执行接口及相关测试／优化记录，Main、Scenario、Ground Truth、Scoring、模型、Provider 和预算保留原值。
+
+## Plan / Replan Completeness — 2026-10-08
+
+- Problem：已有 D13 初始计划遗漏后续 Tasks 导航 destination；D05 删除缺陷使原 Project 消失，重规划继续选择旧 Project，最后又漏掉 D05.task-preserved。完整性拒绝虽已存在，但工具结构未表达全部剩余 Check 的覆盖要求，current_object 仍可能包含缓存的绑定意图。
+- Why：必要 destination 是可选字段；同一行为的后续检查需要逐个覆盖。对象缓存用于保持断言身份，不能直接当作当前对象存在的证据。修复当前阻塞也不能删掉后续必要 Check。
+- Change：现有工具结构要求显式 destination（非导航为 null），导航约束非空；按规范评分的已完成 Check 生成每个剩余 Check 的结构覆盖约束。沿用严格 Input/Check 预检，补齐导航边界目的地与本 Task 的必要 Check 顺序校验。计划整体合法后才执行，记录 TESTER_PLAN_VALIDATED 的实际剩余/计划 Check ID。页面摘要重新核对稳定行目标、Project 选项和当前选择，区分 present、unavailable、not_observed；每个操作前再次拒绝已不可用的对象。原始断言目标缓存保留，检查原对象偏差不替换对象、不伪造完成。Exception Replan 只接收当前评分的完成/剩余项、新页面/对象状态及最新失败。仅修改 Tester 接口；Runtime/Jev/Playwright、Main、Evaluation、模型、Provider 和预算不改。
+- Before：上一阶段 D05/D07/D13 检查为 Task Success 4/5、Check Completion 18/19、Tester Requests 8/5、Plan Validation Failure 2/8、Replan Limit 1/5；两类校验失败分别为 NAVIGATION_DESTINATION_REQUIRED 和 INCOMPLETE_TEST_PLAN。只读取旧结果，不重测作为 Before。
+- After：99 个相关 local/unit 测试分批通过，覆盖缺失导航、剩余下游 Check 遗漏、依赖倒置、对象删除/改名/视图未打开的区别、执行中消失后阻止旧绑定、原对象 Finding，以及既有 Assertion/Replay/Safety/Scoring/Tracing 回归。Ruff 与 mypy（41 源文件）通过。冻结后唯一检查 D03/D12 各一次有效测量：Task Success 2/5（40%），Check Completion 13/25（52%），E2E 0/2，Tester Requests 9/5（1.8/Task；单任务最高 3），Initial/Exception 请求为 5/4，实际计划提交 8 次，Preflight Validation Failure 0/8。8/8 提交均覆盖提交时全部剩余 Check，所有 navigate 有明确 destination；一条预算阻止的请求未形成计划提交，不能从提交数猜模型请求数。MAX_TASK_REPLANS_REACHED 停止为 1/5（20%）；D12 另一个任务重规划用量也达到 2，但以 LIVE_PARTICIPANT_DEPENDS_ON_OBSERVER 停止，不计入该停止原因比例。4 个 Task 未启动（官方已启动 Task 为成功率分母；全部 9 个原任务/后续任务均计入则为 2/9）。Browser Actions 76，Jev Requests 0，No-progress Stops 0；未强行调用 Jev。两条 LangSmith 树关闭、父子关系完整，report/evaluation 指标一致，Provider/API 失败 0，无替换。测量期冻结文件哈希全部一致。D12 首次在当前优化阶段测量；不同子集不能直接比较整体百分比。数据见 [Completeness Checkpoint](../../artifacts/runs/tester-completeness-cp-20261008-001/checkpoint_metrics.json) 和 [Completeness Review](../../artifacts/runs/tester-completeness-cp-20261008-001/completeness_review.json)。
+- Final Decision：保留本轮确定性覆盖/顺序/已知不可用对象校验，代码继续冻结。本轮结束，不再真实测试、不追加修改。检查覆盖与导航遗漏未复现，但 Task Success ≥80%、Check Completion ≥90% 未达标；不能按全部质量目标宣布 Tester Optimization 正式完成。0/8 只表示现有预检未拒绝计划，不证明语义/前置条件已完整：D12 的 Tasks 导航未提供 project_reference，仍被接受并在执行时遇到 PROJECT_BINDING_UNAVAILABLE。D03 的 D03.member-project-created 断言连续 CONTROL_NOT_FOUND，完整重规划仍无效；现有事件未记录失败断言的具体 control/target，不能臆测具体定位器。D12 原 Main DAG 将管理员依赖于整个成员任务，而成员要等待管理员撤权，触发 LIVE_PARTICIPANT_DEPENDS_ON_OBSERVER；既有 Main Replan 生成后续任务后，准备任务再次缺少 Project 绑定并以 MAX_RUNTIME_REACHED 停止，保留全部历史失败和未启动任务。剩余根因分别在 Tester/Runtime 断言契约、未来视图必需 Project 绑定校验、Main 双会话调度；本轮不修。单任务 3 次 Tester Calls 仍存在。Local Assertion/Finding/Replay/Safety 回归通过；真实检查无 Finding，Replay/Verification 未触发（N/A），Precision N/A，Recall 0/2，不能宣称真实回放或缺陷发现已无回归。不运行 Baseline/旧检查组合/Holdout/完整 Benchmark，不更新 Benchmark History，等待用户确认。
+
+| Case | Task Success（已启动 Task） | Check Completion | Tester Requests | 最终结果 |
+| --- | --- | --- | --- | --- |
+| D03 | 2/3 | 12/18 | 5 | Project/Task 初始计划直接完成；Member 断言无法解析，Replan Limit |
+| D12 | 0/2 | 1/7 | 4 | 跨会话依赖冲突、缺少 Project 绑定、后续准备超时；另有 4 个未启动 Task |
+
+Tester Initial Plan 5 次请求、Exception Replan 4 次请求。按上传 LLM span 的父级 TesterPlanGeneration.phase、tester_id 与本地 tasks.assigned_tester 关联，逐 Task 核对请求数；task_id 可能按既有规则脱敏，不用未匹配名称猜分阶段次数。总 Wall-clock 1738.205 秒（28.97 分钟），LLM Requests 21，Input/Output Tokens 235,085/169,312，总成本 USD 0.089116532961。Main 12 次请求、Tester 9 次、Jev 0 次；各 Task 用量及停止原因保留在数据文件中。Replay/Verification 和 Jev 多候选决策的真实性能在本轮为 N/A。

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from typing import Any
 
 import pytest
@@ -71,6 +72,86 @@ async def test_changed_page_regenerates_candidates_and_recovers_before_tester(ph
         assert not any(action["action"] == "input" and action["target"] == '[id="name"]' for action in history)
         assert [action["action"] for action in result["actions"]] == ["input", "input", "click"]
         assert phase2_store.list_events("run-1", event_types=("RUNTIME_RECOVERY",))[0]["result"]["reason"] == failure
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_replan_context_reobserves_deleted_project_without_losing_original_assertion_targets(phase2_store: StateStore) -> None:
+    client = ChoiceClient()
+    html = '<select id="project" aria-label="Task project"><option value="p1">Provided</option></select><table id="projects"><thead><tr><th>Name</th></tr></thead><tbody><tr data-project-id="p1"><td>Provided</td></tr></tbody></table>'
+    runtime = await form_runtime(phase2_store, client, html)
+    page = runtime.browser_manager.get_session(runtime.browser_session_id).page
+    try:
+        runtime.active_project = {"reference": "name", "target": '[id="project"]', "value": "p1"}
+        rows = await runtime.page_state_reader.read_rows(page)
+        runtime._bind_rows(rows, "name")
+        runtime.remember_assertion_targets(rows, "name")
+        target = next(row["target"] for row in rows if "data-project-id" in row["target"])
+        runtime.current_object = {"project_reference": "name", "row_reference": "name", "selected_project": dict(runtime.active_project), "row_targets": [target]}
+        original_targets = deepcopy(runtime.assertion_targets)
+        tools = tools_for(runtime, phase2_store)
+        before = await tools.planning_context()
+        await page.evaluate("document.querySelector('tr[data-project-id]').remove(); document.querySelector('option').remove()")
+        action_count = len(phase2_store.list_action_history(run_id="run-1", task_id="task-1"))
+        after = await tools.planning_context({"reason": "PROJECT_BINDING_UNAVAILABLE"})
+        assert before["current_page"]["state_id"] != after["current_page"]["state_id"]
+        assert after["current_object"]["selected_project"] is None
+        assert after["current_object"]["project_reference"] is None
+        assert after["current_object"]["row_targets"] == []
+        assert {binding["status"] for binding in after["object_bindings"] if binding["reference"] == "name"} == {"unavailable", "not_observed"}
+        assert runtime.assertion_targets == original_targets
+        assert len(phase2_store.list_action_history(run_id="run-1", task_id="task-1")) == action_count
+        assert not client.states
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_object_snapshot_preserves_stable_rename_and_distinguishes_an_unopened_view(phase2_store: StateStore) -> None:
+    client = ChoiceClient()
+    runtime = await form_runtime(phase2_store, client, '<table id="records"><thead><tr><th>Name</th></tr></thead><tbody><tr data-record="one"><td>Provided</td></tr></tbody></table>')
+    page = runtime.browser_manager.get_session(runtime.browser_session_id).page
+    try:
+        rows = await runtime.page_state_reader.read_rows(page)
+        runtime._bind_rows(rows, "name")
+        tools = tools_for(runtime, phase2_store)
+        runtime.input_values["unrelated"] = "name"
+        await page.locator("td").evaluate("element => element.textContent='Renamed'")
+        renamed = await tools.planning_context()
+        assert {binding["reference"] for binding in renamed["object_bindings"]} == {"name"}
+        assert renamed["object_bindings"][0]["status"] == "present"
+        assert renamed["object_bindings"][0]["target"] == next(row["target"] for row in rows if "data-record" in row["target"])
+        await page.locator("table").evaluate("element => element.hidden=true")
+        hidden = await tools.planning_context()
+        assert hidden["object_bindings"][0]["status"] == "not_observed"
+        assert not client.states
+    finally:
+        await runtime.browser_manager.close()
+
+
+@pytest.mark.asyncio
+async def test_disappearance_between_goals_blocks_stale_operation_then_allows_original_object_evidence(phase2_store: StateStore) -> None:
+    configure_checks(phase2_store)
+    client = ChoiceClient()
+    html = '<button>Projects</button><table id="records"><thead><tr><th>Name</th><th>Actions</th></tr></thead><tbody><tr data-record="one"><td>Provided</td><td><button onclick="this.closest(\'tr\').remove()">Delete</button></td></tr></tbody></table>'
+    runtime = await form_runtime(phase2_store, client, html)
+    runtime.expected_behavior_ids = ("EB-flow",)
+    runtime.executor.identity_reference = "member"
+    tools = tools_for(runtime, phase2_store)
+    try:
+        first = {"action_type": "assertion", "control": "Name", "context": "name", "assertion": "hidden", "behavior_id": "EB-flow", "check_id": "local.first"}
+        last = {**first, "check_id": "local.last", "assertion": "visible"}
+        result = await tools.execute_test_plan([{"goal": "Delete original object", "operation": "delete", "row_reference": "name", "checks": [first]}, {"goal": "Reopen using the old object", "operation": "navigate", "destination": "Projects", "row_reference": "name", "checks": [last]}])  # type: ignore[list-item]
+        assert result["reason"] == "OBJECT_REFERENCE_UNAVAILABLE"
+        assert result["remaining_check_ids"] == ["local.last"]
+        assert len(phase2_store.list_events("run-1", event_types=("PAGE_GOAL_OPERATION_COMPLETED",))) == 1
+        result = await tools.execute_test_plan([{"goal": "Record the original missing object", "operation": "observe", "run_operations": False, "checks": [last]}])  # type: ignore[list-item]
+        assert result["success"], result
+        assert result["completed_check_ids"] == ["local.first", "local.last"]
+        assert len(phase2_store.list_recent_findings("run-1")) == 1
+        assert runtime.budget.usage.task_replans == 1
+        assert not client.states
     finally:
         await runtime.browser_manager.close()
 

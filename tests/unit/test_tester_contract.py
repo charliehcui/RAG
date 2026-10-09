@@ -53,6 +53,9 @@ def test_plan_schema_advertises_task_ids_and_position_specific_actions(contract_
     assert "empty_name" not in definitions["PageGoal"]["properties"]["row_reference"]["enum"]
     assert "operation" in definitions["PageGoal"]["required"]
     assert "navigate" in definitions["PageGoal"]["properties"]["operation"]["enum"]
+    assert "destination" in definitions["PageGoal"]["required"]
+    assert definitions["PageGoal"]["allOf"][0]["then"]["properties"]["destination"]["type"] == "string"
+    assert len(schema["properties"]["goals"]["allOf"]) == 2
 
 
 @pytest.mark.asyncio
@@ -60,6 +63,67 @@ def test_plan_schema_advertises_task_ids_and_position_specific_actions(contract_
 async def test_operation_intent_and_object_are_required_before_execution(contract_tools: AgentTools, operation: str | None, reason: str) -> None:
     result = await contract_tools.execute_test_plan([{"goal": "Perform assigned operation", "operation": operation, "checks": [assertion("C.empty"), assertion("C.valid")]}])  # type: ignore[list-item]
     assert result["reason"] == reason
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", [False, True])
+async def test_blank_or_missing_navigation_destination_rejects_entire_plan(contract_tools: AgentTools, boundary: bool) -> None:
+    goals = [{"goal": "Check before navigating", "operation": "observe", "checks": [assertion("C.empty")]}, {"goal": "Reopen the view", "operation": "navigate", "destination": "   ", "checks": [assertion("C.valid")]}]
+    if boundary:
+        goals[1].update(operation="observe", before_steps=[{"action_type": "navigation"}])
+    result = await contract_tools.execute_test_plan(goals)  # type: ignore[arg-type]
+    assert result["reason"] == "NAVIGATION_DESTINATION_REQUIRED"
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
+    assert not contract_tools.store.list_events("run", event_types=("TESTER_PLAN_VALIDATED",))
+
+
+@pytest.mark.asyncio
+async def test_complete_plan_with_inverted_check_dependencies_is_rejected_before_actions(contract_tools: AgentTools) -> None:
+    result = await contract_tools.execute_test_plan([{"goal": "Wrong order", "operation": "observe", "checks": [assertion("C.valid"), assertion("C.empty")]}])  # type: ignore[list-item]
+    assert result["reason"] == "CHECK_DEPENDENCY_ORDER_REQUIRED"
+    assert result["check_id"] == "C.valid" and result["unmet_dependencies"] == ["C.empty"]
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_replan_cannot_drop_a_downstream_check_after_current_blocker(contract_tools: AgentTools) -> None:
+    checks = contract_tools.runtime.required_checks
+    checks.append({"check_id": "C.persisted", "behavior_id": "EB-name", "depends_on": ["C.valid"]})
+    contract_tools.runtime.record_task_outcome.return_value["checks"] = [{**check, "completed": check["check_id"] == "C.empty"} for check in checks]  # type: ignore[attr-defined]
+    contract_tools.plan_started = True
+    context = await contract_tools.planning_context({"reason": "CONTROL_NOT_FOUND"})
+    assert context["remaining_check_ids"] == ["C.valid", "C.persisted"]
+    schema = contract_tools.plan_tool(context["current_page"]).parameters()
+    assert len(schema["properties"]["goals"]["allOf"]) == 2
+    result = await contract_tools.execute_test_plan([{"goal": "Fix only current blocker", "operation": "observe", "checks": [assertion("C.valid")]}])  # type: ignore[list-item]
+    assert result["missing_check_ids"] == ["C.persisted"]
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [("project_reference", "valid_name"), ("row_reference", "valid_name"), ("context", "Contract Project")])
+async def test_known_unavailable_object_cannot_be_used_for_an_operation(contract_tools: AgentTools, field: str, value: str) -> None:
+    contract_tools._page_summary = AsyncMock(return_value={"object_bindings": [{"reference": "valid_name", "status": "unavailable"}]})  # type: ignore[method-assign]
+    goal = {"goal": "Navigate using stale object", "operation": "navigate", "destination": "Tasks", field: value, "checks": [assertion("C.empty"), assertion("C.valid")]}
+    result = await contract_tools.execute_test_plan([goal])  # type: ignore[list-item]
+    assert result["reason"] == "OBJECT_REFERENCE_UNAVAILABLE"
+    assert result["unavailable_object_references"] == ["valid_name"]
+    contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_completed_dependency_and_original_object_check_only_replan_remain_legal(contract_tools: AgentTools) -> None:
+    contract_tools.runtime.record_task_outcome.return_value["checks"][0]["completed"] = True  # type: ignore[attr-defined]
+    contract_tools._page_summary = AsyncMock(return_value={"object_bindings": [{"reference": "valid_name", "status": "unavailable"}]})  # type: ignore[method-assign]
+    contract_tools.execute_page_goals = AsyncMock(return_value={"success": True})  # type: ignore[method-assign]
+    contract_tools.finish_task = AsyncMock(return_value={"finished": True, "checks": []})  # type: ignore[method-assign]
+    contract_tools.plan_started = True
+    result = await contract_tools.execute_test_plan([{"goal": "Record original missing object's deviation", "operation": "observe", "run_operations": False, "row_reference": "valid_name", "checks": [assertion("C.valid")]}])  # type: ignore[list-item]
+    assert result["success"]
+    validated = contract_tools.store.list_events("run", event_types=("TESTER_PLAN_VALIDATED",))
+    assert validated[-1]["result"]["remaining_check_ids"] == ["C.valid"]
+    assert validated[-1]["result"]["planned_check_ids"] == ["C.valid"]
     contract_tools.runtime.execute_page_goal.assert_not_awaited()  # type: ignore[attr-defined]
 
 

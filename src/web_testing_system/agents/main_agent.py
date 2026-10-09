@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from copy import deepcopy
+from dataclasses import dataclass
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urljoin, urlparse
@@ -13,9 +15,13 @@ from agent_framework import (
     Agent,
     AgentResponse,
     AgentSession,
+    FunctionInvocationContext,
+    FunctionMiddleware,
     FunctionTool,
+    MiddlewareTermination,
     create_harness_agent,
 )
+from pydantic import TypeAdapter, ValidationError
 
 from web_testing_system.config import RunConfig, Settings
 from web_testing_system.observability import (
@@ -23,6 +29,7 @@ from web_testing_system.observability import (
     TraceToolMiddleware,
     trace_span,
 )
+from web_testing_system.scoring import score_task
 from web_testing_system.state import StateStore
 
 if TYPE_CHECKING:
@@ -48,6 +55,15 @@ HIGH_RISK_TERMS = (
 )
 
 
+@dataclass
+class MainTaskPlan:
+    goal_id: str
+    goal: str
+    priority: Literal["P0", "P1", "P2", "P3"]
+    step_budget: int
+    required_operations: list[str]
+
+
 class MainAgentTools:
     """Expose only scope-checked planning operations to the Main Agent."""
 
@@ -69,6 +85,159 @@ class MainAgentTools:
         self.allowed_urls = tuple(urljoin(target_url, value) for value in allowed_scope)
         self.denied_operations = {operation.casefold() for operation in denied_operations}
         self.max_step_budget = max_step_budget
+        self.workflow_contract: dict[str, dict[str, Any]] = {}
+        self.live_peers: dict[str, set[str]] = {}
+        self.completion_dependencies: dict[str, set[str]] = {}
+        self.phase_submissions = 0
+        self.submission_limit = 1
+        self.plan_committed = False
+
+    def configure_workflows(self, config: RunConfig) -> None:
+        """Compile supplied check ordering into whole-workflow scheduling constraints."""
+        self.workflow_contract.clear()
+        self.live_peers.clear()
+        self.completion_dependencies.clear()
+        metadata: dict[str, Any] = {}
+        marker = "\nRequired checks: "
+        if marker in config.test_goal:
+            supplied, _ = json.JSONDecoder().raw_decode(config.test_goal.split(marker, 1)[1])
+            metadata = {goal["goal_id"]: goal for goal in supplied}
+        for check in config.required_checks:
+            group = self.workflow_contract.setdefault(check.goal_id, {"goal_id": check.goal_id, "identity_reference": check.identity_reference, "checks": []})
+            if group["identity_reference"] != check.identity_reference:
+                raise ValueError("One continuous workflow must have one acting identity")
+            group["checks"].append(check.model_dump(mode="json"))
+        accounts = {account.identity_reference: account for account in config.account_references}
+        for goal_id, group in self.workflow_contract.items():
+            supplied = metadata.get(goal_id, {})
+            group.update(description=supplied.get("description", " ".join(check["description"] for check in group["checks"])), feature=supplied.get("feature", config.focus_features[0]), test_data_keys=supplied.get("test_data_keys", list(config.test_data)), role=accounts[group["identity_reference"]].role, scope_targets=list(config.allowed_scope))
+            if any(key not in config.test_data for key in group["test_data_keys"]):
+                raise ValueError("Workflow input references must exist in the supplied configuration")
+        check_groups = {check.check_id: check.goal_id for check in config.required_checks}
+        edges: dict[str, set[str]] = {goal_id: set() for goal_id in self.workflow_contract}
+        for check in config.required_checks:
+            edges[check.goal_id].update(check_groups[dependency] for dependency in check.depends_on if check_groups[dependency] != check.goal_id)
+        reachable: dict[str, set[str]] = {}
+        for goal_id in edges:
+            seen: set[str] = set()
+            pending = list(edges[goal_id])
+            while pending:
+                dependency = pending.pop()
+                if dependency not in seen:
+                    seen.add(dependency)
+                    pending.extend(edges[dependency])
+            reachable[goal_id] = seen
+        capacity = (self.store.get_run(self.run_id) or {}).get("scope", {}).get("configured_tester_capacity", config.budget.max_testers)
+        for goal_id in edges:
+            peers = {other for other in edges if other != goal_id and other in reachable[goal_id] and goal_id in reachable[other]}
+            if len(peers) + 1 > capacity:
+                raise ValueError("Configured capacity cannot keep required live workflows concurrent")
+            self.live_peers[goal_id] = peers
+            component = peers | {goal_id}
+            self.completion_dependencies[goal_id] = set().union(*(edges[other] for other in component)) - component
+
+    def _workflow_tasks(self) -> dict[str, list[dict[str, Any]]]:
+        grouped: dict[str, list[dict[str, Any]]] = {goal_id: [] for goal_id in self.workflow_contract}
+        for task in self.store.list_tasks(self.run_id):
+            requirements = task["data_requirements"]
+            goal_ids = {check["goal_id"] for check in requirements.get("required_checks", [])}
+            goal_id = requirements.get("goal_id") or (next(iter(goal_ids)) if len(goal_ids) == 1 else None)
+            if goal_id in grouped:
+                grouped[goal_id].append(task)
+        return grouped
+
+    def planning_contract(self) -> dict[str, Any]:
+        grouped = self._workflow_tasks()
+        groups = []
+        for goal_id, group in self.workflow_contract.items():
+            tasks = grouped[goal_id]
+            completed: set[str] = set()
+            for task in tasks:
+                completed.update(check["check_id"] for check in score_task(self.store, task)["checks"] if check["completed"])
+            remaining = [check["check_id"] for check in group["checks"] if check["check_id"] not in completed]
+            active = [task for task in tasks if task["status"] in {"PENDING", "RUNNING", "BLOCKED", "WAITING_FOR_DATA"}]
+            closed_live = bool(self.live_peers[goal_id]) and any(task["status"] in {"STOPPED", "FAILED", "CANCELLED"} for peer in self.live_peers[goal_id] | {goal_id} for task in grouped[peer])
+            editable = bool(remaining) and not closed_live and not any(task["status"] == "COMPLETED" for task in tasks) and (not active or len(active) == 1 and active[0]["assigned_tester"] is None)
+            groups.append({**group, "completed_check_ids": sorted(completed), "remaining_check_ids": remaining, "current_tasks": [{key: task[key] for key in ("task_id", "status", "success_status", "success_reason", "dependencies", "assigned_tester")} for task in tasks], "live_peer_goal_ids": sorted(self.live_peers[goal_id]), "completion_dependency_goal_ids": sorted(self.completion_dependencies[goal_id]), "editable": editable, "blocker": "CLOSED_LIVE_SESSION_CANNOT_RESUME" if closed_live else None})
+        return {"workflows": groups, "editable_goal_ids": [group["goal_id"] for group in groups if group["editable"]], "rules": "One Task per supplied continuous role workflow. Main sets goal/priority within original budgets; Python binds exact identities, inputs, checks and scheduling dependencies. Live peers run concurrently and use their supplied check/progress ordering, never completion dependencies on each other. Preserve completed checks and running Tasks. Closed live sessions cannot be recovered by inventing setup Tasks. No browser steps or expanded tests."}
+
+    def plan_tool(self, contract: dict[str, Any]) -> FunctionTool:
+        tool = FunctionTool(name="submit_task_plan", func=self.submit_task_plan, description="Submit all editable continuous workflows together. Whole plan validation precedes any state mutation; dependencies and assigned checks are compiled from the supplied contract.", _invoke_sync_on_event_loop=True)
+        schema = deepcopy(tool.parameters())
+        schema["$defs"]["MainTaskPlan"]["properties"]["goal_id"] = {"type": "string", "enum": contract["editable_goal_ids"]}
+        schema["$defs"]["MainTaskPlan"]["properties"]["step_budget"] = {"type": "integer", "minimum": 1, "maximum": self.max_step_budget}
+        schema["properties"]["tasks"]["allOf"] = [{"contains": {"required": ["goal_id"], "properties": {"goal_id": {"const": goal_id}}}} for goal_id in contract["editable_goal_ids"]]
+        return FunctionTool(name=tool.name, description=tool.description, func=self.submit_task_plan, input_model=schema, _invoke_sync_on_event_loop=True)
+
+    def submit_task_plan(self, tasks: list[MainTaskPlan]) -> dict[str, Any]:
+        self.phase_submissions += 1
+        try:
+            return self._submit_task_plan(TypeAdapter(list[MainTaskPlan]).validate_python(tasks))
+        except (ValueError, ValidationError) as error:
+            reason = str(error) if not isinstance(error, ValidationError) else "INVALID_MAIN_PLAN_SCHEMA"
+            self._append_plan_event(event_type="MAIN_PLAN_REJECTED", action="submit_task_plan", task_id=None, result={"reason": reason})
+            return {"ok": False, "reason": reason, "planning_contract": self.planning_contract()}
+
+    def _submit_task_plan(self, tasks: list[MainTaskPlan]) -> dict[str, Any]:
+        contract = self.planning_contract()
+        available = {group["goal_id"]: group for group in contract["workflows"]}
+        selected = {task.goal_id: task for task in tasks}
+        if len(selected) != len(tasks) or set(selected) != set(contract["editable_goal_ids"]):
+            raise ValueError("EXACT_EDITABLE_WORKFLOW_COVERAGE_REQUIRED")
+        grouped = self._workflow_tasks()
+        task_ids: dict[str, str] = {}
+        run_checks = {check["check_id"]: check for check in (self.store.get_run(self.run_id) or {}).get("scope", {}).get("required_checks", [])}
+        if any(run_checks.get(check["check_id"]) != check for group in available.values() for check in group["checks"]):
+            raise ValueError("WORKFLOW_CHECKS_MUST_MATCH_RUN_CONFIGURATION")
+        for goal_id in available:
+            existing = grouped[goal_id]
+            active = [task for task in existing if task["status"] in {"PENDING", "RUNNING", "BLOCKED", "WAITING_FOR_DATA"}]
+            if active:
+                task_ids[goal_id] = active[0]["task_id"]
+            elif existing and existing[-1]["status"] == "COMPLETED":
+                task_ids[goal_id] = existing[-1]["task_id"]
+            elif goal_id in selected:
+                task_ids[goal_id] = goal_id if not existing else f"{goal_id}-remaining-{len(existing)}"
+        for draft in tasks:
+            group = available[draft.goal_id]
+            if not draft.goal.strip():
+                raise ValueError("NONEMPTY_WORKFLOW_GOAL_REQUIRED")
+            self._validate_task_request(feature=group["feature"], dependencies=[], step_budget=draft.step_budget, scope_targets=group["scope_targets"], required_operations=draft.required_operations, parent_finding=None)
+            if any(dependency not in task_ids for dependency in self.completion_dependencies[draft.goal_id]):
+                raise ValueError("UNAVAILABLE_WORKFLOW_PREREQUISITE")
+            existing = grouped[draft.goal_id]
+            if existing and draft.step_budget > existing[-1]["step_budget"]:
+                raise ValueError("REPLAN_CANNOT_INCREASE_STEP_BUDGET")
+        pending = set(selected)
+        ordered: list[str] = []
+        while pending:
+            ready = sorted(goal_id for goal_id in pending if not (self.completion_dependencies[goal_id] & pending))
+            if not ready:
+                raise ValueError("CYCLIC_TASK_DEPENDENCY")
+            ordered.extend(ready)
+            pending.difference_update(ready)
+        for goal_id in ordered:
+            draft, group = selected[goal_id], available[goal_id]
+            goal = draft.goal + "\nSupplied workflow scope: " + group["description"]
+            if self.live_peers[goal_id]:
+                goal += "\nConcurrent peer Tasks (same live workflow, coordinate through supplied progress signals): " + ", ".join(task_ids[peer] for peer in sorted(self.live_peers[goal_id]))
+            checks = [check for check in group["checks"] if check["check_id"] in group["remaining_check_ids"]]
+            requirements = {"goal_id": goal_id, "identity_reference": group["identity_reference"], "role": group["role"], "test_data_keys": group["test_data_keys"], "expected_behavior_ids": sorted({check["behavior_id"] for check in checks}), "check_ids": group["remaining_check_ids"], "required_checks": checks, "feature": group["feature"], "scope_targets": group["scope_targets"], "required_operations": draft.required_operations}
+            dependencies = sorted(task_ids[dependency] for dependency in self.completion_dependencies[goal_id])
+            current = self.store.get_task(task_ids[goal_id])
+            if current is None:
+                self.create_task(task_id=task_ids[goal_id], goal=goal, feature=group["feature"], priority=draft.priority, dependencies=dependencies, step_budget=draft.step_budget, data_requirements=requirements, scope_targets=group["scope_targets"], required_operations=draft.required_operations)
+            else:
+                self._get_run_task(current["task_id"])
+                if current["assigned_tester"] is not None:
+                    raise ValueError("ASSIGNED_TASK_CONTEXT_IS_IMMUTABLE")
+                self.store.update_task_plan(task_id=current["task_id"], expected_status=current["status"], goal=goal, priority=draft.priority, dependencies=dependencies, parent_finding=current["parent_finding"], data_requirements=requirements)
+                if current["status"] != "PENDING":
+                    self.store.update_task_status(task_id=current["task_id"], expected_status=current["status"], new_status="PENDING")
+                self._append_plan_event(event_type="PLAN_CHANGE", action="revise_pending_task", task_id=current["task_id"], result={"dependencies": dependencies, "remaining_check_ids": group["remaining_check_ids"]})
+        self.plan_committed = True
+        self._append_plan_event(event_type="MAIN_PLAN_COMMITTED", action="submit_task_plan", task_id=None, result={"goal_ids": ordered, "task_ids": task_ids, "live_peers": {key: sorted(value) for key, value in self.live_peers.items()}})
+        return {"ok": True, "task_ids": task_ids}
 
     def create_task(
         self,
@@ -85,6 +254,7 @@ class MainAgentTools:
     ) -> dict[str, Any]:
         """Create one validated test Task in Shared State."""
         self._validate_task_request(
+            task_id=task_id,
             feature=feature,
             dependencies=dependencies,
             step_budget=step_budget,
@@ -196,6 +366,7 @@ class MainAgentTools:
         """Redirect an open Task after a verified high-risk structured Finding."""
         current = self._get_run_task(task_id)
         self._validate_task_request(
+            task_id=task_id,
             feature=feature,
             dependencies=dependencies,
             step_budget=int(current["step_budget"]),
@@ -339,6 +510,7 @@ class MainAgentTools:
     def _validate_task_request(
         self,
         *,
+        task_id: str | None = None,
         feature: str,
         dependencies: Sequence[str],
         step_budget: int,
@@ -358,6 +530,22 @@ class MainAgentTools:
             dependency_task = self.store.get_task(dependency)
             if dependency_task is None or dependency_task["run_id"] != self.run_id:
                 raise ValueError(f"Task dependency is not in this Run: {dependency}")
+            if dependency_task["status"] in {"FAILED", "STOPPED", "CANCELLED"}:
+                raise ValueError(f"Task dependency cannot complete: {dependency}")
+        if len(set(dependencies)) != len(dependencies):
+            raise ValueError("Duplicate Task dependencies are not allowed")
+        if task_id is not None:
+            graph = {task["task_id"]: task["dependencies"] for task in self.store.list_tasks(self.run_id)}
+            graph[task_id] = list(dependencies)
+            pending = list(dependencies)
+            seen: set[str] = set()
+            while pending:
+                dependency = pending.pop()
+                if dependency == task_id:
+                    raise ValueError("Task completion dependencies must be acyclic")
+                if dependency not in seen:
+                    seen.add(dependency)
+                    pending.extend(graph.get(dependency, []))
         if parent_finding is not None:
             self._require_high_risk_finding(parent_finding)
 
@@ -419,10 +607,24 @@ class MainAgentTools:
         )
 
 
+class MainPlanMiddleware(FunctionMiddleware):
+    def __init__(self, tools: MainAgentTools) -> None:
+        self.tools = tools
+
+    async def process(self, context: FunctionInvocationContext, call_next: Callable[[], Awaitable[None]]) -> None:
+        if self.tools.workflow_contract and context.function.name != "submit_task_plan":
+            context.result = {"ok": False, "reason": "COMPLETE_MAIN_PLAN_REQUIRED"}
+            raise MiddlewareTermination("Submit the whole workflow plan through its bounded tool.", result=context.result)
+        await call_next()
+        if context.function.name == "submit_task_plan" and (self.tools.plan_committed or self.tools.phase_submissions >= self.tools.submission_limit):
+            raise MiddlewareTermination("Main plan accepted or original repair allowance exhausted; no Done model round needed.", result=context.result)
+
+
 def create_main_agent(
     *, client: Any, settings: Settings, tools: MainAgentTools
 ) -> Agent:
     """Create the Main Agent with SQLite Tasks as its only executable plan."""
+    client.function_invocation_configuration["allow_concurrent_invocation"] = False
     create_task_tool = FunctionTool(name="create_task", description="Create one scoped test Task. Login/logout are setup within that Task, not separate Auth Tasks unless Auth is an allowed feature.", func=tools.create_task, _invoke_sync_on_event_loop=True)
     create_task_tool.parameters()["properties"]["feature"]["enum"] = tools.feature_names
     redirect_task_tool = FunctionTool(name="redirect_task", description="Redirect an open Task within the configured feature scope.", func=tools.redirect_task)
@@ -454,7 +656,7 @@ def create_main_agent(
         disable_mode=True,
         disable_file_memory=True,
         disable_web_search=True,
-        middleware=[TraceChatMiddleware(), TraceToolMiddleware()],
+        middleware=[TraceChatMiddleware(), TraceToolMiddleware(), MainPlanMiddleware(tools)],
     )
     agent.additional_properties.update(
         {
@@ -495,6 +697,9 @@ class MainAgentRunner:
 
     async def create_initial_plan(self, run_config: RunConfig) -> AgentResponse:
         """Ask the Manager to create the executable plan as SQLite Tasks."""
+        if run_config.required_checks:
+            self.tools.configure_workflows(run_config)
+            return await self._run_workflow_plan("main_planning", "Initial required workflow plan")
         prompt = (
             "Create valid Shared State Tasks as the initial test plan. Do not maintain another Todo plan. "
             "Include Project, Task, Member, and Permission coverage when they are in focus. Distinguish parallel Tasks from dependent Tasks. "
@@ -503,6 +708,19 @@ class MainAgentRunner:
         )
         with trace_span("MainPlanning", metadata=self._phase_metadata("main_planning")):
             response = await self.agent.run(prompt, session=self.session)
+        assert isinstance(response, AgentResponse)
+        return response
+
+    async def _run_workflow_plan(self, phase: str, reason: str) -> AgentResponse:
+        contract = self.tools.planning_contract()
+        self.tools.phase_submissions = 0
+        self.tools.submission_limit = self.max_replans + 1
+        self.tools.plan_committed = False
+        self.agent.default_options["tools"] = [self.tools.plan_tool(contract)]
+        self.session = self.agent.create_session()
+        request = "Submit ONE complete Main Task plan through submit_task_plan for exactly the editable_goal_ids. Delegate continuous role workflows; do not author Tester page steps or create preparation sub-Tasks. The contract supplies identities, input keys, checks, existing states, completed work and scheduling rules. Dependencies are compiled from these authoritative constraints, never guessed. Preserve running/completed work; do not try to redirect a closed Task or increase its budget.\nReason: " + reason + "\nPlanning Contract: " + json.dumps(contract, ensure_ascii=False)
+        with trace_span("MainPlanning" if phase == "main_planning" else "MainReplan", metadata=self._phase_metadata(phase)):
+            response = await self.agent.run(request, session=self.session, options={"tool_choice": "auto"})
         assert isinstance(response, AgentResponse)
         return response
 
@@ -519,10 +737,16 @@ class MainAgentRunner:
                 result={"reason": "MAX_REPLANS_REACHED"},
             )
             return None
+        if self.tools.workflow_contract and not self.tools.planning_contract()["editable_goal_ids"]:
+            self.tools._append_plan_event(event_type="REPLAN_SKIPPED", action="replan", task_id=None, result={"reason": "NO_SAFE_EDITABLE_WORKFLOW", "trigger": reason})
+            return None
         self.replan_count += 1
         self.replan_reasons.add(normalized_reason)
-        with trace_span("MainReplan", metadata=self._phase_metadata("main_replan")):
-            response = await self.agent.run("Read the coordination snapshot before changing the plan. Use only structured facts and scoped tools. " + f"Replan reason: {reason}", session=self.session)
+        if self.tools.workflow_contract:
+            response = await self._run_workflow_plan("main_replan", reason)
+        else:
+            with trace_span("MainReplan", metadata=self._phase_metadata("main_replan")):
+                response = await self.agent.run("Read the coordination snapshot before changing the plan. Use only structured facts and scoped tools. " + f"Replan reason: {reason}", session=self.session)
         assert isinstance(response, AgentResponse)
         self.tools._append_plan_event(
             event_type="REPLAN_COMPLETED",
