@@ -1,39 +1,44 @@
-# Final Readiness Summary — 2026-10-10（测量 ID 保留 20261009）
+# Final Readiness Summary — Final Development Benchmark v2，2026-10-10
 
-**FINAL_BENCHMARK_READY = YES。四项核心停止条件已达成，已停止优化。**
+**FINAL_DEVELOPMENT_PASS = NO。**正式 10-case Development Benchmark 已完成。三项核心条件达标，Check Completion 未达到 90%。停止本轮，不自动优化、补跑或运行 Holdout。
 
-最终架构保持：Main = Workflow / Task / Dependency / Live-session；Tester = Initial Plan + Exception Replan；Runtime = 页面观察 / 稳定对象绑定 / 合法候选 / 恢复 / 断言 / 信号；Jev = bounded choice / boolean / scoring；Playwright = Execute。唯一合法候选由程序直接执行。
+此前 FINAL_BENCHMARK_READY = YES 来自 D12 readiness 样本；当前以完整正式 Development 结果为准。原就绪报告保留在本轮 pre_benchmark_readiness_summary.md 和原归档文件，不把其样本成绩混入本轮。
 
-主要根因及修复：计划与执行契约不一致、辅助断言与必要检查混淆、对象/输入/字段作用域混用、错误视图下生成空候选，以及无实际操作的权限误报。补齐严格计划校验和剩余 Check ID 状态、确定性断言类型、明确目的地执行、重复候选合并、字段与实体类型绑定、原对象消失检查、有限原容器恢复、权限操作及所有者关系证据、只读辅助观察续接、进度信号续接、跨角色 Replay 和 Playwright 响应清理。没有降低检查标准或改变测试目标；准备、刷新和独立保留性 Check 不被统一改成删除操作。
+架构保持：Main = Workflow / Task / Dependency / Live-session；Tester = Initial Plan + Exception Replan；Runtime = 页面状态 / Binding / Candidates / Recovery / Assertion / Progress Signal；Jev = bounded choice / boolean / scoring；Playwright = Execute。模型、Provider、Budget、Scenario、Ground Truth、Scoring、Prompt、生产源代码与 Evaluation 配置保持冻结。
 
-最新冻结验证：**D12 一次有效测量，2 个 Task / 7 个 Check**，run_id = final-stabilization-D12-20261009-008。修复后仅验证仍失败的复杂 live-session 流程；已通过 D03/D13 不重跑，旧成绩不并入新版分数。
+| 指标（Metric） | Baseline v2 | Final Development Benchmark v2 |
+| --- | --- | --- |
+| 任务成功（Task Success） | 3/14（21.43%） | 13/15（86.67%） |
+| 检查完成（Check Completion） | 19/74（25.68%） | 58/74（78.38%） |
+| 端到端成功（E2E Success） | 1/10（10.00%） | 8/10（80.00%） |
+| 缺陷召回（Bug Recall） | 3/9（33.33%） | 9/9（100.00%） |
+| 稳定复现（Reproduction Success） | 6/6（100.00%） | 15/15（100.00%） |
+| 复现尝试成功（Replay Attempt Success） | 12/12（100.00%） | 30/30（100.00%） |
+| 缺陷精确率（Bug Precision） | 4/6（66.67%） | 15/15（100.00%） |
+| 误报（False Positive） | 2 | 0 |
+| Tester Calls / Task | 2.714 | 1.267 |
+| Main Requests / Replans | 47 / 0 | 18 / 0 |
+| Jev Decisions | 65 | 2 |
+| Browser Actions | 320 | 889 |
+| Replan Limit Stops | 11 | 0 |
+| Total Tokens | 1,296,408 | 769,976 |
+| Total Cost USD | 0.163595949 | 0.220798106 |
+| Wall-clock 秒 | 4,323.695 | 5,375.683 |
 
-| 指标 | 最新真实结果 |
-| --- | --- |
-| Task Success | 2/2 = 100% |
-| Check Completion | 7/7 = 100% |
-| False Positive / Precision / Recall | 0 / 100% / 2/2 = 100% |
-| Tester Calls / Task | 3/2 = 1.5；计划提交 Initial 2、Exception Replan 1 |
-| 严格 E2E Success | PASS |
-| Required Task Startup | 2/2 = 100% |
-| Main Requests / Replan | 2 / 0 |
-| Dependency / Deadlock / Budget 缩减 | 0；每个 Task 预算继承 90 |
-| Plan Validation Failure / Replan Limit | 0 / 0 |
-| Replay | 4 个 Finding，8/8 复现匹配 |
-| Verification | 4 次 FAIL / RECORDED_OUTCOME_MISMATCH，原缺陷仍存在；不是回放系统失败 |
-| Browser Actions | Exploration 35，Replay / Verification 336 |
-| Jev Decisions / Latency | 0 / N/A；真实动作均由当前唯一合法候选直接执行 |
-| Wall-clock / Requests / Tokens / Cost | 523.431 秒 / 5 / 171,088 / USD 0.042304259 |
-| LangSmith | 415 个闭合 Span，同一 Trace Tree、父子关系及原生计数完整一致 |
+必要流程启动 15/15；Main 依赖、死锁、重复任务、closed-task redirect、执行预算缩减为 0，每 Task 90 steps。Baseline 分母为 14 个已尝试任务及 1 个未启动，本轮 15 个全部启动，保留同一计分定义。费用与总耗时上升，如实保留。
 
-Runtime 当前没有无目标断言、非法动作、信号丢失或安全权限越界。一次 OBJECT_UNAVAILABLE_IN_CURRENT_VIEW 来自 B2 已实际删除原 Project 后的额外只读 Tasks 步骤，由一次 Admin Exception Replan 收尾；最终没有阻塞错误、任务中止或未复现 Finding。正式报告与 evaluation 评分一致。Main / 模型 / Provider / 配置上限 / Development 与 Holdout Scenario / Ground Truth / Scoring 的保护哈希保持不变。
+- **D02（Runtime / Jev 的填表候选接口）**：D02.registered 的 fill 阶段有 3 个候选，两次返回 NO_SELECTION；Runtime 各重新观察一次，状态与结果仍相同，0/9 检查完成。Tester 实际请求 3 次，服务耗时共 996.136 秒，最终 MAX_RUNTIME_REACHED。现有测量不能单独区分候选质量与 Jev 选择质量，不能归为 Provider/API 故障。
+- **D03（Tester → Runtime 的断言目标契约）**：task-workflow 的初始计划返回 AMBIGUOUS_ASSERTION_TARGET，仅完成准备检查（1/8）；任务创建及后续 7 个检查未完成。Exception Replan 生成后遇到 BUDGET_EXCEEDED，正式停止原因为 MAX_RUNTIME_REACHED。其他两个 Task 通过，Case 合计 11/18。
+- 两个失败 Task 的预算均为冻结的 90 steps；不是 Main 缩减预算或 MAX_TASK_STEPS_REACHED。RunConfig 保持 900 秒，D02 实际 1010.335 秒；既有预算检查不会在所有进行中的模型请求上立即硬取消。D02/D03 没有新的 Main Summary 模型请求，总结请求总数为 8 次。没有延长预算、改停止逻辑或继续修复。
 
-本地回归：沿用此前全量 355 项及额外安全 1 项的通过证据；本次续做新增 **45 项**根因相关 unit / integration tests 最终通过，含真实 Playwright、假模型、正常/缺陷双会话及自动回放。没有重复运行原完整测试集。最终 Ruff、mypy（41 个源文件）、diff 检查通过。
+已恢复问题：D01 的 CONTROL_NOT_FOUND 经一次 Exception Replan 收尾，10/10 检查完成。D12 信号顺序正确；原 Project 真正删除后，ORIGINAL_OBJECT_ABSENCE_CHECK 保留原对象缺失状态并续接，2/2 Tasks、7/7 Checks，只有两次 Initial Plan。
 
-剩余小问题：实际对象删除后的额外只读任务仍可能产生一次合理 Replan；模型服务时延与回放动作较多，本轮没有优化它们。本次最后版本只测 D12，小样本不能证明全 Development / Holdout 的总体成功率；普通多工作流 D03 的历史 3/3、18/18 和 D13 的历史 3/3、14/14 仅作为既有证据，不合并计分。
+Replay / Safety / Scoring：15/15 Finding 正确稳定复现，30/30 尝试匹配；15 个 Verification FAIL 表示真实缺陷仍存在。没有安全越界、伪造或非法动作，Report 与 Evaluation Metrics 全部一致。102 个 ASSERTION_FAILURE 含真实缺陷断言，不等于系统错误。
 
-历史质量失败及 FP 全部保留。此前 001–007 的有效结果不替换、不删除；本次与它们使用不同冻结代码，禁止挑选或混合版本成绩。旧 Baseline v2 与 benchmark_history.md 保持不变。
+LangSmith：10/10 完整闭合 Trace Tree、1,162 Span，父子关系完整，模型 / Jev / 浏览器动作计数 10/10 匹配。计划提交与阶段 Span 严格同数为 9/10：D02 最后一个 Replan 因预算停止而未提交。Initial/Replan LLM Calls 标签缺失，记 N/A；实际提交 Initial 15 / Replan 3，阶段 Span Initial 15 / Replan 4，保留各自定义。总请求 Main 18 + Tester 19 + Jev 2 = 39；Tester 平均请求耗时 299.139 秒，阶段与逐任务细项见正式报告。
 
-**建议进入最终 Development Benchmark + Holdout 的授权步骤，但本次没有运行它们。代码冻结，不继续优化或再做真实 checkpoint。**
+本轮每 Case 一次有效测量，基础设施替换 0，Provider/API 失败 0。没有重新运行 local/unit tests，没有中途修改冻结文件，只更新正式文档和测量记录；旧 v1/v2 与 Checkpoint 记录保留。
 
-证据：[最新 Metrics](../../artifacts/runs/final-stabilization-rebinding-20261009-008/checkpoint_metrics.json)、[Main / Budget](../../artifacts/runs/final-stabilization-rebinding-20261009-008/main_budget_review.json)、[Runtime / Signals](../../artifacts/runs/final-stabilization-rebinding-20261009-008/runtime_review.json)、[LangSmith](../../artifacts/runs/final-stabilization-rebinding-20261009-008/tracing_review.json)、[本地验证](../../artifacts/final-stabilization-20261009/continued-local-validation.json)。
+**本轮正式 Development 未通过；现在停止，后续由用户单独决定，不自动运行 Holdout。**
+
+证据：[正式 Benchmark 报告](../../artifacts/runs/final-development-v2-20261010-001/final_development_v2_report.md)、[指标](../../artifacts/runs/final-development-v2-20261010-001/measurement_metrics.json)、[失败证据](../../artifacts/runs/final-development-v2-20261010-001/failed_case_evidence.json)、[追踪及安全核对](../../artifacts/runs/final-development-v2-20261010-001/runtime_tracing_integrity.json)。

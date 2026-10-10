@@ -278,3 +278,131 @@
 上述为本轮测量证据，不修改冻结评分、Evaluation 或 Agent / Runtime，也没有为差结果补跑。后续动作等待用户确认。
 
 逐任务的 Token、费用、耗时、检查和错误记录见 `measurement_metrics.json`；有效性判定见 `validity_review.json`；追踪验证见 `tracing_review.json`，均位于正式轮次目录。没有更新 `tester_optimization.md`，没有开始后续优化。
+
+## Final Development Benchmark v2 — 2026-10-10
+
+**FINAL_DEVELOPMENT_PASS = NO。**10 个开发用例（Development Cases）各一次有效正式测量，基础设施替换 0，质量失败全部保留；保留集（Holdout）未运行。日期采用 Australia/Sydney。
+
+正式轮次：`artifacts/runs/final-development-v2-20261010-001/`。Main / Tester / Runtime / Jev / Playwright / Prompt / Scenario / Ground Truth / Scoring / Model / Provider / Budget / Evaluation 配置在测量期间保持冻结，文件指纹检查通过。没有中途调试、优化或因成绩补跑。
+
+测量条件与 Baseline v2 一致：`development-v2-checks-20261008`，10 Cases / 74 Checks；Main `deepseek/deepseek-v4-flash` / `streamlake/fp8`，Tester `z-ai/glm-5.3-flash` / `relace`，Jev `typesafe/jev-1.13`；3 Tester / 3 Browser Contexts。运行预算 900 秒、500 LLM 请求、10M 输入 / 1M 输出 Token、120 Jev；每 Task 90 Browser Steps、2 Exception Replans、0 Computer Use；每 Finding 3 Replay Attempts、250 Replay Steps。没有触发备用模型。
+
+### 正式 Before / After
+
+| 指标（Metric） | Baseline v2 | Final Development Benchmark v2 |
+| --- | --- | --- |
+| 任务成功（Task Success） | 3/14（21.43%） | 13/15（86.67%） |
+| 检查完成（Check Completion） | 19/74（25.68%） | 58/74（78.38%） |
+| 端到端成功（E2E Success） | 1/10（10.00%） | 8/10（80.00%） |
+| 缺陷召回（Bug Recall） | 3/9（33.33%） | 9/9（100.00%） |
+| 稳定复现（Reproduction Success） | 6/6（100.00%） | 15/15（100.00%） |
+| 复现尝试成功（Replay Attempt Success） | 12/12（100.00%） | 30/30（100.00%） |
+| 缺陷精确率（Bug Precision） | 4/6（66.67%） | 15/15（100.00%） |
+| 误报（False Positive） | 2 | 0 |
+| Tester Calls / Task | 2.714 | 1.267 |
+| Main Requests / Replans | 47 / 0 | 18 / 0 |
+| Jev Decisions | 65 | 2 |
+| Browser Actions | 320 | 889 |
+| Replan Limit Stops | 11 | 0 |
+| Total Tokens | 1,296,408 | 769,976 |
+| Total Cost USD | 0.163595949 | 0.220798106 |
+| Wall-clock 秒 | 4,323.695 | 5,375.683 |
+
+仅与冻结 Baseline v2 比较，旧 v1 保留为历史，不计算其优化提升。Baseline v2 有 14 个已尝试任务和 1 个未启动任务；本轮 15 个全部启动。两轮采用同一冻结计分定义，未启动任务另列并使 E2E 失败。Check Completion 表示必要检查已执行，不能代替业务行为是否正确。Task Success 增加 65.24 个百分点，Check Completion 增加 52.70 个百分点；费用与整轮耗时上升，按实际值保留。
+
+### Main / Tester / Jev / Overall
+
+| Role | Requests | Input Tokens | Output Tokens | Cost USD | Service Latency 秒 |
+| --- | --- | --- | --- | --- | --- |
+| main | 18 | 196,189 | 24,212 | 0.020205034 | 278.691 |
+| tester | 19 | 159,421 | 388,290 | 0.200521840 | 5,683.644 |
+| jev | 2 | 1,696 | 168 | 0.000071232 | 1.713 |
+| overall | 39 | 357,306 | 412,670 | 0.220798106 | 5,964.048 |
+
+| 指标（Metric） | 结果 |
+| --- | --- |
+| Main Planning / Replan / Summary 请求 | 10 / 0 / 8 |
+| Main Planning / Replan / Summary 服务耗时（秒） | 97.264 / 0.000 / 181.426 |
+| Main Planning / Replan / Summary 阶段耗时（Span Latency，秒） | 98.601 / 0.000 / 181.929 |
+| Tester Initial Plan / Replan LLM Calls | N/A / N/A |
+| Tester Initial / Replan 计划提交（Plan Submissions） | 15 / 3 |
+| Tester Initial / Replan 阶段跨度（Phase Spans） | 15 / 4 |
+| Tester Input / Output Tokens / Task | 10,628.067 / 25,886.000 |
+| Tester Cost / Task USD | 0.013368123 |
+| Tester 模型服务耗时 / Task 秒 | 378.910 |
+| Tester 平均请求耗时（Request Latency）秒 | 299.139 |
+| 平均 / 最长 Task Wall-clock 秒 | 425.462 / 1,003.233 |
+| Jev 总耗时（秒）/ 平均耗时（毫秒） | 1.713 / 856.486 |
+| Browser Actions：探索 / Replay 与 Verification | 262 / 627 |
+| No-progress Stops / Replan Limit Stops | 0 / 0 |
+| Verification 原生结果 | {"FAIL": 15} |
+| Recovered / Blocking errors | 0 / 0 |
+| 未启动 / 中止 / 真正执行失败 Tasks | 0 / 2 / 0 |
+| Provider/API 失败请求 | 0 |
+| Main + Tester / 全部模型请求 | 37 / 39 |
+| Case Wall-clock 合计 / 整轮 Wall-clock 秒 | 5,374.024 / 5,375.683 |
+
+Initial / Replan 的 LLM 请求缺少独立原生子阶段标签，保留 N/A；计划提交事件和阶段 Span 分别报告，不能猜测请求分类。服务耗时是请求实际耗时合计，不能与并行任务耗时相加估计 Wall-clock。所有实际使用的请求均有完整供应商 Token / Cost 记录。
+
+### 逐 Case 正式结果
+
+| Case | Status | Task Success | Check Completion | FP | Main/Tester/Jev | Wall-clock 秒 |
+| --- | --- | --- | --- | --- | --- | --- |
+| D01 | COMPLETED | 1/1（100.00%） | 10/10（100.00%） | 0 | 2/2/0 | 755.158 |
+| D02 | FAILED | 0/1（0.00%） | 0/9（0.00%） | 0 | 1/3/2 | 1,010.335 |
+| D03 | FAILED | 2/3（66.67%） | 11/18（61.11%） | 0 | 1/4/0 | 904.432 |
+| D04 | COMPLETED | 1/1（100.00%） | 3/3（100.00%） | 0 | 2/1/0 | 307.335 |
+| D05 | COMPLETED | 1/1（100.00%） | 3/3（100.00%） | 0 | 2/1/0 | 414.926 |
+| D06 | COMPLETED | 1/1（100.00%） | 3/3（100.00%） | 0 | 2/1/0 | 367.565 |
+| D07 | COMPLETED | 1/1（100.00%） | 2/2（100.00%） | 0 | 2/1/0 | 217.099 |
+| D08 | COMPLETED | 1/1（100.00%） | 5/5（100.00%） | 0 | 2/1/0 | 406.680 |
+| D12 | COMPLETED | 2/2（100.00%） | 7/7（100.00%） | 0 | 2/2/0 | 532.427 |
+| D13 | COMPLETED | 3/3（100.00%） | 14/14（100.00%） | 0 | 2/3/0 | 458.068 |
+
+FAILED / INTERRUPTED 是冻结执行器产生的有效质量结果，不作为无效测量排除。详细逐任务指标保留在 measurement_metrics.json。
+
+### 主要失败原因
+
+- **D02（Runtime / Jev 的填表候选接口）**：D02.registered 的 fill 阶段有 3 个候选，两次返回 NO_SELECTION；Runtime 各重新观察一次，状态与结果仍相同，0/9 检查完成。Tester 实际请求 3 次，服务耗时共 996.136 秒，最终 MAX_RUNTIME_REACHED。现有测量不能单独区分候选质量与 Jev 选择质量，不能归为 Provider/API 故障。
+- **D03（Tester → Runtime 的断言目标契约）**：task-workflow 的初始计划返回 AMBIGUOUS_ASSERTION_TARGET，仅完成准备检查（1/8）；任务创建及后续 7 个检查未完成。Exception Replan 生成后遇到 BUDGET_EXCEEDED，正式停止原因为 MAX_RUNTIME_REACHED。其他两个 Task 通过，Case 合计 11/18。
+- 两个失败 Task 的预算均为冻结的 90 steps；不是 Main 缩减预算或 MAX_TASK_STEPS_REACHED。RunConfig 保持 900 秒，D02 实际 1010.335 秒；既有预算检查不会在所有进行中的模型请求上立即硬取消。D02/D03 没有新的 Main Summary 模型请求，总结请求总数为 8 次。没有延长预算、改停止逻辑或继续修复。
+
+### 恢复、Main、Replay / Safety / Scoring
+
+- D01 的一次 CONTROL_NOT_FOUND 计划阶段问题经 Exception Replan 恢复，最终严格完成 10/10；历史问题没有永久判失败。
+- D12 双角色并行正确，信号顺序为 member-session-ready → membership-removed → member-delete-observed。原 Project 真正删除后，PROJECT_BINDING_UNAVAILABLE / OBJECT_UNAVAILABLE_IN_CURRENT_VIEW 按 ORIGINAL_OBJECT_ABSENCE_CHECK 续接，保留真实缺失状态，不切换到其他对象。两个 Initial Plan 完成 2/2 Tasks、7/7 Checks，没有 Tester Replan。
+- 必要流程启动 15/15；无重复 Task、invalid dependency、dependency cycle/deadlock、closed-task redirect、live completion dependency conflict 或 Check 顺序错误。每 Task 90 steps，Main-caused 提前步骤预算停止为 0，Main Replan 为 0。
+- 9/9 Case/Bug 组合检出，15/15 Finding 正确且稳定复现，30/30 复现尝试匹配。15 个 Verification FAIL / RECORDED_OUTCOME_MISMATCH 表示原业务缺陷仍存在，不能解释为回放基础设施失败。
+- 没有 SCOPE_VIOLATION / PERMISSION_DENIED / FORGED_ACTION / INVALID_ACTION 浏览器执行错误。102 个 ASSERTION_FAILURE 包含缺陷的探索、复现与验证断言失败，不能一概归为 Runtime 控件错误；Native Report / Evaluation Metrics 为 10/10 一致，没有重新评分。
+
+### LangSmith 追踪（Tracing）
+
+10/10 个完整闭合 Trace Tree，共 1,162 Span，全部同 Trace、父子关系完整。LLM / Jev / BrowserAction 的原生计数与云端为 10/10 匹配。按计划提交事件与计划阶段 Span 严格同数为 9/10：D02 有 2 个 Exception Replan 阶段，但最后一份生成后因运行预算停止，仅 1 次实际提交。保留原值，这处计数差异不是丢失上传。一次云端只读查询超时后读取成功，没有因 Tracing 重跑 Case。
+
+保留实际执行的 Main Planning / Summary / Replan、Tester Initial Plan / Exception Replan、Jev、BrowserAction、PageGoal、Evidence / Finding、Reproduction（Replay）、Verification 层级。Assertion 沿用 BrowserAction 的现有记录，未触发阶段不制造 Span，敏感输入输出继续脱敏。Main Replan 本轮未触发。
+
+| Case | LangSmith Trace | Span | 完整性 |
+| --- | --- | --- | --- |
+| D01 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a12336-526e-78c1-acd3-73d542c874cf?trace_id=01a12336-526e-78c1-acd3-73d542c874cf) | 68 | closed / same trace / complete parents |
+| D02 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a12341-d7d1-7d01-9aa5-dd82978b59de?trace_id=01a12341-d7d1-7d01-9aa5-dd82978b59de) | 24 | closed / same trace / complete parents |
+| D03 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a12351-451e-7373-89a3-97f84ed936d0?trace_id=01a12351-451e-7373-89a3-97f84ed936d0) | 97 | closed / same trace / complete parents |
+| D04 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a1235f-1215-79f3-8178-f772652c3f10?trace_id=01a1235f-1215-79f3-8178-f772652c3f10) | 74 | closed / same trace / complete parents |
+| D05 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a12363-c2b1-7943-8439-d9be69c92847?trace_id=01a12363-c2b1-7943-8439-d9be69c92847) | 115 | closed / same trace / complete parents |
+| D06 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a1236a-1ab2-7a51-b7f8-3a8479e15039?trace_id=01a1236a-1ab2-7a51-b7f8-3a8479e15039) | 88 | closed / same trace / complete parents |
+| D07 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a1236f-b691-7483-8657-ac3b71e8e714?trace_id=01a1236f-b691-7483-8657-ac3b71e8e714) | 54 | closed / same trace / complete parents |
+| D08 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a12373-06a8-7f03-911f-b63a7f1d77d3?trace_id=01a12373-06a8-7f03-911f-b63a7f1d77d3) | 73 | closed / same trace / complete parents |
+| D12 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a12379-3b50-7973-bbfb-037424de4875?trace_id=01a12379-3b50-7973-bbfb-037424de4875) | 385 | closed / same trace / complete parents |
+| D13 | [Trace](https://smith.langchain.com/o/d3430704-a04f-4863-aabc-c675857e1e0d/projects/p/2df542ca-6ddc-4a30-9092-652d656d1ecb/r/01a12381-5b2a-7470-8896-67d2d84769c9?trace_id=01a12381-5b2a-7470-8896-67d2d84769c9) | 184 | closed / same trace / complete parents |
+
+### 核心达标判断
+
+| 条件 | 判断 |
+| --- | --- |
+| Task Success ≥80% | True |
+| Check Completion ≥90% | False |
+| False Positive =0 | True |
+| Tester Calls / Task ≤3 | True |
+
+**FINAL_DEVELOPMENT_PASS = NO。**全部质量失败保留，不自动修改代码、重新优化或重跑 Benchmark。Holdout 未运行，后续等待用户单独授权。
+
+证据：本轮 manifest.json、各 Case 的 run_config.json / state.db / report.json / ground_truth_matching.json、measurement_metrics.json、validity_review.json、main_budget_review.json、failed_case_evidence.json、runtime_tracing_integrity.json、tracing_review.json。旧 Baseline v1/v2、所有历史 Checkpoint 与有效失败记录保留。
