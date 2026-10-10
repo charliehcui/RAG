@@ -32,6 +32,7 @@ from web_testing_system.runtime.budget import BudgetExceededError, BudgetGuard
 from web_testing_system.runtime.models import (
     ActionCandidate,
     ActionType,
+    InteractiveElement,
     PageState,
     WebAction,
 )
@@ -295,9 +296,27 @@ class TesterAgentTools:
         with trace_span("PageGoal", metadata={"task_id": self.assignment.task_id, "check_id": check_id}):
             return await self._execute_page_goals(goals, related_task_ids, finish)
 
+    @staticmethod
+    def _bind_assertion_objects(goal: PageGoal) -> None:
+        for location in ("before_steps", "checks", "after_steps"):
+            for step in getattr(goal, location):
+                if step.action_type != ActionType.ASSERTION or not step.control or step.context or step.target:
+                    continue
+                step.context = goal.row_reference or goal.context
+                if step.context or location == "before_steps" or not goal.run_operations or goal.operation not in {"create", "edit", "submit"}:
+                    continue
+                matches = {binding.value_reference for binding in goal.inputs if not binding.value_reference.startswith("env:") and WebTestingRuntime._field_matches(InteractiveElement(kind="cell", label=binding.control, target=""), step.control)}
+                if len(matches) == 1:
+                    step.context = next(iter(matches))
+
     async def _execute_page_goals(self, goals: list[PageGoal], related_task_ids: list[str] | None = None, finish: bool = False) -> dict[str, Any]:
         """Delegate explicit business operations to Runtime in one plan call. Runtime observes, binds, phases and recovers; Jev selects bounded alternatives. Python runs checks and determines Task success."""
         goals = TypeAdapter(list[PageGoal]).validate_python(goals)
+        for goal in goals:
+            self._bind_assertion_objects(goal)
+        failure = self.runtime.validate_plan_assertions([asdict(goal) for goal in goals])
+        if failure:
+            return failure
         for goal in goals:
             if not goal.goal.strip() or not 1 <= goal.max_steps <= 30:
                 return {"success": False, "error_type": "INVALID_PAGE_GOAL"}
@@ -481,6 +500,7 @@ class TesterAgentTools:
                         step.pop("assertion", None)
         goals = TypeAdapter(list[PageGoal]).validate_python(goals)
         for goal in goals:
+            self._bind_assertion_objects(goal)
             if goal.operation != "navigate" and goal.destination and (not goal.before_steps or goal.before_steps[-1].action_type != ActionType.NAVIGATION or goal.before_steps[-1].control != goal.destination):
                 goal.before_steps.append(PageStep(ActionType.NAVIGATION, control=goal.destination, project_reference=goal.project_reference))
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="TESTER_PLAN", tool="TesterPlan", action=phase, result={"phase": phase, "goal_count": len(goals), "goals": [{"goal": goal.goal, "inputs": [asdict(binding) for binding in goal.inputs], "context": goal.context, "project_reference": goal.project_reference, "row_reference": goal.row_reference, "form_context": goal.form_context, "operation": goal.operation, "destination": goal.destination, "run_operations": goal.run_operations, "check_ids": [step.check_id for step in [*goal.before_steps, *goal.checks, *goal.after_steps] if step.check_id]} for goal in goals]}, latency_ms=0)
@@ -672,7 +692,7 @@ class TesterAgentTools:
             if step.control is not None and step.action_type == ActionType.NAVIGATION:
                 navigation = await self.runtime.execute_page_goal("Navigate to the explicit boundary destination", operation="navigate", destination=step.control, project_reference=step.project_reference)
                 result = {"success": navigation["success"], "error_type": None if navigation["success"] else navigation.get("reason"), "source": "RUNTIME", "resolved_target": None}
-            elif step.control is not None:
+            elif step.control is not None and (step.target is None or step.action_type != ActionType.ASSERTION):
                 if step.action_type not in {ActionType.INPUT, ActionType.SELECT, ActionType.CLICK, ActionType.REPEAT_SUBMIT, ActionType.ASSERTION}:
                     return {"success": False, "failed_step": index, "error_type": "CONTROL_ACTION_UNSUPPORTED", "results": results}
                 if step.value_reference is not None and step.value_reference not in self.runtime.input_values:

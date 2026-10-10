@@ -1,5 +1,14 @@
 # Runtime Optimization
 
+## Final Development D02：确定性填表与候选身份 — 2026-10-10
+
+- Problem：正式 Final Development Benchmark v2 中，D02 注册表单的 fill 阶段向 Jev 提供三个字段候选，两次 NO_SELECTION 后未完成任何检查（0/9）。
+- Why：原记录中的三个候选是用户名、显示名和密码三个独立且已经绑定的必填字段，不是三个重复控件，也不是需要模型选择的业务分支。Runtime 把确定性填写顺序交给了 Jev；原去重还只识别相同 candidate_id。
+- Change：Runtime 在候选排序与截断之前，只保留计划中下一个未完成、已经唯一绑定字段的合法动作，每次动作后重新观察。相同输入绑定一次执行后同步完成；按完整动作效果去重，保留 Check ID、输入引用、对象、页面状态和安全契约之间的区别。唯一合法动作沿用 Runtime → Playwright 直接执行；真正多个合法提交选项仍由 Jev 做 bounded choice，严格置信度与有限恢复保持不变。断言行定位优先稳定行目标，只有缺少稳定目标才使用文本回退，避免同名行切换对象。
+- Before：D02 0/9 Checks，两次 Jev NO_SELECTION，最终 MAX_RUNTIME_REACHED；正式失败与 Trace 保留，不作为基础设施失败替换。
+- After：本地注册回归覆盖注册/登录表单隔离、三个独立字段、等价输入去重、动作后字段重新渲染及候选容量为 1/8；每步只有一个当前候选，Jev 调用为 0。真实多个提交选项继续验证 bounded choice、低置信度不提交和候选刷新。本次不调用真实模型，新的正式成功率、Token 和成本均为 N/A；完整本地结果见 [Final Readiness Summary](final_readiness_summary.md)。
+- Final Decision：只修 D02 候选接口及 D03 所必需的稳定对象定位，不改 Main、Jev 职责、Evaluation、模型、Provider 或预算。不运行真实 Case、Benchmark 或 Holdout，等待用户决定下一次正式测量。
+
 ## Final Stabilization 最终结论 — 2026-10-10
 
 - Problem：绑定/字段/视图状态及权限 oracle 不稳定，辅助步骤又使剩余必要证据和信号无法完成。

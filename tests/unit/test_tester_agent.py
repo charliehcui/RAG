@@ -66,6 +66,7 @@ class FakeRuntime:
         self.stop_reasons: list[str] = []
         self.known_calls = 0
         self.task_finished = False
+        self.required_checks: list[dict[str, Any]] = []
 
     async def request_replan(self, reason: str) -> dict[str, object]:
         self.replan_reasons.append(reason)

@@ -1,5 +1,14 @@
 # Tester Optimization
 
+## Final Development D03：断言对象预检 — 2026-10-10
+
+- Problem：正式 D03 task-workflow 创建 d03-task-branch 后，辅助 Name 断言缺少 target/context，遭遇 AMBIGUOUS_ASSERTION_TARGET，后续必要检查未完成；该 Task 仅完成 1/8 Checks。
+- Why：计划已提供 Project name → task_branch_name 的唯一操作输入，断言却丢失相同对象的范围。仅 Project 选择不能标识目标行，expected 文本也不能充当对象选择规则。
+- Change：提交计划与直接 page-goals 入口先绑定断言对象：保留显式 target/对象范围，继承 Goal 的 row/context；操作后的字段断言仅在实际输入中存在唯一匹配引用时继承该引用，不从 expected 猜对象。form_context 只绑定操作表单，不能充当列断言的行对象。无对象范围的 Name/Title/Username/Owner/Role 列断言在任何操作前返回 ASSERTION_OBJECT_REQUIRED，记录 Check ID、control、target、对象与原因。before-step 不推断未来创建对象；辅助断言不被删掉，必要 Check ID 与期望保持严格。同有 control 与 target 的断言执行明确 target，Runtime 的稳定行目标优先于同名文本回退。
+- Before：正式 D03 Case 为 11/18 Checks，task-workflow 初始计划失败后 Replan 受到原 Runtime 上限限制；保留全部有效失败及 Trace。
+- After：本地多行页面可创建原对象并执行辅助 Name 与两个独立必要检查，包括显式创建表单的计划；目标始终是同一新行。测试覆盖计划/直接入口提前拒绝未指定对象、表单范围不能冒充目标行、错误 expected 不能改选别行、同名行仍使用显式稳定对象，以及 control 与 target 同时提供时的确定性执行。既有测试补齐明确原始对象，假 Runtime 补齐已存在的接口字段，断言标准、Check ID 和业务流程不变。完整本地结果见 [Final Readiness Summary](final_readiness_summary.md)；真实指标 N/A。
+- Final Decision：保留确定性对象绑定与执行前预检，不改 Prompt、Tester 架构、模型、预算或评分。本轮不做真实测量，不把本地测试当成正式 Benchmark 通过。
+
 ## Final Stabilization 最终结论 — 2026-10-10
 
 - Problem：Baseline 的重规划限制与不可执行计划，后续还出现作用域、目的地及无操作权限 Finding；不能靠换模型、放宽评分或加预算处理。

@@ -343,6 +343,7 @@ async def test_missing_assertion_type_is_unambiguous_only_with_explicit_target_a
         if semantic:
             check.pop("target")
             check["control"] = "Name"
+            check["context"] = "valid_name"
     result = await contract_tools.execute_test_plan([{"goal": "Check explicit targets", "operation": "observe", "run_operations": False, "checks": checks}])  # type: ignore[list-item]
     assert result["reason"] == "LOCAL_EXECUTION_MARKER", result
     assert all(step.action_type == ActionType.ASSERTION for step in contract_tools.execute_page_goals.call_args.args[0][0].checks)

@@ -47,6 +47,7 @@ class FakeRuntime:
         self.browser_session_id: str | None = None
         self.browser_manager = FakeBrowserManager()
         self.tester_id = tester_id
+        self.required_checks: list[dict[str, Any]] = []
 
     async def start_session(self) -> str:
         self.browser_session_id = f"browser-{self.tester_id}"

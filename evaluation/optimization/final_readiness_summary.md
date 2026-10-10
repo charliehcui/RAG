@@ -1,5 +1,20 @@
 # Final Readiness Summary — Final Development Benchmark v2，2026-10-10
 
+## D02 / D03 最后一次小范围修复 — 2026-10-10
+
+本节描述正式测量之后的新代码；下方正式 Final Development Benchmark v2 的有效结果全部保留，**FINAL_DEVELOPMENT_PASS = NO** 不变。未重新运行真实 Case、Benchmark 或 Holdout，新代码的真实 Task Success / Check Completion / False Positive / Tester Calls 均为 **N/A**。
+
+只修改 Tester → Runtime 的断言对象契约、当前填表候选与稳定行定位这三处直接必要代码。Main、Scenario、Ground Truth、Scoring、Model / Provider、Budget、Jev Selector、Replay、Safety 和 Tracing 实现保持原值。架构仍为 Main 规划依赖、Tester Initial Plan / Exception Replan、Runtime 状态与恢复、Jev bounded decision、Playwright 执行。
+
+- D02：原三个候选分别是三个已经绑定的注册字段。Runtime 按计划中的未完成字段顺序生成当前唯一动作，在排序/截断前筛选，并合并等价候选与重复输入绑定；直接执行唯一合法动作，真正多选仍调用 Jev，低置信度仍拒绝执行。
+- D03：原辅助 Name 断言缺少原对象范围。程序继承明确行对象或唯一实际操作输入，保留显式 target（同时提供 control 时也保留）；不从 expected 反推目标，form_context 不充当目标行。无法确定对象的列断言在整个计划执行前拒绝。稳定行目标不再被相同文本的另一行覆盖。
+- 本地验证：**LOCAL_FIX_VALIDATED = YES**。全量首轮 420 项中 400 项通过；修正受新契约影响的旧模拟计划/接口后，原 20 个失败项与 D02 八个候选组合的定向批次 **28/28 通过**。D03 对象/表单/显式目标与预检的新增边界验证收尾通过，最新计划契约 **57/57 通过**；Ruff、mypy（41 源文件）及 diff check 通过。按当前收集的 **428 个测试节点逐项核对，全部有通过记录**，这是全量与必要定向收尾的分批证据，不声称最后重新执行了全部 428 项。没有重复未受后续修改影响的已通过测试，没有调用真实 LLM。证据见 [本地核对记录](../../artifacts/d02-d03-fix-review.json)。
+- 建议：本地验证通过后，可以由用户另行授权一次冻结版本的正式 Final Development Benchmark。此前正式失败不覆盖，新测量单独记录；不自动开始，Holdout 继续等待授权。本地通过不保证四项真实目标达标。
+
+具体变更记录：[Runtime Optimization](runtime_optimization.md)、[Tester Optimization](tester_optimization.md)。`benchmark_history.md` 和 Main Optimization 本轮不修改。
+
+## 已完成的正式测量（修复前代码）
+
 **FINAL_DEVELOPMENT_PASS = NO。**正式 10-case Development Benchmark 已完成。三项核心条件达标，Check Completion 未达到 90%。停止本轮，不自动优化、补跑或运行 Holdout。
 
 此前 FINAL_BENCHMARK_READY = YES 来自 D12 readiness 样本；当前以完整正式 Development 结果为准。原就绪报告保留在本轮 pre_benchmark_readiness_summary.md 和原归档文件，不把其样本成绩混入本轮。

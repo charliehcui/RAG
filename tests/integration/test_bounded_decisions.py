@@ -49,14 +49,16 @@ async def form_runtime(store: StateStore, client: ChoiceClient, html: str = FORM
 @pytest.mark.parametrize("failure", ["LOW_JEV_CONFIDENCE", "CANDIDATE_EXPIRED"])
 async def test_changed_page_regenerates_candidates_and_recovers_before_tester(phase2_store: StateStore, failure: str) -> None:
     client = ChoiceClient(.1 if failure == "LOW_JEV_CONFIDENCE" else .95)
-    runtime = await form_runtime(phase2_store, client)
+    html = FORM.replace('<button>Create</button>', '<button id="create-a">Create A</button><button id="create-b">Create B</button>')
+    runtime = await form_runtime(phase2_store, client, html)
     page = runtime.browser_manager.get_session(runtime.browser_session_id).page
     original = runtime.jev_selector.select
 
     async def change_once(**kwargs: Any) -> Any:
         result = await original(**kwargs)
         if len(client.states) == 1:
-            await page.locator("#name").evaluate("element => element.id='new-name'")
+            await page.locator("#create-a").evaluate("element => element.textContent='Fresh Create A'")
+            await page.locator("#create-b").evaluate("element => element.textContent='Fresh Create B'")
             client.confidence = .95
         return result
 
@@ -69,7 +71,7 @@ async def test_changed_page_regenerates_candidates_and_recovers_before_tester(ph
         assert len(client.states) == 2
         assert client.states[0]["page_state"]["state_id"] != client.states[1]["page_state"]["state_id"]
         history = phase2_store.list_action_history(run_id="run-1", task_id="task-1")
-        assert not any(action["action"] == "input" and action["target"] == '[id="name"]' for action in history)
+        assert not any(action["action"] == "click" and 'button:text-is("Create ' in (action["target"] or "") for action in history)
         assert [action["action"] for action in result["actions"]] == ["input", "input", "click"]
         assert phase2_store.list_events("run-1", event_types=("RUNTIME_RECOVERY",))[0]["result"]["reason"] == failure
     finally:
@@ -159,13 +161,15 @@ async def test_disappearance_between_goals_blocks_stale_operation_then_allows_or
 @pytest.mark.asyncio
 async def test_unchanged_low_confidence_does_not_execute_or_repeat_useless_jev_call(phase2_store: StateStore) -> None:
     client = ChoiceClient(.1)
-    runtime = await form_runtime(phase2_store, client)
+    runtime = await form_runtime(phase2_store, client, FORM.replace('<button>Create</button>', '<button>Create A</button><button>Create B</button>'))
     try:
         result = await runtime.execute_page_goal("Create supplied record", operation="create", inputs=[{"control": "Name", "value_reference": "name"}, {"control": "Note", "value_reference": "note"}])
         assert result["reason"] == "LOW_JEV_CONFIDENCE"
-        assert not result["actions"]
+        assert [action["action"] for action in result["actions"]] == ["input", "input"]
         assert len(client.states) == 1
-        assert len(phase2_store.list_events("run-1", event_types=("CANDIDATE_SET",))) == 2
+        assert len(phase2_store.list_events("run-1", event_types=("CANDIDATE_SET",))) == 4
+        page = runtime.browser_manager.get_session(runtime.browser_session_id).page
+        assert await page.locator("#status").inner_text() == "Ready"
         assert runtime.budget.usage.task_replans == 0
     finally:
         await runtime.browser_manager.close()

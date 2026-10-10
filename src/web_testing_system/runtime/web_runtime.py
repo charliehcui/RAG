@@ -234,7 +234,7 @@ class WebTestingRuntime:
                 return target
         return None
 
-    def validate_assertion_contract(self, action: WebAction, *, control: str | None = None, context: str = "") -> dict[str, Any] | None:
+    def validate_assertion_contract(self, action: WebAction, *, control: str | None = None, context: str = "", require_object: bool = False) -> dict[str, Any] | None:
         if action.action_type not in {ActionType.ASSERTION, ActionType.URL_CHECK}:
             return None
         reason = None
@@ -246,9 +246,13 @@ class WebTestingRuntime:
             reason = "VISIBILITY_DOES_NOT_COMPARE_TEXT"
         elif action.action_type == ActionType.ASSERTION and action.assertion == "count" and control:
             reason = "COUNT_REQUIRES_ROW_SELECTOR"
+        elif require_object and action.action_type == ActionType.ASSERTION and not action.target and (control or "").strip().casefold() in {"name", "title", "username", "owner", "role"} and not context:
+            reason = "ASSERTION_OBJECT_REQUIRED"
         if reason is None:
             return None
         failure = {"success": False, "reason": reason, "check_id": action.check_id, "target": action.target, "control": control, "object": {"context": context, "project_reference": action.project_reference}, "expected_state": action.assertion}
+        if reason == "ASSERTION_OBJECT_REQUIRED":
+            failure["instruction"] = "Specify the row or form object for this column assertion; a Project selection alone does not identify its target row."
         self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.run_id, task_id=self.task_id, tester_id=self.tester_id, event_type="ASSERTION_CONTRACT_FAILED", tool="WebTestingRuntime", action="validate_assertion", result=failure, latency_ms=0)
         return failure
 
@@ -258,7 +262,7 @@ class WebTestingRuntime:
                 if step["action_type"] == ActionType.WAIT and not step.get("target") and not 0 <= step.get("wait_ms", 0) <= 2000:
                     return {"success": False, "reason": "INVALID_WAIT_DURATION", "check_id": step.get("check_id")}
                 action = WebAction(action_type=ActionType(step["action_type"]), target=step.get("target"), assertion=step.get("assertion", "contains"), expected=self.input_values.get(step["expected_reference"]) if step.get("expected_reference") else step.get("expected"), check_id=step.get("check_id"), behavior_id=step.get("behavior_id"), project_reference=step.get("project_reference") or goal.get("project_reference"))
-                failure = self.validate_assertion_contract(action, control=step.get("control"), context=step.get("context") or goal.get("row_reference") or goal.get("context", ""))
+                failure = self.validate_assertion_contract(action, control=step.get("control"), context=step.get("context") or goal.get("row_reference") or goal.get("context", ""), require_object=True)
                 if failure:
                     return failure
         return None
@@ -632,7 +636,7 @@ class WebTestingRuntime:
                             continue
                     elements.append(element)
                 business_actions = list(project_actions)
-                input_candidates: dict[str, int] = {}
+                input_candidates: dict[str, list[int]] = {}
                 for index, binding in enumerate(inputs):
                     if index in completed_inputs:
                         continue
@@ -666,7 +670,7 @@ class WebTestingRuntime:
                         action = WebAction(action_type=action_type, target=element.target, value=self.input_values[reference], value_reference=reference)
                         business_actions.append(BusinessAction(label=f"Fill {element.label} using {reference} ({element.context})", action=action))
                         candidate_id = self.candidate_builder._candidate_id(page_state.state_id, action_type.value, f"{element.target}:{reference}")
-                        input_candidates[candidate_id] = index
+                        input_candidates.setdefault(candidate_id, []).append(index)
                 pending = [binding["control"] for index, binding in enumerate(inputs) if index not in completed_inputs]
                 # 提交只接受当前表单中已经绑定并实际填写的输入。
                 for element in list(elements):
@@ -718,6 +722,16 @@ class WebTestingRuntime:
                 if step_index == max_steps:
                     return {"success": False, "reason": "PAGE_GOAL_STEP_LIMIT", "actions": actions}
                 current_business = [business for business in business_actions if business.action.target in allowed_targets]
+                if phase == "fill":
+                    # 独立字段不是决策分支；在排序与截断前只保留下一个已绑定字段。
+                    next_input = min((index for indices in input_candidates.values() for index in indices), default=None)
+                    if next_input is not None:
+                        next_actions = []
+                        for business in current_business:
+                            candidate_id = self.candidate_builder._candidate_id(page_state.state_id, business.action.action_type.value, f"{business.action.target}:{business.action.value_reference}")
+                            if next_input in input_candidates.get(candidate_id, []):
+                                next_actions.append(business)
+                        current_business = next_actions
                 candidates = self.candidate_builder.build(goal=goal, page_state=replace(page_state, interactive_elements=tuple(eligible)), include_controls=False, business_actions=current_business, click_inputs=False, excluded_candidates=excluded)
                 candidates = [candidate for candidate in candidates if not candidate.requires_confirmation]
                 if not operation and not pending and project_ready and (not inputs or actions and actions[-1]["action"] not in {"input", "select"}):
@@ -763,7 +777,8 @@ class WebTestingRuntime:
                 input_progress = candidate.action in {"input", "select"}
                 if candidate.candidate_id in input_candidates:
                     assert candidate.target is not None
-                    completed_inputs[input_candidates[candidate.candidate_id]] = candidate.target
+                    for input_index in input_candidates[candidate.candidate_id]:
+                        completed_inputs[input_index] = candidate.target
                 clicked = next((element for element in elements if element.target == candidate.target), None)
                 if candidate.action == "click" and clicked is not None and clicked.context_kind == "tr":
                     if operation == "delete":
@@ -909,7 +924,7 @@ class WebTestingRuntime:
         columns = []
         for element in page_state.interactive_elements:
             matches_context = not context or context.casefold() in element.context.casefold() or context == element.context_target or f"={json.dumps(context)}]" in (element.context_target or "")
-            row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target) or row["text"] == element.context), None)
+            row = next((row for row in rows if row["target"] == element.context_target or element.context_target is not None and str(row["target"]).endswith(" " + element.context_target) or element.context_target is None and row["text"] == element.context), None)
             if context and row is not None:
                 matches_context = self._row_matches_context(row, context)
             if not element.enabled or not matches_context:

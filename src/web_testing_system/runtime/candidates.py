@@ -278,18 +278,27 @@ class CandidateBuilder:
         ranked.sort(key=lambda item: (-item[0], item[1].candidate_id))
         if excluded_candidates:
             ranked = [item for item in ranked if item[1].candidate_id not in excluded_candidates]
-        unique: dict[str, ActionCandidate] = {}
-        for _, candidate in ranked:
-            previous = unique.get(candidate.candidate_id)
-            if previous is not None:
-                if any(getattr(previous, name) != getattr(candidate, name) for name in candidate.__dataclass_fields__ if name != "label"):
-                    raise ValueError("CONFLICTING_CANDIDATE_ID")
-                continue
-            unique[candidate.candidate_id] = candidate
-        candidates = list(unique.values())[: self.max_candidates]
+        candidates = self.deduplicate([candidate for _, candidate in ranked])[: self.max_candidates]
         if include_controls:
             candidates.extend(self._control_candidates(page_state.state_id))
         return candidates
+
+    @staticmethod
+    def deduplicate(candidates: Sequence[ActionCandidate]) -> list[ActionCandidate]:
+        identities: dict[str, ActionCandidate] = {}
+        effects: set[tuple[Any, ...]] = set()
+        unique: list[ActionCandidate] = []
+        for candidate in candidates:
+            previous = identities.get(candidate.candidate_id)
+            if previous is not None and any(getattr(previous, name) != getattr(candidate, name) for name in candidate.__dataclass_fields__ if name != "label"):
+                raise ValueError("CONFLICTING_CANDIDATE_ID")
+            identities[candidate.candidate_id] = candidate
+            # Check、输入引用、对象与权限契约都属于动作身份，不能因控件相同而合并。
+            effect = tuple(getattr(candidate, name) for name in candidate.__dataclass_fields__ if name not in {"candidate_id", "label"})
+            if effect not in effects:
+                unique.append(candidate)
+                effects.add(effect)
+        return unique
 
     def validate(
         self, *, candidate: ActionCandidate, current_page_state: PageState
