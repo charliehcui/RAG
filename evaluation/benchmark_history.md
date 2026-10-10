@@ -406,3 +406,106 @@ FAILED / INTERRUPTED 是冻结执行器产生的有效质量结果，不作为�
 **FINAL_DEVELOPMENT_PASS = NO。**全部质量失败保留，不自动修改代码、重新优化或重跑 Benchmark。Holdout 未运行，后续等待用户单独授权。
 
 证据：本轮 manifest.json、各 Case 的 run_config.json / state.db / report.json / ground_truth_matching.json、measurement_metrics.json、validity_review.json、main_budget_review.json、failed_case_evidence.json、runtime_tracing_integrity.json、tracing_review.json。旧 Baseline v1/v2、所有历史 Checkpoint 与有效失败记录保留。
+
+## Final Holdout v2 — 2026-10-10
+
+H01–H08 全部完成正式测量，每 Case 一次有效结果，所有质量失败保留；测量结束即停止，不根据 Holdout 修改代码、Prompt 或数据，不补跑、不继续优化。
+
+Holdout 使用 D02/D03 修复后的最新冻结代码；正式 Final Development Benchmark v2 使用修复前代码，其原始结果保持不变，未重新运行 Development。两组数据不合并成同一版本的最终成绩，也不把不同 Case 集合间的差异解释为新增优化收益。
+
+轮次：`artifacts/runs/final-holdout-v2-20261010-001`；版本：`holdout-v2-checks-20261008`；8 Cases / 66 Checks。Main / Tester / Runtime / Jev / Playwright / Prompt / Scenario / Ground Truth / Scoring / Model / Provider / Budget / Evaluation 配置在测量期间冻结，指纹核对通过。替换数量：0。
+
+### Baseline / Development / Holdout
+
+| 指标（Metric） | Baseline v2 | Final Development Benchmark v2（修复前） | Final Holdout v2（修复后） |
+| --- | --- | --- | --- |
+| 任务成功（Task Success） | 3/14（21.43%） | 13/15（86.67%） | 10/15（66.67%） |
+| 检查完成（Check Completion） | 19/74（25.68%） | 58/74（78.38%） | 53/66（80.30%） |
+| 端到端成功（E2E Success） | 1/10（10.00%） | 8/10（80.00%） | 3/8（37.50%） |
+| 缺陷召回（Bug Recall） | 3/9（33.33%） | 9/9（100.00%） | 6/9（66.67%） |
+| 稳定复现（Reproduction Success） | 6/6（100.00%） | 15/15（100.00%） | 10/12（83.33%） |
+| 缺陷精确率（Bug Precision） | 4/6（66.67%） | 15/15（100.00%） | 10/10（100.00%） |
+| 误报（False Positive） | 2 | 0 | 0 |
+| Tester Calls / Task | 2.714 | 1.267 | 1.467 |
+| Total Tokens | 1,296,408 | 769,976 | 732,985 |
+| Cost USD | 0.163595949 | 0.220798106 | 0.215975724 |
+| Wall-clock 秒 | 4,323.695 | 5,375.683 | 6,509.890 |
+
+Task Success 采用冻结评分的已尝试 Task 分母，未启动/中断单列；Check Completion 覆盖整个 Case 的必要检查，Task Success / E2E 保持严格。Recall 的分母是启用的 Case/Bug 组合，可能包含同一缺陷类型在多个 Case 中的出现，不等于独立缺陷类型数量。
+
+共保存 12 个原始 Finding，其中 10 个按冻结评分确认匹配、0 个已判定误报，另 2 个 NOT_REPRODUCED。Precision / False Positive 采用冻结评分的已判定口径，未复现项不算已确认正确，也不能将 FP=0 宣称为所有原始 Finding 已验证无误。
+
+### H01–H08 逐 Case
+
+| Case | Task Success | Check Completion | Bug / Finding | 最终状态 | 主要失败原因 |
+| --- | --- | --- | --- | --- | --- |
+| H01 | 1/1（100.00%） | 7/7（100.00%） | 检出 0/0；Finding 0；FP 0 | FAILED | Summary RuntimeError |
+| H02 | 1/2（50.00%） | 5/9（55.56%） | 检出 0/0；Finding 0；FP 0 | FAILED | MAX_RUNTIME_REACHED; INVALID_ACTION; Summary BudgetExceededError |
+| H03 | 1/1（100.00%） | 8/8（100.00%） | 检出 1/1；Finding 2；FP 0 | COMPLETED | — |
+| H04 | 0/2（0.00%） | 0/7（0.00%） | 检出 0/1；Finding 0；FP 0 | FAILED | MAX_RUNTIME_REACHED; EXPLICIT_OPERATION_REQUIRED; Summary BudgetExceededError |
+| H05 | 0/1（0.00%） | 1/3（33.33%） | 检出 0/1；Finding 1；FP 0 | FAILED | MAX_RUNTIME_REACHED; CONTROL_NOT_FOUND; Summary BudgetExceededError |
+| H06 | 3/3（100.00%） | 9/9（100.00%） | 检出 2/2；Finding 3；FP 0 | COMPLETED | — |
+| H07 | 1/2（50.00%） | 11/11（100.00%） | 检出 1/2；Finding 4；FP 0 | COMPLETED | APPLICATION_DEVIATION_PENDING |
+| H08 | 3/3（100.00%） | 12/12（100.00%） | 检出 2/2；Finding 2；FP 0 | COMPLETED | — |
+
+最终 Run 状态与 Task/Check 结果分别保留；摘要失败或预算中止可能使 E2E 不通过，不能据此篡改已完成 Task，也不能把这些有效质量失败作为基础设施失败排除。
+
+### Requests / Token / Cost / Latency
+
+| 组件 | Requests | Input Tokens | Output Tokens | Cost USD | 请求耗时合计（秒） |
+| --- | --- | --- | --- | --- | --- |
+| main | 13 | 156,009 | 19,204 | 0.016058844 | 361.519 |
+| tester | 22 | 171,672 | 386,100 | 0.199916880 | 7,538.299 |
+| jev | 0 | 0 | 0 | 0.000000000 | 0.000 |
+| overall | 35 | 327,681 | 405,304 | 0.215975724 | 7,899.817 |
+
+| 指标（Metric） | 结果 |
+| --- | --- |
+| Main Requests / Replans | 13 / 0 |
+| Main Planning / Replan / Summary Requests | 8 / 0 / 5 |
+| Tester Initial Plan / Exception Replan LLM Requests | 15 / 7 |
+| Tester Initial / Exception Plan Submissions | 15 / 4 |
+| Jev Decisions | 0 |
+| Browser Actions（探索 / 回放与验证） | 812（236 / 576） |
+| Replan Limit Stops | 0 |
+| No-progress Stops | 0 |
+| 复现成功尝试 | 20/26（76.92%） |
+| Verification Results | {"FAIL": 10} |
+| 未启动 / 中断 / 执行失败 Task | 0 / 3 / 1 |
+| Recovered / Blocking Errors | 0 / 1 |
+| Task 平均 / 最长 Wall-clock 秒 | 560.309 / 1,091.235 |
+| Tester 请求平均耗时秒 | 342.650 |
+| Jev 请求平均耗时毫秒 | N/A |
+| Provider Failed Requests | 0 |
+
+Initial/Replan 请求数仅在完整云端 LLM span 明确标注 phase 且与原生请求数吻合时统计，否则 N/A；计划提交不冒充模型请求。请求耗时合计不是并发 Wall-clock。缺失 Token/Cost 写 N/A，已记录下界单独保留在 JSON。Verification FAIL 可能表示真实缺陷仍存在，具体原因保留，不直接等同于复现失败。
+
+### LangSmith / Safety / Scoring / 冻结核对
+
+{
+  "tracing_enabled_all_cases": true,
+  "complete_trace_trees": 8,
+  "case_count": 8,
+  "core_span_counts_match_cases": 8,
+  "recorded_span_count": 1062,
+  "all_report_evaluation_metrics_match": true,
+  "browser_safety_or_invalid_action_failures": {
+    "INVALID_ACTION": 1
+  },
+  "frozen_files_changed_before_documentation": [],
+  "read_only_trace_errors": []
+}
+
+所有 Case 默认开启现有脱敏 tracing；保存实际触发的 Main、Tester、Jev、BrowserAction/Assertion、Finding、Replay、Verification 层级。未触发的阶段不制造 span，上传/查询问题不会导致 Case 重跑。原生 Report 与正式 Evaluation 的评分一致性逐 Case 核对，未修改评分。
+
+必要任务启动 15/15，Invalid dependency 0，Dependency deadlock 0，Main-caused step-limit stops 0；每 Task 继承原有 90 steps。Jev 本轮实际调用为 0，因此其真实 decision latency 为 N/A，不能据此宣称多候选决策覆盖已验证。
+
+H01 Task/Checks 全部通过，但最终摘要 RuntimeError 使 Run FAILED / E2E=0。H02/H04/H05 记录原时间上限；实际 Wall-clock 包括已发出模型请求的收尾，未延长配置预算。H07 Run COMPLETED / Checks 11/11，但一个偏差三次复现均 RECORDED_OUTCOME_MISMATCH，因此该 Task 为 UNKNOWN_INCOMPLETE，严格成功仍是 1/2、E2E=0。H05 的三次复现失败原因为 MAX_RUNTIME_REACHED；两项均无 environment_issue 标记，不作为纯基础设施失败替换。
+
+### 对外使用的 Evaluation 指标
+
+对外分别发布上述 Development 与 Holdout 正式结果、Case/Check/Task 分母及代码版本：Development 来自 D02/D03 修复前，Holdout 来自最新冻结版本。Baseline v2 是 Development 的历史比较基准；旧 v1 不参与提升计算。不能将两组不同集合、不同代码版本的分数合并为一个新版本成功率。评估范围是 phase5-demo-1.0 受控演示应用的冻结业务流程与启用缺陷。
+
+Holdout 已结束；不重新运行 Development，不运行第二轮 Holdout，不继续任何 Optimization。
+
+证据：`artifacts/runs/final-holdout-v2-20261010-001/measurement_metrics.json`、`holdout_diagnostics.json`、`runtime_tracing_integrity.json`、`validity_review.json`、逐 Case `report.json` / `ground_truth_matching.json`。

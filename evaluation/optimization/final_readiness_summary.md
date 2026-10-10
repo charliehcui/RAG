@@ -1,3 +1,36 @@
+# Final Evaluation Summary — Final Holdout v2，2026-10-10
+
+最终 Holdout 已完成并停止。Development 的正式结果保持原样，不重跑、不优化。Holdout 使用 D02/D03 修复后的最新冻结代码；后面的本地修复阶段 N/A 是当时历史状态，当前实测指标见下表。
+
+| 指标（Metric） | Baseline v2 | Final Development Benchmark v2（修复前） | Final Holdout v2（修复后） |
+| --- | --- | --- | --- |
+| 任务成功（Task Success） | 3/14（21.43%） | 13/15（86.67%） | 10/15（66.67%） |
+| 检查完成（Check Completion） | 19/74（25.68%） | 58/74（78.38%） | 53/66（80.30%） |
+| 端到端成功（E2E Success） | 1/10（10.00%） | 8/10（80.00%） | 3/8（37.50%） |
+| 缺陷召回（Bug Recall） | 3/9（33.33%） | 9/9（100.00%） | 6/9（66.67%） |
+| 稳定复现（Reproduction Success） | 6/6（100.00%） | 15/15（100.00%） | 10/12（83.33%） |
+| 缺陷精确率（Bug Precision） | 4/6（66.67%） | 15/15（100.00%） | 10/10（100.00%） |
+| 误报（False Positive） | 2 | 0 | 0 |
+| Tester Calls / Task | 2.714 | 1.267 | 1.467 |
+| Total Tokens | 1,296,408 | 769,976 | 732,985 |
+| Cost USD | 0.163595949 | 0.220798106 | 0.215975724 |
+| Wall-clock 秒 | 4,323.695 | 5,375.683 | 6,509.890 |
+
+| Case | Task Success | Check Completion | Bug / Finding | 最终状态 | 主要失败原因 |
+| --- | --- | --- | --- | --- | --- |
+| H01 | 1/1（100.00%） | 7/7（100.00%） | 检出 0/0；Finding 0；FP 0 | FAILED | Summary RuntimeError |
+| H02 | 1/2（50.00%） | 5/9（55.56%） | 检出 0/0；Finding 0；FP 0 | FAILED | MAX_RUNTIME_REACHED; INVALID_ACTION; Summary BudgetExceededError |
+| H03 | 1/1（100.00%） | 8/8（100.00%） | 检出 1/1；Finding 2；FP 0 | COMPLETED | — |
+| H04 | 0/2（0.00%） | 0/7（0.00%） | 检出 0/1；Finding 0；FP 0 | FAILED | MAX_RUNTIME_REACHED; EXPLICIT_OPERATION_REQUIRED; Summary BudgetExceededError |
+| H05 | 0/1（0.00%） | 1/3（33.33%） | 检出 0/1；Finding 1；FP 0 | FAILED | MAX_RUNTIME_REACHED; CONTROL_NOT_FOUND; Summary BudgetExceededError |
+| H06 | 3/3（100.00%） | 9/9（100.00%） | 检出 2/2；Finding 3；FP 0 | COMPLETED | — |
+| H07 | 1/2（50.00%） | 11/11（100.00%） | 检出 1/2；Finding 4；FP 0 | COMPLETED | APPLICATION_DEVIATION_PENDING |
+| H08 | 3/3（100.00%） | 12/12（100.00%） | 检出 2/2；Finding 2；FP 0 | COMPLETED | — |
+
+完整指标与追踪核对见 [Final Holdout Report](../../artifacts/runs/final-holdout-v2-20261010-001/final_holdout_v2_report.md)。不合并不同集合/代码版本的成绩，不再继续任何 Optimization。
+
+---
+
 # Final Readiness Summary — Final Development Benchmark v2，2026-10-10
 
 ## D02 / D03 最后一次小范围修复 — 2026-10-10
