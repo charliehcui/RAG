@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit
@@ -18,10 +17,7 @@ from web_testing_system.runtime.candidates import PageStateReader
 from web_testing_system.runtime.models import ActionResult, ActionType, WebAction
 from web_testing_system.runtime.permissions import PermissionChecker
 from web_testing_system.state import StateStore
-
-
-def utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+from web_testing_system.state.store import utc_now
 
 
 class PlaywrightExecutor:

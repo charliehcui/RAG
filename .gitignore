@@ -44,6 +44,4 @@ tempCodeRunnerFile.py
 *.db-journal
 
 # Local project planning documents
-/BUILDING_PLAN.md
-/Multi_Agent_Web_Testing_Project_Scope_Statement_FINAL_V2.md
-/agentic_rag_scope_statement.md
+/docs/history/

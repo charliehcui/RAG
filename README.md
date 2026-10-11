@@ -1,111 +1,164 @@
 # Multi-Agent Web Testing System
 
-A Python Agent / CLI application using a Main Manager, identical Tester Workers (three concurrent slots by default), isolated Chromium contexts, SQLite Shared State, deterministic reproduction and verification, and evidence-based reporting.
+这是一个 Python 网页自动测试项目。用户提供测试目标、账号引用、范围和预期行为，Main Agent 分配任务，多个 Tester Agent 在独立浏览器会话中测试。系统保存真实操作与证据，再复现和验证异常，最后生成报告。
 
-## Run locally
+项目只有两种智能体（Agent）：Main 和 Tester。Runtime、Jev、回放和验证都是执行组件。当前默认最多同时运行 3 个 Tester。
 
-Use Python 3.13 and install the project with its development dependencies. Start the local target with python -m demo_app, then run:
+## 最终架构
 
-    .\.venv\Scripts\python.exe -m web_testing_system path\to\run_config.json
+```mermaid
+flowchart TD
+    Config[RunConfig] --> Main[Main: Task / Dependency Planning]
+    Main --> Tasks[Tasks in SQLite StateStore]
+    Tasks --> Scheduler[Scheduler: parallel Testers]
+    Scheduler --> Plan[Tester: Initial Plan / Exception Replan]
+    Plan --> Runtime[Runtime: state / binding / candidates / recovery]
+    Runtime --> Choice{Current legal actions}
+    Choice -->|Known or unique| Browser[Playwright]
+    Choice -->|Multiple alternatives| Jev[Jev bounded choice]
+    Jev --> Validate[Python validation]
+    Validate --> Browser
+    Browser --> Checks[Assertions / Findings / Evidence]
+    Checks --> Replay[Reproduction after exploration]
+    Replay --> Verification[Independent Verification]
+    Verification --> Report[report.json]
+    Report --> Summary[Same Main: summary.md]
+```
 
-The workflow entry point is orchestration/runner.py. Structured facts are saved under artifacts/runs/<run_id>/report.json. The same Main Agent reviews those facts in one tool-free final model call, writes summary.md, and supplies the CLI response. Ordinary tests do not start formal Baseline or Evaluation.
+| 组件 | 职责 | 代码入口 |
+| --- | --- | --- |
+| Main Agent | 规划完整工作流、任务优先级与依赖；必要时重规划；最后只读总结报告 | [main_agent.py](src/web_testing_system/agents/main_agent.py) |
+| Tester Agent | 为一个任务提交完整初始计划；异常时只重规划剩余检查 | [tester_agent.py](src/web_testing_system/agents/tester_agent.py) |
+| Runtime | 读取页面、绑定输入与原对象、生成合法候选、恢复局部错误、控制预算 | [web_runtime.py](src/web_testing_system/runtime/web_runtime.py) |
+| Jev Decision Model | 从当前候选 ID 中做有限选择（Bounded Choice）；不生成操作或选择器 | [jev_selector.py](src/web_testing_system/runtime/jev_selector.py) |
+| Playwright | 执行浏览器动作与断言（Assertion），记录真实结果 | [playwright_executor.py](src/web_testing_system/runtime/playwright_executor.py) |
+| Scheduler | 按优先级和依赖持续填补空闲执行槽位 | [scheduler.py](src/web_testing_system/orchestration/scheduler.py) |
+| Shared State / StateStore | 用 SQLite 保存任务、进度、路径、异常、证据索引、预算和操作历史 | [store.py](src/web_testing_system/state/store.py) |
 
-## Fixed paid OpenRouter models
+Harness 是 Microsoft Agent Framework 的 Main 执行外壳，定义受控工具、会话和中间件（Middleware）。Main 关闭内置 Todo、文件记忆和网页搜索，以 SQLite 中的任务作为执行计划。Tester 使用普通 `Agent`，由自己的 Runner 和中间件约束计划执行与结束。Harness 不负责浏览器操作或调度。
 
-Only OPENROUTER_API_KEY is required for production model access. Copy .env.example to .env and supply the key locally. No direct Google/Gemini or Groq client remains.
+每个 Tester 有独立会话（Session）和浏览器上下文（BrowserContext）。多个 Tester 通过 Shared State 协作。完整任务依赖由 Scheduler 等待；需要同时保留登录状态的工作流通过 Runtime 的进度信号（Progress Signal）交接，不互相等待整个任务结束。
 
-| Role | Primary model | Fixed provider endpoint | Backup model / routing |
-|---|---|---|---|
-| Main | deepseek/deepseek-v4-flash | streamlake/fp8 | deepseek/deepseek-v3.2 / deepinfra/fp4 |
-| Tester | z-ai/glm-5.3-flash | relace | qwen/qwen3.8-flash / automatic provider failover on API failure |
-| Jev | typesafe/jev-1.13 | Existing OpenRouter Decisions API | Unchanged |
+更具体的调用顺序和阅读路线见 [架构与数据流](docs/architecture.md)。
 
-Primary Agent requests pin one endpoint using provider.only, provider.order, allow_fallbacks=false and require_parameters=true. Main's backup remains manual. If the Tester's primary API or connection is unavailable, it makes one backup attempt with qwen/qwen3.8-flash and lets OpenRouter select a compatible provider with failover. Further exceptional replans for that Task retain the backup. Every attempted request records its actual model, provider and usage; a failed primary dispatch remains in the request count. SDK retries remain disabled.
+## 一次完整测试
 
-Catalog verified on 2026-10-06. Prices in USD per million input/output tokens: Main StreamLake $0.042/$0.084; Tester Relace $0.0352/$0.50. No provider is cheapest for every input/output ratio: Main Relace costs $0.03/$1.28; Tester DeepInfra costs $0.075/$0.25. Main StreamLake is cheaper than Relace below about 99.67 input tokens per output token. Tester Relace is cheaper than DeepInfra above about 6.28 input tokens per output token. These are selection assumptions, not measured Baseline results. Prices can change even when endpoints remain pinned.
+1. [orchestration/runner.py](src/web_testing_system/orchestration/runner.py) 校验配置并建立 Run、预算和 Shared State。
+2. Main 把目标分为任务。配置有必要检查（Required Check）时，Python 绑定准确的账号、检查 ID、输入引用与依赖，保持连续工作流在同一任务中。
+3. Scheduler 启动就绪任务。Tester 提交完整计划；Python 在操作页面前检查输入、目标、检查覆盖与顺序。
+4. Runtime 执行业务操作。已知动作或唯一合法动作直接交给 Playwright；多个合法候选交给 Jev，再检查候选是否仍然有效。
+5. 实际检查结果、操作历史和证据写入 Shared State。异常阻塞时 Tester 读取当前页面和已完成检查，替换剩余计划。
+6. 所有探索结束后，系统处理 Finding、回放与验证，生成 `report.json`。同一个 Main 用无工具的新会话生成 `summary.md`，CLI 输出总结和报告路径。
 
-Sources: [Main endpoints](https://openrouter.ai/api/v1/models/deepseek/deepseek-v4-flash/endpoints), [Tester endpoints](https://openrouter.ai/api/v1/models/z-ai/glm-5.3-flash/endpoints), [provider pinning](https://openrouter.ai/docs/guides/routing/provider-selection).
+执行状态 `COMPLETED` 只表示任务执行结束。任务成功（Task Success）还要求必要检查正确完成。缺少检查是 `UNKNOWN`；正确发现并确认应用缺陷可以算测试任务成功。评分统一在 [scoring.py](src/web_testing_system/scoring.py)。
 
-Main and Tester use tool calls rather than JSON response-format output. The normal Tester request exposes only execute_test_plan with tool_choice=auto because Relace and the Qwen backup do not support required/named tool selection. Python validates the complete plan and required checks before execution. Free/routing model variants are rejected. Fake providers remain available for deterministic tests.
+## Finding、Replay 与 Verification
 
-## Workflow and task outcomes
+Finding 是记录了预期与实际差异的异常。Tester 不能直接把异常声明为已确认缺陷。
 
-    RunConfig -> Main planning -> SQLite Tasks -> continuous AsyncIO scheduling
-    -> task-specific Tester context -> isolated BrowserContext
-    -> Runtime -> Playwright / Page State -> Candidates -> Jev -> validation -> Playwright
-    -> Finding + observation evidence
-    -> deterministic reproduction -> existing VerificationRunner
-    -> CONFIRMED_BUG / CLOSED / NEEDS_CONFIRMATION -> structured report.json
-    -> same Main Manager final review -> summary.md -> CLI user response
+```text
+Assertion failure → Finding + Evidence → Screening / Deduplication
+→ Reproduction: fresh replay attempts → REPRODUCED
+→ Verification: fresh replay against expected behavior
+→ CONFIRMED_BUG / CLOSED / NEEDS_CONFIRMATION
+```
 
-The scheduler fills free slots with priority-ordered dependency-ready Tasks. max_testers and max_parallel_browser_contexts default to 3 and accept 1-4. Each ready Task gets a Tester instance with a private session, BrowserContext/Page and assignment; up to three run together by default when independent work exists. Instance count across an entire run can exceed concurrent capacity as new Tasks become ready. Replanning occurs only for relevant requests/high-risk findings while pending work remains; duplicate reasons are suppressed. Reproduction runs after exploration so application-wide resets cannot corrupt active Tasks.
+- [FindingService](src/web_testing_system/findings/service.py) 用明确规则筛选与去重。
+- [ReplayPlanBuilder](src/web_testing_system/reproduction/replay.py) 从真实操作历史构建回放，保留身份、输入引用、原对象和必要参与者；不调用模型重新猜步骤。
+- 默认复现（Reproduction）需要最多 3 次尝试中的 2 次匹配。之后 [VerificationRunner](src/web_testing_system/verification/runner.py) 独立检查预期行为；实际断言失败才确认缺陷。设置或回放路径失败仍保持不确定。
+- [EvidenceStore](src/web_testing_system/evidence/store.py) 保存截图、DOM、网络摘要、控制台错误和回放追踪；SQLite 保存文件索引。探索与回放有独立步数预算。
 
-Execution status COMPLETED means execution ended. Success status PASS/FAIL/UNKNOWN is calculated by Python from actual goal assertions. Mark goal assertions with goal_check=true or the supplied behavior_id. Every declared expected behavior needs a recorded check before PASS is possible; missing checks yield UNKNOWN. Discovering a bug can produce completed execution with FAIL expected behavior, which differs from an execution failure. The finish_task tool records the outcome and ends the loop without a final model Done response.
+## 本地启动
 
-One Runtime page lock serializes browser-changing operations and decisions for the same Page. Independent Shared State reads may run concurrently.
+在仓库根目录使用 Python 3.13。以下命令使用 PowerShell：
 
-## Task handoff and inputs
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m playwright install chromium
+Copy-Item .env.example .env
+```
 
-Main Tasks carry data_requirements.identity_reference, expected_behavior_ids and test_data_keys. Tester prompts receive the current goal, role, identity/secret references, relevant expected behaviors, data reference names, scope, denied operations, namespace and step budget. Input values are obtained with read_test_data or passed to Runtime by value_reference. Dynamic coverage, findings and progress are read through tools rather than copied into the handoff.
+在 `.env` 填入 `OPENROUTER_API_KEY`。Main / Tester 使用 OpenRouter；固定模型和供应商见 [.env.example](.env.example)。Tester 仅在主供应商 API 或连接失败时尝试备用模型；Main 备用模型由用户手动切换。可选视觉操作（Computer Use）默认关闭。
 
-When accounts share a role, specify identity_reference; ambiguous selection is rejected. Account secret_reference supports env:VARIABLE_NAME. Runtime resolves the allowed reference in memory and fills it through value_reference. Secrets are not returned by read_test_data, placed in prompts or saved in action history. Supply non-secret usernames through test_data and select their keys in the Task handoff.
+启动演示应用（Demo App）：
 
-Known INPUT/SELECT actions should use valid value_reference values, resolved to values by Runtime and preserved as references for replay. Callers must supply application-specific inputs and expected behavior; absent credentials and test oracles cannot be inferred.
+```powershell
+.\.venv\Scripts\python.exe -m demo_app
+```
 
-PageGoal separates project_reference (a Scenario input naming the Project option), row_reference (the existing target row) and form_context (an observed form identifier). Legacy context can resolve a Project only from supplied data and observed options, or reuse a previously bound selection. Jev receives the bindings and legal SELECT candidates. Runtime keeps stable row selectors within each Project, including after rename, and passes the Project binding to checks and replay records. Ambiguous fields/options, missing references and submissions with unbound or changed inputs are rejected before execution.
+浏览器打开 `http://127.0.0.1:8000`。内置账号为 `admin / demo-admin`、`member / demo-member`、`member2 / demo-member2`。Demo 提供项目、任务、成员与权限流程；B1–B6 缺陷开关默认关闭。开关读取进程环境变量，例如启动前设置 `$env:DEMO_BUG_B1="true"`。测试模式支持 `POST /test/reset`。
 
-Remaining plans resume from recorded Check IDs and operation preparation records, rather than goal wording or one assertion per behavior. Repeated unchanged states and cycles through seen states use the existing no-progress limit and return an exception to Tester without consuming an extra Runtime replan. Validation failures keep their own reason codes; recovered execution errors and final report/evaluation outcomes still use the existing shared scorer.
+另开终端运行一次普通示例测试。这个命令会调用真实模型，不运行正式评估集：
 
-Pre-Baseline correctness changes leave the frozen development-v2-checks-20261008 Scenario, Ground Truth, scoring rules, Main behavior, models and budgets unchanged. Validation uses local fake providers and Chromium only. No Baseline v2 or real model Benchmark has been run for these changes; historical results remain in evaluation/benchmark_history.md.
+```powershell
+$env:DEMO_ADMIN_PASSWORD = "demo-admin"
+.\.venv\Scripts\python.exe -m web_testing_system examples/demo_run.json
+```
 
-Exploration and replay have separate step budgets: max_browser_steps_per_task (default 50) and max_replay_steps_per_finding (default 200). Default automatic reproduction needs two matching attempts, at most three, followed by verification. Automatic step minimization is disabled in this workflow; the existing component remains for explicit use. Only assertion failure during verification confirms a bug; broken setup paths remain unconfirmed.
+账号密码通过 `env:` 引用在 Runtime 内存中解析。自定义配置请参考 [demo_run.json](examples/demo_run.json) 和 [RunConfig](src/web_testing_system/config.py)；预期行为与测试数据由调用者明确提供。
 
-Reports retain every Finding status and include task_outcomes, model_configuration, peak concurrency, provider-returned tokens/cost, and incomplete-cost status. SQLite stores evidence metadata; files contain screenshots, DOM, network summaries, console errors and replay traces.
+普通输出位于 `artifacts/runs/<run_id>/`：`report.json` 是确定性测试事实，`summary.md` 是 Main 的文字总结。共享数据库默认位于 `artifacts/state/shared_state.db`。
 
-Python produces all testing facts. The final Main review has an isolated fact-only session on the same Agent, with planning tools removed for that phase, and cannot mutate Tasks, Findings or evidence. Natural language is advisory; report.json remains authoritative. The summary prompt states that COMPLETED differs from PASS and verification FAIL confirms a failed expected behavior only after reproduction. No additional judge or correction model is added.
+## 本地测试与检查
 
-cost_and_performance includes final-summary usage and end-to-end wall time; llm_by_phase separates planning, replan, Tester, visual and final-summary requests, tokens, billed cost and latency. testing_phase_cost_and_performance preserves the metrics supplied to Main before the final call. main_final_summary records the summary status and artifact reference. Final summary requires available model/time/token budget; on failure, the structured report is retained and the run fails explicitly without automatic fallback.
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check src tests demo_app evaluation/measure.py
+.\.venv\Scripts\python.exe -m mypy src/web_testing_system evaluation/measure.py
+git diff --check
+```
 
-## LangSmith observability
+测试使用替身（Fake / Mock Provider）、临时 SQLite 与本地 Chromium，覆盖单元测试（Unit Test）、集成测试（Integration Test）和浏览器测试（Browser Test）。这些命令不运行真实 LLM Benchmark。
 
-Set LANGSMITH_API_KEY locally. Real formal Evaluation always enables tracing for every case; injected local tests may disable upload. Other runs honor LANGSMITH_TRACING. LANGSMITH_PROJECT defaults to multi-agent-web-testing. The pinned official langsmith SDK handles span context, parallel task propagation and background upload; a bounded flush occurs after execution.
+## Evaluation
 
-    Run
-    -> MainPlanning -> LLM / planning tools
-    -> concurrent Testers -> LLM / tools -> TesterInitialPlan / TesterExceptionReplan
-        -> Jev decisions / BrowserAction / Evidence / optional VisualLLM
-    -> conditional MainReplan -> LLM / planning tools
-    -> Reproduction / Verification -> BrowserAction
-    -> MainFinalSummary -> one LLM request
+冻结开发集（Development Set）有 10 个用例、74 个检查；保留集（Holdout）有 8 个用例、66 个检查。场景与标准答案分别保存在 [scenarios.json](evaluation/scenarios.json) 和 [ground_truth.json](evaluation/ground_truth.json)，冻结记录在 [evaluation_v2_freeze.json](evaluation/evaluation_v2_freeze.json)。标准答案只在运行结束后参与评分，不进入 Agent 的任务上下文。
 
-Only safe metadata is uploaded: run/case/scenario/task/check/finding IDs, Agent role, Tester instance, fixed models/providers, action types, outcomes, failure codes and model usage. Prompts, Tool arguments/results, browser content, screenshots, credentials, test values and natural summaries are omitted. Existing field redaction and registered-value replacement protect metadata; errors contain exception types rather than messages or tracebacks. Connection, span upload and flush failures do not alter Shared State, scheduling or results. There are no LangSmith datasets, judges or evaluation runners.
+后续明确需要新测量时，统一入口如下。每个用例只派发一次；输出目录必须是新的。运行需要 OpenRouter、LangSmith 凭据和开启追踪（Tracing），会调用真实模型：
 
-SDK documentation: [custom instrumentation](https://docs.langchain.com/langsmith/annotate-code), [sensitive trace data](https://docs.langchain.com/langsmith/mask-inputs-outputs), [LLM usage metadata](https://docs.langchain.com/langsmith/log-llm-trace).
+```powershell
+.\.venv\Scripts\python.exe -m evaluation.measure development artifacts/runs/development-new
+.\.venv\Scripts\python.exe -m evaluation.measure holdout artifacts/runs/holdout-new
+```
 
-## Jev and optional visual actions
+[measure.py](evaluation/measure.py) 启动独立 Demo、配置冻结缺陷、调用 `FormalRunExecutor`，保存配置、文件指纹与测量清单。结果中的有效失败保留，不自动补跑。评分和报告仍使用现有实现。本次 Cleanup 没有运行以上命令。
 
-Jev is unchanged and remains the default unknown-path selector. It is not merged into the Tester prompt or replaced by an Agent model. Existing explicit evaluation comparison routes remain separate from the production default.
+六种单因素对照路线保留在 [evaluation/runner.py](src/web_testing_system/evaluation/runner.py)。其 `run_full_mode` 需要 `FULL_EVALUATION=true`、显式启用和验收门槛；普通 CLI 和上述单次集合测量不等于这个对照模式。
 
-Optional visual actions also use paid OpenRouter. Leave COMPUTER_USE_MODEL empty and max_computer_use_calls=0 when disabled. To enable the migrated client, configure z-ai/glm-5.3-flash with the fixed relace endpoint and a positive budget. One screenshot produces one allowed click/drag; Python checks coordinates and returns control to Playwright. Gateway success alone does not establish visual task quality.
+正式结果已完成，历史数字保持原样：
 
-## Deterministic verification
+- [Benchmark History](evaluation/benchmark_history.md)：Baseline、Final Development、Final Holdout 和比较。
+- [Final Readiness Summary](evaluation/optimization/final_readiness_summary.md)：当前最终结果与之前阶段记录。
+- [Tester](evaluation/optimization/tester_optimization.md)、[Main](evaluation/optimization/main_optimization.md)、[Runtime](evaluation/optimization/runtime_optimization.md)：保留的优化历史。
 
-    .\.venv\Scripts\python.exe -m pytest
-    .\.venv\Scripts\python.exe -m ruff check src tests
-    .\.venv\Scripts\python.exe -m mypy src\web_testing_system
+原始正式结果完整保留在 `artifacts/runs/baseline-v2-20261008-002/`、`final-development-v2-20261010-001/`、`final-holdout-v2-20261010-001/`。被用户中断的 Baseline `baseline-v2-20261008-001/` 也保留来源记录。历史引用的中间测量只保留汇总和核对文件；重复原始调试输出已清理。`artifacts/` 被 Git 忽略，分享项目时需另行保存这些本地正式结果。
 
-Tests use Fake/Mock providers and local browsers, including a formal-entry E2E smoke test. They do not execute a formal evaluation dataset or call paid models. Real OpenRouter endpoint verification is a separately invoked minimal smoke test.
+## LangSmith Tracing
 
-The demo has B1-B6 switches, disabled by default. POST /test/reset is available only in testing mode. Ground Truth remains isolated until after a run. Formal Evaluation still requires existing gates and explicit enablement; FULL_EVALUATION=false remains the default.
+[observability.py](src/web_testing_system/observability.py) 记录 Run、Main Planning / Replan、Tester Initial Plan / Exception Replan、Jev、浏览器动作、复现、验证与 Main Final Summary。设置 `LANGSMITH_API_KEY` 后可查看；正式真实评估开启追踪，普通运行遵循 `LANGSMITH_TRACING`。
 
-## Evaluation and optimization records
+只上传允许的元数据和用量，不上传提示词、工具内容、截图或凭据。追踪连接或上传失败不改变测试结果。
 
-[Benchmark history](evaluation/benchmark_history.md) records the initial Baseline and later formal Benchmark results. Retained changes are documented in [Tester optimization](evaluation/optimization/tester_optimization.md) and [Main optimization](evaluation/optimization/main_optimization.md). The dataset and post-run answers remain in evaluation/scenarios.json and evaluation/ground_truth.json.
+## 主要目录
 
-artifacts/ is an ignored runtime output directory. Its databases, reports, summaries and evidence can be cleared after the useful formal numbers have been recorded in benchmark_history.md; historical runs are not maintained there.
-
-## Development Evaluation v2
-
-The Development Set contains ten cases: D01-D08, D12 and D13. They cover no-bug controls, registration/ownership, independent parallel workflows, B1-B6, pending submission, and coupled revocation/deletion. Eight holdout workflows remain unchanged. The ten development cases declare 74 stable required check IDs with identities and ordering dependencies. Reference behavior descriptions never authorize extra tests or unavailable data. Keep continuous workflows in one browser session and score their checks independently.
-
-Runtime, reports and formal Evaluation use one deterministic scorer. Check Completion reports observed required checks (for example, 3/4 checks completed); PASS additionally requires every check to pass or have correctly confirmed defect evidence. Historical errors remain visible as RECOVERED or UNRESOLVED_BLOCKING. Interrupted, never-started and failed tasks have distinct outcomes. Missing check IDs cannot be replaced by another assertion with the same behavior ID. E2E Success requires all tasks, all required checks and expected defects to be correctly completed. Historical v1 Baseline figures remain in evaluation/benchmark_history.md and are not directly comparable with v2. No new paid measurement has been run.
+```text
+src/web_testing_system/
+  agents/          Main / Tester 与受控工具
+  orchestration/   总入口与并行调度
+  runtime/         页面状态、候选、Jev、Playwright、预算与权限
+  state/           SQLite Shared State
+  findings/        异常生命周期
+  evidence/        证据文件与索引
+  reproduction/    确定性回放与复现
+  verification/    独立验证
+  reporting/       结构化报告
+  evaluation/      评分指标、匹配与对照执行
+  config.py / providers.py / scoring.py / observability.py / security.py
+demo_app/         本地测试目标与 B1–B6
+evaluation/       冻结数据、measure.py、正式历史与 optimization/
+tests/            unit/、integration/、browser/
+examples/         普通 Demo 运行配置
+docs/             architecture.md；history/ 为本地旧计划
+artifacts/        本地正式结果与历史汇总，Git 忽略
+```

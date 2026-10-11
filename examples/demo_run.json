@@ -1,0 +1,36 @@
+{
+  "target_url": "http://127.0.0.1:8000",
+  "test_goal": "Log in as admin and check that Seed Project appears in the Projects table. Do not create, edit or delete data.",
+  "focus_features": ["Project"],
+  "allowed_scope": ["/"],
+  "account_references": [
+    {
+      "identity_reference": "admin",
+      "role": "admin",
+      "permissions": ["*"],
+      "secret_reference": "env:DEMO_ADMIN_PASSWORD"
+    }
+  ],
+  "test_data": {
+    "admin_username": "admin",
+    "seed_project_name": "Seed Project"
+  },
+  "denied_operations": ["drag_and_drop"],
+  "expected_behaviors": [
+    {
+      "behavior_id": "project.visible",
+      "description": "An authenticated admin can see Seed Project in the Projects table.",
+      "applies_to": "Project/read",
+      "source": "DEMO_SPEC"
+    }
+  ],
+  "required_checks": [
+    {
+      "check_id": "demo.project-visible",
+      "goal_id": "project-list",
+      "behavior_id": "project.visible",
+      "description": "After admin login, open Projects and assert that the original Seed Project row has the supplied seed_project_name.",
+      "identity_reference": "admin"
+    }
+  ]
+}

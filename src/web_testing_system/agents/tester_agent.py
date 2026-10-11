@@ -1307,44 +1307,18 @@ class TesterRunner:
         assert isinstance(response, AgentResponse)
         if self.provider_usage_recorded:
             return response.text
+        self._record_injected_usage(response, started_at, action="complex_reasoning", result={"agent": "tester", "finish_reason": str(response.finish_reason) if response.finish_reason is not None else None}, browser_session_id=self.runtime.browser_session_id)
+        return response.text
+
+    def _record_injected_usage(self, response: AgentResponse, started_at: float, *, action: str, result: dict[str, Any], browser_session_id: str | None = None) -> None:
         latency_seconds = perf_counter() - started_at
         usage = response.usage_details or {}
         input_tokens = int(usage.get("input_token_count") or 0)
         output_tokens = int(usage.get("output_token_count") or 0)
         cost = float((response.additional_properties or {}).get("cost", 0) or 0)
-        self.budget.record_llm_call(
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            runtime_seconds=latency_seconds,
-            cost=cost,
-        )
-        self.store.update_budget(
-            budget_id=self.budget_id,
-            llm_calls=1,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            runtime_seconds=latency_seconds,
-            estimated_cost=cost,
-        )
-        self.store.append_event(
-            event_id=f"event-{uuid4().hex}",
-            run_id=self.assignment.run_id,
-            task_id=self.assignment.task_id,
-            tester_id=self.assignment.tester_id,
-            browser_session_id=self.runtime.browser_session_id,
-            event_type="LLM_CALL",
-            tool="Microsoft Agent Framework",
-            action="complex_reasoning",
-            result={
-                "agent": "tester",
-                "finish_reason": str(response.finish_reason)
-                if response.finish_reason is not None
-                else None
-            },
-            latency_ms=latency_seconds * 1_000,
-            cost=cost,
-        )
-        return response.text
+        self.budget.record_llm_call(input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, cost=cost)
+        self.store.update_budget(budget_id=self.budget_id, llm_calls=1, input_tokens=input_tokens, output_tokens=output_tokens, runtime_seconds=latency_seconds, estimated_cost=cost)
+        self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, browser_session_id=browser_session_id, event_type="LLM_CALL", tool="Microsoft Agent Framework", action=action, result=result, latency_ms=latency_seconds * 1_000, cost=cost)
 
     async def _run_complete_plan(self, prompt: str) -> str:
         assert self.plan_tools is not None
@@ -1371,14 +1345,7 @@ class TesterRunner:
                 with trace_span("TesterPlanGeneration", metadata={"agent_role": "tester", "task_id": self.assignment.task_id, "phase": phase}):
                     response = await self.agent.run(request, session=self.session, options={"tool_choice": "auto"})
                 if not self.provider_usage_recorded:
-                    usage = response.usage_details or {}
-                    elapsed = perf_counter() - started_at
-                    inputs = int(usage.get("input_token_count") or 0)
-                    outputs = int(usage.get("output_token_count") or 0)
-                    cost = float((response.additional_properties or {}).get("cost", 0) or 0)
-                    self.budget.record_llm_call(input_tokens=inputs, output_tokens=outputs, runtime_seconds=elapsed, cost=cost)
-                    self.store.update_budget(budget_id=self.budget_id, llm_calls=1, input_tokens=inputs, output_tokens=outputs, runtime_seconds=elapsed, estimated_cost=cost)
-                    self.store.append_event(event_id=f"event-{uuid4().hex}", run_id=self.assignment.run_id, task_id=self.assignment.task_id, tester_id=self.assignment.tester_id, event_type="LLM_CALL", tool="Microsoft Agent Framework", action="plan_generation", result={"agent": "tester", "phase": phase}, latency_ms=elapsed * 1000, cost=cost)
+                    self._record_injected_usage(response, started_at, action="plan_generation", result={"agent": "tester", "phase": phase})
                 if self.runtime.task_finished:
                     return response.text
                 if not tools.task_context["last_plan_submitted"]:
