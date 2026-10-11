@@ -72,3 +72,37 @@ Execution blocker
 `FinalReportBuilder` 生成确定性 `report.json`。同一个 Main 清空工具，在新会话中生成 `summary.md`。总结失败仍保留结构化报告并显式标记运行失败。最终报告包含模型配置、并发、各阶段请求与用量、费用完整性和最终总结调用的消耗。
 
 LangSmith 中间件和显式阶段跨度（Span）覆盖上述流程。追踪仅上传允许的元数据；它不参与任务调度、评分或缺陷判定。
+
+## 运行配置与报告
+
+普通运行入口是 `python -m web_testing_system <RunConfig JSON>`，示例为 [examples/demo_run.json](../examples/demo_run.json)。配置提供目标地址、范围、身份引用、测试数据与预期行为；没有提供的账号和测试依据不能由模型猜测。
+
+模型和供应商配置位于 [.env.example](../.env.example)。Main / Tester 使用 OpenRouter，Tester 仅在主供应商 API 或连接失败时尝试备用模型；Main 备用模型由用户手动切换。Computer Use 是可选视觉执行组件，默认关闭。
+
+账号密码通过进程环境中的 `env:` 引用在 Runtime 内存中解析。`.env` 中的模型凭据和账号引用是不同输入；运行 Demo 示例前需要设置 `$env:DEMO_ADMIN_PASSWORD = "demo-admin"`。Demo 的 B1–B6 开关也读取进程环境变量，默认关闭，测试模式提供 `POST /test/reset`。
+
+普通结果保存在 `artifacts/runs/<run_id>/`：`report.json` 是确定性事实，`summary.md` 是 Main 的文字总结；共享数据库默认位于 `artifacts/state/shared_state.db`。正式原始结果与历史核对记录保留在本地 `artifacts/`，该目录被 Git 忽略，分享项目时需要另行保存。
+
+## 本地验证与 Evaluation 入口
+
+在仓库根目录运行以下本地检查。测试使用 Fake / Mock Provider、临时 SQLite 和本地 Chromium，不调用真实模型进行正式评测：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+.\.venv\Scripts\python.exe -m ruff check src tests demo_app evaluation/measure.py
+.\.venv\Scripts\python.exe -m mypy src/web_testing_system evaluation/measure.py
+git diff --check
+```
+
+冻结 Development 有 10 个用例、74 个检查，Holdout 有 8 个用例、66 个检查。数据与版本见 [scenarios.json](../evaluation/scenarios.json)、[ground_truth.json](../evaluation/ground_truth.json) 和 [evaluation_v2_freeze.json](../evaluation/evaluation_v2_freeze.json)。历史数字以 [benchmark_history.md](../evaluation/benchmark_history.md) 为准，不把不同集合或代码版本的结果合并。
+
+只有在明确需要一次新测量时，才使用 [evaluation/measure.py](../evaluation/measure.py)。以下命令调用真实模型，需要 OpenRouter、LangSmith 凭据和开启 Tracing；输出目录必须是新的，每个用例只派发一次：
+
+```powershell
+.\.venv\Scripts\python.exe -m evaluation.measure development artifacts/runs/development-new
+.\.venv\Scripts\python.exe -m evaluation.measure holdout artifacts/runs/holdout-new
+```
+
+入口启动独立 Demo，调用原 `FormalRunExecutor`，保存运行配置、文件指纹、逐用例报告与测量清单。有效失败保留，不自动补跑或改写历史结果。Ground Truth 只在运行结束后用于匹配，不进入 Agent 上下文。
+
+六种单因素对照路线仍位于 [evaluation/runner.py](../src/web_testing_system/evaluation/runner.py)。其中 `run_full_mode` 需要 `FULL_EVALUATION=true`、显式启用与验收门槛；上述单次集合测量是独立入口。

@@ -1,76 +1,76 @@
-# Multi-Agent Web Testing System
+# Multi-Agent 网页自动测试系统
 
-这是一个 Python 网页自动测试项目。用户提供测试目标、账号引用、范围和预期行为，Main Agent 分配任务，多个 Tester Agent 在独立浏览器会话中测试。系统保存真实操作与证据，再复现和验证异常，最后生成报告。
+## 项目简介
 
-项目只有两种智能体（Agent）：Main 和 Tester。Runtime、Jev、回放和验证都是执行组件。当前默认最多同时运行 3 个 Tester。
+这是一个基于 Microsoft Agent Framework / Harness 的 Multi-Agent 网页自动测试系统。Main Agent 负责拆分任务、安排依赖并协调执行，多个 Tester Agent 在独立浏览器会话中并行测试，通过 Shared State 共享任务进度、页面状态摘要和测试结果。
 
-## 最终架构
+Tester 制定 Test Plan，遇到异常时生成剩余任务的 Replan。Runtime + Playwright 负责真实网页执行，Jev 只在有限候选中做 Decision，不负责 Planning。系统发现 Bug 后保存 Evidence，并通过 Replay / Verification 复现和验证，最后生成 Report。
+
+## 核心架构
 
 ```mermaid
 flowchart TD
-    Config[RunConfig] --> Main[Main: Task / Dependency Planning]
-    Main --> Tasks[Tasks in SQLite StateStore]
-    Tasks --> Scheduler[Scheduler: parallel Testers]
-    Scheduler --> Plan[Tester: Initial Plan / Exception Replan]
-    Plan --> Runtime[Runtime: state / binding / candidates / recovery]
-    Runtime --> Choice{Current legal actions}
-    Choice -->|Known or unique| Browser[Playwright]
-    Choice -->|Multiple alternatives| Jev[Jev bounded choice]
-    Jev --> Validate[Python validation]
-    Validate --> Browser
-    Browser --> Checks[Assertions / Findings / Evidence]
-    Checks --> Replay[Reproduction after exploration]
-    Replay --> Verification[Independent Verification]
-    Verification --> Report[report.json]
-    Report --> Summary[Same Main: summary.md]
+    User["用户 / Test Scenario"] --> Main["Main Agent"]
+    Main --> Testers["多个 Tester Agent 并行"]
+    Testers --> State["Shared State · SQLite"]
+    State --> Runtime["Runtime"]
+    Runtime --> Execute["Jev 有限 Decision + Playwright 执行"]
+    Execute --> Finding["Finding → Replay → Verification"]
+    Finding --> Report["Report"]
 ```
 
-| 组件 | 职责 | 代码入口 |
-| --- | --- | --- |
-| Main Agent | 规划完整工作流、任务优先级与依赖；必要时重规划；最后只读总结报告 | [main_agent.py](src/web_testing_system/agents/main_agent.py) |
-| Tester Agent | 为一个任务提交完整初始计划；异常时只重规划剩余检查 | [tester_agent.py](src/web_testing_system/agents/tester_agent.py) |
-| Runtime | 读取页面、绑定输入与原对象、生成合法候选、恢复局部错误、控制预算 | [web_runtime.py](src/web_testing_system/runtime/web_runtime.py) |
-| Jev Decision Model | 从当前候选 ID 中做有限选择（Bounded Choice）；不生成操作或选择器 | [jev_selector.py](src/web_testing_system/runtime/jev_selector.py) |
-| Playwright | 执行浏览器动作与断言（Assertion），记录真实结果 | [playwright_executor.py](src/web_testing_system/runtime/playwright_executor.py) |
-| Scheduler | 按优先级和依赖持续填补空闲执行槽位 | [scheduler.py](src/web_testing_system/orchestration/scheduler.py) |
-| Shared State / StateStore | 用 SQLite 保存任务、进度、路径、异常、证据索引、预算和操作历史 | [store.py](src/web_testing_system/state/store.py) |
+| 组件 | 一句话职责 |
+| --- | --- |
+| Main Agent | 拆分任务、安排依赖、协调 Tester，并总结最终结果。 |
+| Tester Agent | 为当前任务生成 Test Plan，异常时只 Replan 剩余检查。 |
+| Shared State | 保存任务、页面状态摘要和结果，支持多会话协作。 |
+| Runtime | 管理页面状态、合法候选、预算和局部恢复。 |
+| Jev | 作为 Decision Model 选择当前候选，不做 Planner。 |
+| Playwright | 操作真实浏览器，执行测试动作和 Assertion。 |
+| Harness | 约束 Main 的工具与会话，支持受控的 Agent 执行流程。 |
 
-Harness 是 Microsoft Agent Framework 的 Main 执行外壳，定义受控工具、会话和中间件（Middleware）。Main 关闭内置 Todo、文件记忆和网页搜索，以 SQLite 中的任务作为执行计划。Tester 使用普通 `Agent`，由自己的 Runner 和中间件约束计划执行与结束。Harness 不负责浏览器操作或调度。
+Main 规划执行顺序，Python Scheduler 实际派发任务；默认最多 3 个 Tester 并行。Shared State 协调进度，每个 Tester 保留独立浏览器会话。
 
-每个 Tester 有独立会话（Session）和浏览器上下文（BrowserContext）。多个 Tester 通过 Shared State 协作。完整任务依赖由 Scheduler 等待；需要同时保留登录状态的工作流通过 Runtime 的进度信号（Progress Signal）交接，不互相等待整个任务结束。
+## 一次测试怎么运行
 
-更具体的调用顺序和阅读路线见 [架构与数据流](docs/architecture.md)。
+1. Main 根据目标和 Test Scenario 拆分任务，安排依赖。
+2. Scheduler 启动多个就绪的 Tester，各自打开独立浏览器会话。
+3. Tester 为当前任务生成完整 Test Plan。
+4. Runtime 管理执行，Jev 做有限 Decision，Playwright 操作网页；异常时 Tester Replan。
+5. 测试结果和 Evidence 索引写入 Shared State。
+6. Finding → Replay → Verification → Report；同一个 Main 总结报告。
 
-## 一次完整测试
+## 项目亮点
 
-1. [orchestration/runner.py](src/web_testing_system/orchestration/runner.py) 校验配置并建立 Run、预算和 Shared State。
-2. Main 把目标分为任务。配置有必要检查（Required Check）时，Python 绑定准确的账号、检查 ID、输入引用与依赖，保持连续工作流在同一任务中。
-3. Scheduler 启动就绪任务。Tester 提交完整计划；Python 在操作页面前检查输入、目标、检查覆盖与顺序。
-4. Runtime 执行业务操作。已知动作或唯一合法动作直接交给 Playwright；多个合法候选交给 Jev，再检查候选是否仍然有效。
-5. 实际检查结果、操作历史和证据写入 Shared State。异常阻塞时 Tester 读取当前页面和已完成检查，替换剩余计划。
-6. 所有探索结束后，系统处理 Finding、回放与验证，生成 `report.json`。同一个 Main 用无工具的新会话生成 `summary.md`，CLI 输出总结和报告路径。
+- Multi-Agent 并行协作。
+- Shared State / Multi-session Coordination。
+- Harness 驱动的受控执行流程。
+- Jev Bounded Decision。
+- Playwright Browser Automation。
+- Finding / Replay / Verification 闭环。
+- LangSmith Tracing。
+- Evaluation-driven Optimization。
 
-执行状态 `COMPLETED` 只表示任务执行结束。任务成功（Task Success）还要求必要检查正确完成。缺少检查是 `UNKNOWN`；正确发现并确认应用缺陷可以算测试任务成功。评分统一在 [scoring.py](src/web_testing_system/scoring.py)。
+正式 Development 的 Baseline v2 与 Final Development 比较：
 
-## Finding、Replay 与 Verification
+| 核心指标 | Baseline v2 → Final Development |
+| --- | --- |
+| 任务成功率（Task Success） | 21.43% → 86.67% |
+| 端到端成功率（E2E Success） | 10% → 80% |
+| 重规划上限停止（Replan Limit Stops） | 11 → 0 |
+| 总 Token | 约 1.30M → 0.77M |
 
-Finding 是记录了预期与实际差异的异常。Tester 不能直接把异常声明为已确认缺陷。
+Final Development 的 Bug Precision / Recall 均为 **100%**。Final Holdout 的 Bug Precision 为 **100%**，稳定复现率（Reproduction Success）为 **83.33%**。
 
-```text
-Assertion failure → Finding + Evidence → Screening / Deduplication
-→ Reproduction: fresh replay attempts → REPRODUCED
-→ Verification: fresh replay against expected behavior
-→ CONFIRMED_BUG / CLOSED / NEEDS_CONFIRMATION
-```
+Development 和 Holdout 是不同评测集，且分别使用修复前、后的代码，不能合并为同一个成功率。Development 的检查完成率为 78.38%，未达到 90% 的最终目标；Holdout 的 E2E Success 为 37.50%。完整结果见 [正式评估记录](evaluation/benchmark_history.md)。
 
-- [FindingService](src/web_testing_system/findings/service.py) 用明确规则筛选与去重。
-- [ReplayPlanBuilder](src/web_testing_system/reproduction/replay.py) 从真实操作历史构建回放，保留身份、输入引用、原对象和必要参与者；不调用模型重新猜步骤。
-- 默认复现（Reproduction）需要最多 3 次尝试中的 2 次匹配。之后 [VerificationRunner](src/web_testing_system/verification/runner.py) 独立检查预期行为；实际断言失败才确认缺陷。设置或回放路径失败仍保持不确定。
-- [EvidenceStore](src/web_testing_system/evidence/store.py) 保存截图、DOM、网络摘要、控制台错误和回放追踪；SQLite 保存文件索引。探索与回放有独立步数预算。
+## 技术栈
 
-## 本地启动
+Python 3.13 · Microsoft Agent Framework / Harness · Playwright · Jev Decision Model · SQLite · LangSmith · OpenRouter。
 
-在仓库根目录使用 Python 3.13。以下命令使用 PowerShell：
+## 快速开始
+
+在仓库根目录使用 PowerShell，先安装依赖：
 
 ```powershell
 py -3.13 -m venv .venv
@@ -79,86 +79,35 @@ py -3.13 -m venv .venv
 Copy-Item .env.example .env
 ```
 
-在 `.env` 填入 `OPENROUTER_API_KEY`。Main / Tester 使用 OpenRouter；固定模型和供应商见 [.env.example](.env.example)。Tester 仅在主供应商 API 或连接失败时尝试备用模型；Main 备用模型由用户手动切换。可选视觉操作（Computer Use）默认关闭。
+在 `.env` 中填写 `OPENROUTER_API_KEY`。启用 LangSmith Tracing 时再填写 `LANGSMITH_API_KEY`；模型配置见 [.env.example](.env.example)。
 
-启动演示应用（Demo App）：
+启动 Demo，浏览器打开 `http://127.0.0.1:8000`：
 
 ```powershell
 .\.venv\Scripts\python.exe -m demo_app
 ```
 
-浏览器打开 `http://127.0.0.1:8000`。内置账号为 `admin / demo-admin`、`member / demo-member`、`member2 / demo-member2`。Demo 提供项目、任务、成员与权限流程；B1–B6 缺陷开关默认关闭。开关读取进程环境变量，例如启动前设置 `$env:DEMO_BUG_B1="true"`。测试模式支持 `POST /test/reset`。
-
-另开终端运行一次普通示例测试。这个命令会调用真实模型，不运行正式评估集：
+另开终端运行一个普通示例，再运行本地测试：
 
 ```powershell
 $env:DEMO_ADMIN_PASSWORD = "demo-admin"
 .\.venv\Scripts\python.exe -m web_testing_system examples/demo_run.json
-```
-
-账号密码通过 `env:` 引用在 Runtime 内存中解析。自定义配置请参考 [demo_run.json](examples/demo_run.json) 和 [RunConfig](src/web_testing_system/config.py)；预期行为与测试数据由调用者明确提供。
-
-普通输出位于 `artifacts/runs/<run_id>/`：`report.json` 是确定性测试事实，`summary.md` 是 Main 的文字总结。共享数据库默认位于 `artifacts/state/shared_state.db`。
-
-## 本地测试与检查
-
-```powershell
 .\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m ruff check src tests demo_app evaluation/measure.py
-.\.venv\Scripts\python.exe -m mypy src/web_testing_system evaluation/measure.py
-git diff --check
 ```
 
-测试使用替身（Fake / Mock Provider）、临时 SQLite 与本地 Chromium，覆盖单元测试（Unit Test）、集成测试（Integration Test）和浏览器测试（Browser Test）。这些命令不运行真实 LLM Benchmark。
+示例会调用真实模型，结果保存为 `artifacts/runs/<run_id>/report.json` 和 `summary.md`。本地测试使用 Fake / Mock Provider 和本地 Chromium。正式 Evaluation 的数据、结果和入口位于 `evaluation/`，不属于上述示例。
 
-## Evaluation
+## 项目结构
 
-冻结开发集（Development Set）有 10 个用例、74 个检查；保留集（Holdout）有 8 个用例、66 个检查。场景与标准答案分别保存在 [scenarios.json](evaluation/scenarios.json) 和 [ground_truth.json](evaluation/ground_truth.json)，冻结记录在 [evaluation_v2_freeze.json](evaluation/evaluation_v2_freeze.json)。标准答案只在运行结束后参与评分，不进入 Agent 的任务上下文。
+- `src/web_testing_system/`：Agent、Runtime、共享状态与测试闭环。
+- `demo_app/`：本地测试目标，包含 B1–B6 缺陷开关。
+- `evaluation/`：冻结评测数据、正式结果记录和优化历史。
+- `tests/`：单元、集成与浏览器测试。
+- `docs/`：详细架构与数据流。
+- `examples/`：普通 Demo 运行配置。
 
-后续明确需要新测量时，统一入口如下。每个用例只派发一次；输出目录必须是新的。运行需要 OpenRouter、LangSmith 凭据和开启追踪（Tracing），会调用真实模型：
+## 更多文档
 
-```powershell
-.\.venv\Scripts\python.exe -m evaluation.measure development artifacts/runs/development-new
-.\.venv\Scripts\python.exe -m evaluation.measure holdout artifacts/runs/holdout-new
-```
-
-[measure.py](evaluation/measure.py) 启动独立 Demo、配置冻结缺陷、调用 `FormalRunExecutor`，保存配置、文件指纹与测量清单。结果中的有效失败保留，不自动补跑。评分和报告仍使用现有实现。本次 Cleanup 没有运行以上命令。
-
-六种单因素对照路线保留在 [evaluation/runner.py](src/web_testing_system/evaluation/runner.py)。其 `run_full_mode` 需要 `FULL_EVALUATION=true`、显式启用和验收门槛；普通 CLI 和上述单次集合测量不等于这个对照模式。
-
-正式结果已完成，历史数字保持原样：
-
-- [Benchmark History](evaluation/benchmark_history.md)：Baseline、Final Development、Final Holdout 和比较。
-- [Final Readiness Summary](evaluation/optimization/final_readiness_summary.md)：当前最终结果与之前阶段记录。
-- [Tester](evaluation/optimization/tester_optimization.md)、[Main](evaluation/optimization/main_optimization.md)、[Runtime](evaluation/optimization/runtime_optimization.md)：保留的优化历史。
-
-原始正式结果完整保留在 `artifacts/runs/baseline-v2-20261008-002/`、`final-development-v2-20261010-001/`、`final-holdout-v2-20261010-001/`。被用户中断的 Baseline `baseline-v2-20261008-001/` 也保留来源记录。历史引用的中间测量只保留汇总和核对文件；重复原始调试输出已清理。`artifacts/` 被 Git 忽略，分享项目时需另行保存这些本地正式结果。
-
-## LangSmith Tracing
-
-[observability.py](src/web_testing_system/observability.py) 记录 Run、Main Planning / Replan、Tester Initial Plan / Exception Replan、Jev、浏览器动作、复现、验证与 Main Final Summary。设置 `LANGSMITH_API_KEY` 后可查看；正式真实评估开启追踪，普通运行遵循 `LANGSMITH_TRACING`。
-
-只上传允许的元数据和用量，不上传提示词、工具内容、截图或凭据。追踪连接或上传失败不改变测试结果。
-
-## 主要目录
-
-```text
-src/web_testing_system/
-  agents/          Main / Tester 与受控工具
-  orchestration/   总入口与并行调度
-  runtime/         页面状态、候选、Jev、Playwright、预算与权限
-  state/           SQLite Shared State
-  findings/        异常生命周期
-  evidence/        证据文件与索引
-  reproduction/    确定性回放与复现
-  verification/    独立验证
-  reporting/       结构化报告
-  evaluation/      评分指标、匹配与对照执行
-  config.py / providers.py / scoring.py / observability.py / security.py
-demo_app/         本地测试目标与 B1–B6
-evaluation/       冻结数据、measure.py、正式历史与 optimization/
-tests/            unit/、integration/、browser/
-examples/         普通 Demo 运行配置
-docs/             architecture.md；history/ 为本地旧计划
-artifacts/        本地正式结果与历史汇总，Git 忽略
-```
+- [docs/architecture.md](docs/architecture.md)：完整架构与数据流。
+- [evaluation/benchmark_history.md](evaluation/benchmark_history.md)：正式 Evaluation 结果。
+- [evaluation/optimization/](evaluation/optimization/)：优化历史。
